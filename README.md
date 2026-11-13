@@ -11,8 +11,8 @@ Kein Chat, kein Onlinestatus, kein Zeitplan, keine Alarmkette.
 
 Meilenstein M1 in Arbeit: Ein Wegwerf-Prototyp für Android prüft, ob ein
 Wecksignal die beendete App erreicht und die Kotlin-Schicht den Rust-Kern
-aufrufen kann. Er ist bisher nur gebaut, nicht auf einem Gerät getestet; siehe
-[docs/m1-durchstich.md](docs/m1-durchstich.md). Darüber hinaus gibt es noch
+aufrufen kann. Der Test auf einem Gerät ist bestanden, ein Lauf über eine ganze
+Nacht steht noch aus; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md). Darüber hinaus gibt es noch
 keine Funktion.
 
 | Meilenstein | Inhalt |

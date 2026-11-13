@@ -12,10 +12,10 @@ import androidx.activity.OnBackPressedCallback
 /**
  * Full-screen display of a request over the lock screen.
  *
- * A tap anywhere and closing with "back" count as the answer. Leaving
- * through the home button, the screen switching off and the system removing
- * the activity do not count: the notification stays and can still be
- * answered.
+ * A tap anywhere, closing with "back" and leaving through the home button or
+ * the recents view count as the answer. The screen switching off and the
+ * system removing the activity do not count: the notification stays and can
+ * still be answered.
  */
 class RequestActivity : ComponentActivity() {
     private var requestId: String = ""
@@ -81,6 +81,17 @@ class RequestActivity : ComponentActivity() {
         super.onResume()
         if (requestId.isNotEmpty() && Store.isAnswered(this, requestId)) {
             finish()
+        }
+    }
+
+    /**
+     * Called only when the user leaves on purpose (home, recents), not when
+     * the screen times out or another activity interrupts.
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (requestId.isNotEmpty() && !isFinishing) {
+            react(Requests.REACTION_FULLSCREEN_LEAVE)
         }
     }
 
