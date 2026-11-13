@@ -68,7 +68,7 @@ jobs:
         run: npm ci
 
       - name: Android-Projekt erzeugen
-        run: npm run tauri android init -- --ci
+        run: npm run tauri android init -- --ci --skip-targets-install
 
       - name: APK bauen
         run: npm run tauri android build -- --ci --debug --apk --target aarch64

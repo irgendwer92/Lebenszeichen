@@ -33,7 +33,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.work:work-runtime:2.10.0")
-    implementation("org.unifiedpush.android:connector:3.+")
+    implementation("org.unifiedpush.android:connector:3.3.5")
     // Needed to compile against the plugin API of Tauri (Invoke uses Jackson types).
     implementation("com.fasterxml.jackson.core:jackson-databind:2.15.3")
     implementation(project(":tauri-android"))

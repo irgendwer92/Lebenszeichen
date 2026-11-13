@@ -9,7 +9,11 @@ Kein Chat, kein Onlinestatus, kein Zeitplan, keine Alarmkette.
 
 ## Stand
 
-Meilenstein M0: Grundgerüst. Es gibt noch keine Funktion.
+Meilenstein M1 in Arbeit: Ein Wegwerf-Prototyp für Android prüft, ob ein
+Wecksignal die beendete App erreicht und die Kotlin-Schicht den Rust-Kern
+aufrufen kann. Er ist bisher nur gebaut, nicht auf einem Gerät getestet; siehe
+[docs/m1-durchstich.md](docs/m1-durchstich.md). Darüber hinaus gibt es noch
+keine Funktion.
 
 | Meilenstein | Inhalt |
 |---|---|
@@ -39,10 +43,15 @@ crates/
 ├── core/    Protokoll, Verschlüsselung, Regelprüfung, Speicher
 ├── cli/     Client ohne Oberfläche (Programm: lz)
 └── relay/   Relay-Server (Programm: lz-relay)
-docs/        Konzept, Protokoll, Fahrplan, Entwurf der Lizenz-Ausnahme
+app/
+├── src-tauri/   Tauri-Hülle, in M1 nur der Android-Prototyp
+├── ui/          Oberfläche (schlichtes HTML ohne Build-Schritt)
+└── android/     Kotlin-Schicht: UnifiedPush, Vollbild-Anzeige, Benachrichtigungen
+docs/        Konzept, Protokoll, Fahrplan, Durchstich M1, Entwurf der Lizenz-Ausnahme
 ```
 
-Die App (Tauri mit Kotlin-Schicht für Android) kommt ab M1 unter `app/` dazu.
+`app/` gehört nicht zum Cargo-Workspace und wird nur vom CI-Ablauf
+"Android-Prototyp" gebaut. Die fertige APK liegt dort als Artefakt.
 
 ## Entwickeln
 
@@ -55,7 +64,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check        # braucht: cargo install cargo-deny
 ```
 
-Dieselben Schritte laufen bei jedem Push und Pull Request in der CI.
+Dieselben Schritte laufen bei jedem Push und Pull Request in der CI. Sie
+erfassen `crates/`, nicht `app/`.
 Bezeichner im Code sind englisch, die Dokumentation ist deutsch.
 
 ## Lizenz
