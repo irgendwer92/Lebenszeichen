@@ -250,7 +250,7 @@ Einmalig notieren: Gerät, Android-Version und Oberfläche des Herstellers (steh
 
 ## Nicht verifiziert
 
-Geprüft ist: Der Rust-Teil des Workspace besteht Formatierung, Clippy und Tests. Die JNI-Funktion wurde auf einem Linux-Rechner aus einer JVM heraus aufgerufen und liefert den erwarteten Text. Die CI baut die APK und prüft, dass das JNI-Symbol exportiert ist, dass Dienst, Empfänger, Activity und Berechtigungen im zusammengeführten Manifest stehen und dass die Klassen der Kotlin-Schicht in der APK liegen.
+Geprüft ist: Der Rust-Teil des Workspace besteht Formatierung, Clippy und Tests. Die JNI-Funktion wurde auf einem Linux-Rechner aus einer JVM heraus aufgerufen und liefert den erwarteten Text. Die CI baut die APK und prüft, dass das JNI-Symbol exportiert ist, dass Dienst, Empfänger, Activity und Berechtigungen im zusammengeführten Manifest stehen und dass die Klassen der Kotlin-Schicht in der APK liegen. Zwei aufeinanderfolgende CI-Läufe im selben Pull Request haben APKs mit derselben Signatur erzeugt.
 
 Alles Folgende ist nur übersetzt und nie auf einem Gerät oder Emulator gelaufen:
 
@@ -263,7 +263,6 @@ Alles Folgende ist nur übersetzt und nie auf einem Gerät oder Emulator gelaufe
 - **WorkManager:** Start aus dem geweckten Prozess, beschleunigte Aufträge aus dem Hintergrund, Wiederholung nach Netzfehlern.
 - **Neustart, Doze, Akku-Sparen der Hersteller.** Die Aussage „nach einem Neustart ist nichts zu tun“ stützt sich auf Dokumentation und Quelltext der Bibliothek.
 - **Android unter 12.** Dort läuft die Antwort als gewöhnlicher Auftrag und kann sich verzögern. Android unter 8 (ohne Kanäle) ist gar nicht bedacht worden.
-- **Der Signatur-Cache.** Ob aufeinanderfolgende CI-Builds wirklich dieselbe Signatur tragen, zeigt erst der zweite Lauf.
 - **Lizenzen der App-Abhängigkeiten.** `cargo deny` läuft nicht über `app/`. Die Abhängigkeiten von Tauri und die Android-Bibliotheken (Connector, WorkManager, Tink: Apache-2.0) sind nicht förmlich gegen GPL-3.0-or-later geprüft.
 
 Nicht ausprobiert und deshalb ohne Gewähr sind auch die Hinweise zur ntfy-App (Variante aus F-Droid, Standard-Server).
