@@ -203,16 +203,16 @@ Ein Durchlauf gilt als bestanden, wenn alle vier Punkte stimmen:
 
 | Nr. | Ausgangslage | Reaktion | Erwartete Anzeige | Erwarteter POST | Wecksignal gesendet | Anzeige erschienen | POST angekommen | Bestanden |
 |---|---|---|---|---|---|---|---|---|
-| 1 | App beendet, Bildschirm aus und gesperrt | Vollbild antippen | Vollbild | `fullscreen-tap` | | | | ja |
-| 2 | App beendet, Bildschirm aus und gesperrt | Vollbild mit „Zurück“ schließen | Vollbild | `fullscreen-close` | | | | ja |
-| 3 | App beendet, Bildschirm aus und gesperrt | 2 Minuten nichts tun, dann entsperren und die Benachrichtigung wegwischen | Vollbild, danach Benachrichtigung | In den 2 Minuten keiner, dann `dismiss` | | | | ja |
-| 4 | App beendet, Bildschirm an, andere App offen | Banner antippen | Banner | `tap` | | | | ja |
-| 5 | App beendet, Bildschirm an, andere App offen | Banner verschwinden lassen, Leiste öffnen, einzeln wegwischen | Banner | Erst keiner, dann `dismiss` | | | | ja |
+| 1 | App beendet, Bildschirm aus und gesperrt | Vollbild antippen | Vollbild | `fullscreen-tap` | | | | |
+| 2 | App beendet, Bildschirm aus und gesperrt | Vollbild mit „Zurück“ schließen | Vollbild | `fullscreen-close` | | | | |
+| 3 | App beendet, Bildschirm aus und gesperrt | 2 Minuten nichts tun, dann entsperren und die Benachrichtigung wegwischen | Vollbild, danach Benachrichtigung | In den 2 Minuten keiner, dann `dismiss` | | | | |
+| 4 | App beendet, Bildschirm an, andere App offen | Banner antippen | Banner | `tap` | | | | |
+| 5 | App beendet, Bildschirm an, andere App offen | Banner verschwinden lassen, Leiste öffnen, einzeln wegwischen | Banner | Erst keiner, dann `dismiss` | | | | |
 | 6 | App beendet, Bildschirm an, andere App offen | Leiste öffnen, „Alle löschen“ | Banner | `dismiss` | | | | |
-| 7 | Zwei Wecksignale kurz nacheinander, App beendet, Bildschirm an | Eine antippen, eine wegwischen | Zwei Benachrichtigungen | Zwei POSTs mit verschiedenen Kennungen: `tap`, `dismiss` | | | | ja |
-| 8 | Gerät neu gestartet und einmal entsperrt, Lebenszeichen nicht geöffnet, 5 Minuten gewartet | Beliebig | Je nach Bildschirm | Passend zur Reaktion | | | | ja |
+| 7 | Zwei Wecksignale kurz nacheinander, App beendet, Bildschirm an | Eine antippen, eine wegwischen | Zwei Benachrichtigungen | Zwei POSTs mit verschiedenen Kennungen: `tap`, `dismiss` | | | | |
+| 8 | Gerät neu gestartet und einmal entsperrt, Lebenszeichen nicht geöffnet, 5 Minuten gewartet | Beliebig | Je nach Bildschirm | Passend zur Reaktion | | | | |
 | 9 | Über Nacht: Gerät liegt mindestens 6 Stunden still, nicht am Ladegerät, Bildschirm aus. Wecksignal morgens senden, bevor das Gerät angefasst wird | Vollbild antippen | Vollbild | `fullscreen-tap` | | | | |
-| 10 | Über Nacht: Wecksignal abends senden, Anzeige nicht anfassen. Morgens entsperren | Benachrichtigung wegwischen | Abends Vollbild, morgens Benachrichtigung | Abends keiner, morgens `dismiss` | | | | |
+| 10 | Über Nacht: Wecksignal abends senden, Anzeige nicht anfassen. Morgens entsperren | Benachrichtigung wegwischen | Abends Vollbild, morgens Benachrichtigung | Abends keiner, morgens `dismiss` | | | | | 
 
 Zu jedem Durchlauf notieren:
 
