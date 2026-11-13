@@ -12,8 +12,12 @@ Kein Chat, kein Onlinestatus, kein Zeitplan, keine Alarmkette.
 Meilenstein M1 in Arbeit: Ein Wegwerf-Prototyp für Android prüft, ob ein
 Wecksignal die beendete App erreicht und die Kotlin-Schicht den Rust-Kern
 aufrufen kann. Der Test auf einem Gerät ist bestanden, ein Lauf über eine ganze
-Nacht steht noch aus; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md). Darüber hinaus gibt es noch
-keine Funktion.
+Nacht steht noch aus; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md).
+
+Meilenstein M2 hat begonnen: `crates/wire` setzt das Drahtformat aus
+[docs/drahtformat.md](docs/drahtformat.md) um (Klartext der Nachrichten,
+Einladung, Prüfung des Umschlags). Verschlüsselung, Kopplung, Relay und
+Kommandozeile fehlen noch.
 
 | Meilenstein | Inhalt |
 |---|---|
