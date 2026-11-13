@@ -39,7 +39,7 @@ crates/
 ├── core/    Protokoll, Verschlüsselung, Regelprüfung, Speicher
 ├── cli/     Client ohne Oberfläche (Programm: lz)
 └── relay/   Relay-Server (Programm: lz-relay)
-docs/        Dokumentation
+docs/        Konzept, Protokoll, Fahrplan, Entwurf der Lizenz-Ausnahme
 ```
 
 Die App (Tauri mit Kotlin-Schicht für Android) kommt ab M1 unter `app/` dazu.
