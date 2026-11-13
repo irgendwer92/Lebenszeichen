@@ -17,6 +17,7 @@ M1 ist ein Wegwerf-Prototyp. Er klärt eine einzige Frage: Trägt die Entscheidu
    - Benachrichtigung wegwischen, auch über „Alle löschen“ (`dismiss`)
    - Vollbild-Anzeige antippen (`fullscreen-tap`)
    - Vollbild-Anzeige mit „Zurück“ schließen (`fullscreen-close`)
+   - Vollbild-Anzeige über die Home-Taste oder die Übersicht der letzten Apps verlassen (`fullscreen-leave`, nachgetragen nach dem ersten Gerätetest)
 6. Der Text des POST kommt aus dem Rust-Kern, zum Beispiel:
 
    ```
@@ -26,7 +27,7 @@ M1 ist ein Wegwerf-Prototyp. Er klärt eine einzige Frage: Trägt die Entscheidu
    Ein empfangener POST mit `core=rust` belegt also, dass der Kern im geweckten Prozess gelaufen ist. Erreicht die Kotlin-Schicht den Kern nicht, steht stattdessen `rust-core-unavailable` mit dem Grund im Text.
 7. Ein Protokoll in einer Datei hält jeden Schritt mit Uhrzeit fest und übersteht das Ende des Prozesses.
 
-Nicht als Antwort zählen: der Bildschirm geht von selbst aus, die Vollbild-Anzeige wird über die Home-Taste verlassen, ein Banner verschwindet von selbst. Die Benachrichtigung bleibt dann stehen und kann später beantwortet werden. Der Prototyp lässt Benachrichtigungen nie ablaufen.
+Nicht als Antwort zählen: der Bildschirm geht von selbst aus, ein Banner verschwindet von selbst. Die Benachrichtigung bleibt dann stehen und kann später beantwortet werden. Der Prototyp lässt Benachrichtigungen nie ablaufen.
 
 ## Was der Prototyp nicht tut
 
@@ -101,7 +102,7 @@ Die CI prüft nach dem Bauen, dass das Symbol `Java_io_github_irgendwer92_lebens
 
 **Still, aber wichtig.** Der Benachrichtigungskanal hat hohe Wichtigkeit, weil Android sonst weder Vollbild noch Banner zeigt. Ton und Vibration sind am Kanal abgeschaltet. Die Kategorie ist „Erinnerung“, nicht „Wecker“: Wecker dürfen „Nicht stören“ in der Voreinstellung durchbrechen, und das Konzept verlangt, dass „Nicht stören“ respektiert wird.
 
-**Home-Taste zählt nicht.** Das Konzept sagt „jede Reaktion zählt“. Der Prototyp wertet beim Vollbild nur Tippen und „Zurück“, weil sich das Verlassen über die Home-Taste nicht sicher von Vorgängen ohne Zutun unterscheiden lässt. Die Benachrichtigung bleibt in dem Fall stehen. Ob das so bleiben soll, ist für M4 zu entscheiden.
+**Home-Taste zählt.** Im ersten Stand wertete der Prototyp beim Vollbild nur Tippen und „Zurück“. Nach dem Gerätetest wurde nachgetragen, dass auch das Verlassen über die Home-Taste oder die Übersicht zählt (`onUserLeaveHint`). Android ruft diese Methode nur bei einem bewussten Verlassen auf, nicht wenn der Bildschirm von selbst ausgeht. Dieser Nachtrag ist gebaut, aber noch nicht auf einem Gerät geprüft.
 
 ## Versionen
 
@@ -274,6 +275,10 @@ Die Kennung der Anfrage trägt die Uhrzeit, zu der das Gerät geweckt wurde: die
 
 - Die Frage von M1 ist für dieses Gerät beantwortet: Wecken, Aufruf des Kerns, Vollbild und Banner, Antwort beim Antippen, Schließen und Wegwischen funktionieren mit Tauri und der Kotlin-Schicht. Für einen Wechsel auf Flutter gibt es keinen Anlass.
 - Das Abnahmekriterium „über Nacht“ ist streng genommen noch offen. Eine Stunde Ruhe reicht, damit Android in den Schlafmodus wechselt, sagt aber wenig über das Verhalten nach vielen Stunden. Ein Nachtlauf nach den Zeilen 9 und 10 der Tabelle oben holt das nach.
+- „Nicht stören“ (nachträglich geprüft): Die Anfrage erscheint dann nur in der Benachrichtigungsleiste, ohne Vollbild und ohne Banner. Das entspricht dem Konzept.
+- Netzausfall (beobachtet, nicht gezielt getestet): Nach abgeschaltetem Netz kommt die Anfrage an, kurz nachdem das Netz wieder da ist. Die Wiederholung der Antwort nach einem Netzfehler bleibt ungeprüft.
+- Weitere Geräte: Ein Praxistest mit zwei Android-Geräten ist für später vorgesehen.
+- Der Projektinhaber hat M1 damit vorläufig abgeschlossen. Der Nachtlauf wird nachgeholt.
 - Beim Einrichten waren zunächst Endpunkt und Antwort-Adresse gleich. Der Hinweis dazu steht jetzt unter „Einrichten“.
 
 ## Fallstricke auf Android
@@ -296,7 +301,7 @@ Geprüft ist: Der Rust-Teil des Workspace besteht Formatierung, Clippy und Tests
 
 Die folgende Liste stammt aus der Zeit vor dem ersten Gerätetest. Der Test vom 13.11.2026 hat auf einem Gerät gezeigt, dass die App startet, die Oberfläche arbeitet, Registrierung und Empfang über UnifiedPush mit ntfy klappen, der Kern im geweckten Prozess aufrufbar ist, Anzeige und Reaktionen stimmen, genau ein POST entsteht und nach einem Neustart nichts zu tun ist.
 
-Weiterhin offen sind: ein Lauf über eine ganze Nacht, andere Geräte und Hersteller, das Verhalten bei „Nicht stören“, die Wiederholung nach Netzfehlern, Android unter 12 und die Lizenzen der App-Abhängigkeiten.
+Weiterhin offen sind: ein Lauf über eine ganze Nacht, andere Geräte und Hersteller, die Reaktion über die Home-Taste, die Wiederholung nach Netzfehlern, Android unter 12 und die Lizenzen der App-Abhängigkeiten.
 
 Die ursprüngliche Liste, zur Einordnung:
 
@@ -317,4 +322,4 @@ Nicht ausprobiert und deshalb ohne Gewähr sind auch die Hinweise zur ntfy-App (
 
 - Der Test ist bestanden, die Entscheidung für Tauri bleibt. Offen ist ein Lauf über eine ganze Nacht.
 - Der Prototyp bleibt liegen, bis M4 ihn ersetzt. Übernommen werden die Erkenntnisse, nicht der Code.
-- Für M4 offen: Android-Projekt einchecken, eigene Signatur, App-Symbol, Ablauf nach 24 Stunden, Zählt die Home-Taste als Reaktion, Ton und Vibration über die Systemeinstellungen des Kanals.
+- Für M4 offen: Android-Projekt einchecken, eigene Signatur, App-Symbol, Ablauf nach 24 Stunden, Ton und Vibration über die Systemeinstellungen des Kanals.

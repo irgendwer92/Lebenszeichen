@@ -13,6 +13,7 @@ object Requests {
     const val REACTION_DISMISS = "dismiss"
     const val REACTION_FULLSCREEN_TAP = "fullscreen-tap"
     const val REACTION_FULLSCREEN_CLOSE = "fullscreen-close"
+    const val REACTION_FULLSCREEN_LEAVE = "fullscreen-leave"
 
     /** Readable and unique enough for a test: time plus four random hex digits. */
     fun newId(): String {
