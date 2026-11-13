@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "default",
+  "description": "Rechte des Hauptfensters: Kern-Funktionen von Tauri und die Kotlin-Schicht",
+  "windows": ["main"],
+  "permissions": ["core:default", "lebenszeichen:default"]
+}
