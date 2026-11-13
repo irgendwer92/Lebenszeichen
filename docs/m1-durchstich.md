@@ -4,7 +4,7 @@ Stand: 13.11.2026. Gehört zu `konzept.md` und `fahrplan.md`.
 
 M1 ist ein Wegwerf-Prototyp. Er klärt eine einzige Frage: Trägt die Entscheidung für Tauri auf Android, obwohl beim Wecksignal keine WebView läuft? Wenn nicht, wird laut Fahrplan hier auf Flutter gewechselt.
 
-**Der Code ist bisher nur übersetzt und nie auf einem Gerät gelaufen.** Ob der Durchstich gelingt, entscheidet erst der Test in diesem Dokument. Was nicht überprüft ist, steht im Abschnitt [Nicht verifiziert](#nicht-verifiziert).
+**Ergebnis: Der Durchstich ist auf einem Gerät gelungen.** Alle zehn Durchläufe des Testprotokolls sind am 13.11.2026 auf einem Fairphone 4 bestanden, die beiden Nacht-Durchläufe allerdings mit einer Stunde Ruhezeit statt sechs. Einzelheiten stehen im Abschnitt [Testergebnis](#testergebnis-vom-13112026), was weiterhin offen ist, im Abschnitt [Nicht verifiziert](#nicht-verifiziert).
 
 ## Was der Prototyp tut
 
@@ -146,7 +146,7 @@ Benötigt werden ein ntfy-Server (der eigene oder ein öffentlicher) und die ntf
    - Vollbild-Anzeige: ab Android 14 eine eigene Berechtigung. Bei Sideload ist sie in der Regel schon erteilt; sonst führt „Einstellungen“ zur passenden Seite.
    - Akku-Optimierung: „Ausnehmen“.
 3. **„Registrieren“ tippen.** Nach wenigen Sekunden steht unter „Endpunkt“ eine Adresse der Form `https://<ntfy-server>/up…?up=1`. Bleibt das Feld leer, steht der Grund im Protokoll.
-4. **Antwort-Adresse eintragen und speichern**, zum Beispiel ein ntfy-Thema mit schwer zu ratendem Namen: `https://<ntfy-server>/lz-test-<zufall>`. Das Thema muss ohne Anmeldung beschreibbar sein; der Prototyp sendet keine Zugangsdaten. Dieses Thema nicht in der ntfy-App auf demselben Handy abonnieren, sonst erzeugt jede Antwort dort eine weitere Benachrichtigung.
+4. **Antwort-Adresse eintragen und speichern**, zum Beispiel ein ntfy-Thema mit schwer zu ratendem Namen: `https://<ntfy-server>/lz-test-<zufall>`. Das Thema muss ohne Anmeldung beschreibbar sein; der Prototyp sendet keine Zugangsdaten. Dieses Thema nicht in der ntfy-App auf demselben Handy abonnieren, sonst erzeugt jede Antwort dort eine weitere Benachrichtigung. Die Antwort-Adresse muss sich vom Endpunkt aus Schritt 3 unterscheiden: Sind beide gleich, weckt jede Antwort das Gerät erneut, und am Rechner kommt nichts an. Der Prototyp prüft das nicht.
 5. **„Anfrage lokal auslösen“** als erste Probe: Es erscheint ein Banner; antippen. Im Protokoll folgen `local-trigger`, `core`, `shown`, `reaction`, `core`, `answer-queued`, `answer-sent`.
 
 ### Wecksignal senden und Antworten beobachten
@@ -234,6 +234,48 @@ Einmalig notieren: Gerät, Android-Version und Oberfläche des Herstellers (steh
   - `reaction`, aber kein `answer-sent`: Netz oder WorkManager; `answer-retry` und `answer-failed` nennen den Grund.
 - Für das Abbruchkriterium zählen nur Fehler, die am Zusammenspiel von Tauri, Kotlin-Schicht und Rust-Kern liegen. Was Android jeder App auferlegt, trifft Flutter genauso.
 
+## Testergebnis vom 13.11.2026
+
+Getestet vom Projektinhaber mit der APK aus der CI.
+
+| | |
+|---|---|
+| Gerät | Fairphone 4 |
+| System | /e/OS 4.4.2 auf Basis von Android 16 (offizieller Build), Kvaesitso als Startbildschirm |
+| Zusätzlich geprüft | mit eingeschaltetem Energiesparmodus und Datensparmodus |
+| Verteiler | ntfy-App mit dem öffentlichen Server ntfy.sh |
+
+| Nr. | Ausgangslage (Kurzform) | Bestanden |
+|---|---|---|
+| 1 | Gesperrt, Vollbild antippen | ja |
+| 2 | Gesperrt, Vollbild mit „Zurück“ schließen | ja |
+| 3 | Gesperrt, 2 Minuten warten, dann wegwischen | ja |
+| 4 | Bildschirm an, Banner antippen | ja |
+| 5 | Bildschirm an, Banner verschwinden lassen, dann wegwischen | ja |
+| 6 | Bildschirm an, „Alle löschen“ | ja |
+| 7 | Zwei Wecksignale, eine antippen, eine wegwischen | ja |
+| 8 | Nach Neustart, ohne die App zu öffnen | ja |
+| 9 | Ruhezeit, Wecksignal danach | ja, mit 1 Stunde statt 6 Stunden Ruhezeit |
+| 10 | Wecksignal vor der Ruhezeit, Reaktion danach | ja, mit 1 Stunde statt 6 Stunden Ruhezeit |
+
+Die Zeiten lagen durchweg im erwarteten Bereich, fast ohne Verzögerung. Einzelne Uhrzeiten wurden deshalb nicht je Durchlauf notiert. Ein Beispielpaar (Themennamen gekürzt):
+
+```
+$ date +%T; curl -d "wecken" "https://ntfy.sh/up…?up=1"
+22:29:24
+
+$ curl -sN https://ntfy.sh/lz-test-…/raw
+lebenszeichen-m1 core=rust wire=1 event=fullscreen-close request=r20261113-222924-d89e
+```
+
+Die Kennung der Anfrage trägt die Uhrzeit, zu der das Gerät geweckt wurde: dieselbe Sekunde wie der Versand. `core=rust` belegt, dass der Rust-Kern im geweckten Prozess ohne laufende WebView aufgerufen wurde.
+
+**Bewertung:**
+
+- Die Frage von M1 ist für dieses Gerät beantwortet: Wecken, Aufruf des Kerns, Vollbild und Banner, Antwort beim Antippen, Schließen und Wegwischen funktionieren mit Tauri und der Kotlin-Schicht. Für einen Wechsel auf Flutter gibt es keinen Anlass.
+- Das Abnahmekriterium „über Nacht“ ist streng genommen noch offen. Eine Stunde Ruhe reicht, damit Android in den Schlafmodus wechselt, sagt aber wenig über das Verhalten nach vielen Stunden. Ein Nachtlauf nach den Zeilen 9 und 10 der Tabelle oben holt das nach.
+- Beim Einrichten waren zunächst Endpunkt und Antwort-Adresse gleich. Der Hinweis dazu steht jetzt unter „Einrichten“.
+
 ## Fallstricke auf Android
 
 - **Akku-Sparen der Hersteller.** Xiaomi, Huawei, Samsung, OnePlus, Oppo und andere beenden Apps im Hintergrund härter als Android selbst und verhindern teils, dass sie geweckt werden. Für Lebenszeichen und für ntfy die Akku-Optimierung abschalten, je nach Hersteller zusätzlich „Autostart“ erlauben und die App vor dem Aufräumen schützen. Anleitungen je Hersteller sammelt dontkillmyapp.com.
@@ -252,7 +294,11 @@ Einmalig notieren: Gerät, Android-Version und Oberfläche des Herstellers (steh
 
 Geprüft ist: Der Rust-Teil des Workspace besteht Formatierung, Clippy und Tests. Die JNI-Funktion wurde auf einem Linux-Rechner aus einer JVM heraus aufgerufen und liefert den erwarteten Text. Die CI baut die APK und prüft, dass das JNI-Symbol exportiert ist, dass Dienst, Empfänger, Activity und Berechtigungen im zusammengeführten Manifest stehen und dass die Klassen der Kotlin-Schicht in der APK liegen. Zwei aufeinanderfolgende CI-Läufe im selben Pull Request haben APKs mit derselben Signatur erzeugt.
 
-Alles Folgende ist nur übersetzt und nie auf einem Gerät oder Emulator gelaufen:
+Die folgende Liste stammt aus der Zeit vor dem ersten Gerätetest. Der Test vom 13.11.2026 hat auf einem Gerät gezeigt, dass die App startet, die Oberfläche arbeitet, Registrierung und Empfang über UnifiedPush mit ntfy klappen, der Kern im geweckten Prozess aufrufbar ist, Anzeige und Reaktionen stimmen, genau ein POST entsteht und nach einem Neustart nichts zu tun ist.
+
+Weiterhin offen sind: ein Lauf über eine ganze Nacht, andere Geräte und Hersteller, das Verhalten bei „Nicht stören“, die Wiederholung nach Netzfehlern, Android unter 12 und die Lizenzen der App-Abhängigkeiten.
+
+Die ursprüngliche Liste, zur Einordnung:
 
 - **Die App als Ganzes.** Ob sie startet und die Oberfläche lädt.
 - **Die Befehle der Oberfläche.** Namen der Befehle, Freigabe über die Berechtigungen von Tauri, Übergabe der Argumente. Ein Fehler zeigt sich als Meldung oben in der App.
@@ -269,6 +315,6 @@ Nicht ausprobiert und deshalb ohne Gewähr sind auch die Hinweise zur ntfy-App (
 
 ## Wie es weitergeht
 
-- Test nach dem Protokoll oben. Das Ergebnis entscheidet über Tauri oder Flutter.
-- Bei Erfolg bleibt der Prototyp liegen, bis M4 ihn ersetzt. Übernommen werden die Erkenntnisse, nicht der Code.
+- Der Test ist bestanden, die Entscheidung für Tauri bleibt. Offen ist ein Lauf über eine ganze Nacht.
+- Der Prototyp bleibt liegen, bis M4 ihn ersetzt. Übernommen werden die Erkenntnisse, nicht der Code.
 - Für M4 offen: Android-Projekt einchecken, eigene Signatur, App-Symbol, Ablauf nach 24 Stunden, Zählt die Home-Taste als Reaktion, Ton und Vibration über die Systemeinstellungen des Kanals.
