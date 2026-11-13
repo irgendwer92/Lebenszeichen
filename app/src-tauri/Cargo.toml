@@ -1,0 +1,33 @@
+[package]
+name = "lebenszeichen-app"
+description = "Lebenszeichen-App: Tauri-Hülle, in M1 nur als Wegwerf-Prototyp für Android"
+version = "0.1.0"
+license = "GPL-3.0-or-later"
+edition = "2024"
+rust-version = "1.90"
+repository = "https://github.com/irgendwer92/Are-You-Alive-"
+publish = false
+
+# The Kotlin layer loads this library by name (CoreBridge.kt), so the name
+# must stay in sync with it.
+[lib]
+name = "lebenszeichen_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+tauri-plugin-lebenszeichen = { path = "../android" }
+lz-core = { path = "../../crates/core" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Same major line as Tauri itself uses, so only one copy ends up in the build.
+jni = "0.21"
+
+# The prototype is sideloaded as a debug build. Without debug information the
+# library and with it the APK stay small.
+[profile.dev]
+debug = false
+strip = "debuginfo"

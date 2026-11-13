@@ -1,0 +1,13 @@
+{
+  "name": "lebenszeichen-app",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "description": "Nur für die Tauri-CLI; die Oberfläche in ui/ braucht keinen Build-Schritt.",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
+  }
+}

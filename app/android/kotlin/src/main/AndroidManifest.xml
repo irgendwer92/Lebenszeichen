@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged into the manifest of the generated app project. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <application>
+        <!-- Receives the UnifiedPush events from the receiver of the connector library. -->
+        <service
+            android:name="io.github.irgendwer92.lebenszeichen.droid.PushServiceImpl"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Tap on and dismissal of the notification. -->
+        <receiver
+            android:name="io.github.irgendwer92.lebenszeichen.droid.ReactionReceiver"
+            android:exported="false" />
+
+        <!-- Full-screen display, started by the full-screen intent of the notification. -->
+        <activity
+            android:name="io.github.irgendwer92.lebenszeichen.droid.RequestActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:turnScreenOn="true" />
+    </application>
+</manifest>
