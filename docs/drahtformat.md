@@ -123,6 +123,10 @@ Der Angefragte prüft jede eingehende `request` gegen seine Regeln für diesen K
 
 Sonst wird die Anfrage angenommen und gezählt. Eine gemeldete Antwort schließt die Anfrage nicht; sie bleibt offen, bis sie manuell beantwortet wird oder abläuft.
 
+Zeitpunkt einer Anfrage ist ihre Absendezeit, höchstens aber die eigene Uhrzeit beim Empfang. Ablaufzeit und Wochenlimit rechnen ab diesem Zeitpunkt, damit beide Seiten denselben Moment zählen, auch wenn die Zustellung sich verzögert hat. Eine Anfrage, die erst nach ihrer Ablaufzeit ankommt, wird verworfen und nicht gezählt.
+
+Eine Antwort gilt, wenn sie abgeschickt wurde, solange die Anfrage noch nicht abgelaufen war, auch wenn sie später ankommt. Je Anfrage nimmt der Anfragende höchstens eine gemeldete und eine manuelle Antwort an; nach einer manuellen wird keine gemeldete mehr angenommen.
+
 Der Anfragende wendet dieselbe Prüfung mit den Regeln der Gegenseite auf seine eigenen gesendeten Anfragen an, um den Knopf zu sperren und den nächsten möglichen Zeitpunkt anzuzeigen. Maßgeblich bleibt die Prüfung beim Angefragten.
 
 Vorgaben: Mindestabstand 360 Minuten, Ablaufzeit 1440 Minuten, Wochenlimit 7. Nach `hello_ok` schickt jede Seite einmal `rules` und erneut nach jeder Änderung. Bis die Regeln der Gegenseite eingetroffen sind, gelten die Vorgaben.
@@ -209,6 +213,7 @@ Diese Punkte gehen über `protokoll.md` hinaus und sind neu:
 - **Einladung als Base32 mit Vorsatz `LZ1-`**; damit ist die offene Frage zum Format aus `protokoll.md` beantwortet.
 - **Prüfcode über SHA-256.**
 - **Mindestabstand zählt ab der manuellen Antwort**; eine gemeldete Antwort schließt die Anfrage nicht.
+- **Zeitpunkt einer Anfrage ist ihre Absendezeit**, begrenzt durch die Uhr des Empfängers; verspätet angekommene Anfragen und rechtzeitig abgeschickte Antworten werden danach beurteilt.
 - **Zeitfenster gegen Wiedereinspielen** von 24 Stunden plus 10 Minuten Toleranz. Ein Gerät mit stark falscher Uhr kann deshalb nicht teilnehmen.
 - **Relay: JSON für Steuerung, rohe Bytes für Nachrichten, kumulative Quittungen.**
 - **Wecksignal nur an Leser ohne offene Verbindung**, mit festem Rumpf `wake`.

@@ -16,8 +16,8 @@ Nacht steht noch aus; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md).
 
 Meilenstein M2 hat begonnen: `crates/wire` setzt das Drahtformat aus
 [docs/drahtformat.md](docs/drahtformat.md) um (Klartext der Nachrichten,
-Einladung, Prüfung des Umschlags), `crates/core` Verschlüsselung und Kopplung.
-Regeln, Speicher, Relay und Kommandozeile fehlen noch.
+Einladung, Prüfung des Umschlags), `crates/core` Verschlüsselung, Kopplung und
+die Regeln für Anfragen. Speicher, Relay und Kommandozeile fehlen noch.
 
 | Meilenstein | Inhalt |
 |---|---|

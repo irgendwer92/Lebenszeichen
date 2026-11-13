@@ -9,8 +9,10 @@
 
 pub use lz_wire as wire;
 
+pub mod contact;
 pub mod crypto;
 pub mod pairing;
+pub mod rules;
 
 /// Everything that can go wrong in the protocol part of the core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,8 +25,12 @@ pub enum Error {
     Decrypt,
     /// The message or invitation lies outside its time window.
     Expired,
-    /// A valid message that does not fit the current state.
+    /// A valid message or call that does not fit the current state.
     Unexpected,
+    /// The contact has ended.
+    Ended,
+    /// The rules of the other side allow the next request only at this time.
+    NotYet(u64),
 }
 
 impl From<wire::Error> for Error {
@@ -40,33 +46,29 @@ impl std::fmt::Display for Error {
             Self::Encrypt => f.write_str("encryption failed"),
             Self::Decrypt => f.write_str("decryption failed"),
             Self::Expired => f.write_str("outside the time window"),
-            Self::Unexpected => f.write_str("unexpected message"),
+            Self::Unexpected => f.write_str("does not fit the current state"),
+            Self::Ended => f.write_str("contact has ended"),
+            Self::NotYet(at) => write!(f, "next request possible at {at}"),
         }
     }
 }
 
 impl std::error::Error for Error {}
 
-/// Default limits for incoming requests, as fixed in the concept.
+/// Local defaults that are not part of the protocol.
 ///
-/// The person being asked can change them per contact.
+/// The defaults of the request rules are [`wire::Rules::DEFAULT`].
 pub mod defaults {
-    /// Hours until an unanswered request expires.
-    pub const REQUEST_TTL_HOURS: u32 = 24;
-
-    /// Hours that must pass after an answer before the next request.
-    pub const MIN_INTERVAL_HOURS: u32 = 6;
-
-    /// Accepted requests per contact within any seven days.
-    pub const WEEKLY_LIMIT: u32 = 7;
-
     /// Minutes to wait for a manual answer before a reported state is sent.
     pub const REPORTED_ANSWER_DELAY_MINUTES: u32 = 15;
 }
 
 // Checked at compile time: the weekly limit must be the stricter rule,
 // otherwise the minimum interval alone would already enforce it.
-const _: () = assert!(defaults::WEEKLY_LIMIT <= 7 * 24 / defaults::MIN_INTERVAL_HOURS);
+const _: () = {
+    let rules = wire::Rules::DEFAULT;
+    assert!(rules.weekly_limit as u32 <= 7 * 24 * 60 / rules.min_interval_minutes);
+};
 
 /// Placeholder for the Android walking skeleton of milestone M1.
 ///

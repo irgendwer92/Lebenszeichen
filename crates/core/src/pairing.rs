@@ -195,8 +195,16 @@ impl Contact {
         now: u64,
         rng: &mut impl CryptoRngCore,
     ) -> Result<[u8; ENVELOPE_LEN], Error> {
-        let message = new_message(body, now, rng);
-        crypto::seal(&message, &self.key, &self.peer_key, rng)
+        self.seal_message(&new_message(body, now, rng), rng)
+    }
+
+    /// Encrypts a prepared message to this contact.
+    pub fn seal_message(
+        &self,
+        message: &Message,
+        rng: &mut impl CryptoRngCore,
+    ) -> Result<[u8; ENVELOPE_LEN], Error> {
+        crypto::seal(message, &self.key, &self.peer_key, rng)
     }
 
     /// Decrypts an envelope from this contact and checks its time.
@@ -210,7 +218,8 @@ impl Contact {
     }
 }
 
-fn new_message(body: Body, now: u64, rng: &mut impl CryptoRngCore) -> Message {
+/// A message with a fresh random identifier, sent at `now`.
+pub(crate) fn new_message(body: Body, now: u64, rng: &mut impl CryptoRngCore) -> Message {
     let mut id = [0; 16];
     rng.fill_bytes(&mut id);
     Message {
