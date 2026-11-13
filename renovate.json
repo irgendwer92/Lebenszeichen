@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Europe/Berlin",
+  "schedule": ["before 6am on monday"],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "packageRules": [
+    {
+      "description": "Kleine Updates gesammelt in einem Pull Request",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "kleine Updates"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "description": "Sicherheitsupdates sofort und einzeln",
+    "schedule": ["at any time"],
+    "groupName": null
+  }
+}

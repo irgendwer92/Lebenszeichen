@@ -1,0 +1,15 @@
+[package]
+name = "lz-core"
+description = "Protokoll, Verschlüsselung, Regelprüfung und Speicher von Lebenszeichen"
+license = "GPL-3.0-or-later"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+lz-wire.workspace = true
+
+[lints]
+workspace = true

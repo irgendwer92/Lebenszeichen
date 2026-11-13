@@ -1,0 +1,19 @@
+[package]
+name = "lz-cli"
+description = "Lebenszeichen-Client ohne Oberfläche"
+license = "GPL-3.0-or-later"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "lz"
+path = "src/main.rs"
+
+[dependencies]
+lz-core.workspace = true
+
+[lints]
+workspace = true
