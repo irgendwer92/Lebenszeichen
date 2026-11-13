@@ -3,10 +3,49 @@
 //! The core has no dependency on Tauri or any user interface. The desktop
 //! app, the Android layer and the command-line client all call into it.
 //!
-//! Nothing is implemented yet except a placeholder for the Android walking
-//! skeleton of milestone M1; the protocol follows in milestone M2.
+//! The protocol part takes time and randomness as arguments and has no
+//! dependency on storage or the operating system, so it can later move to
+//! devices without one.
 
 pub use lz_wire as wire;
+
+pub mod crypto;
+pub mod pairing;
+
+/// Everything that can go wrong in the protocol part of the core.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Error {
+    /// The bytes do not follow the wire format.
+    Wire(wire::Error),
+    /// Encryption failed. Does not happen with valid keys.
+    Encrypt,
+    /// Wrong keys, or the envelope was altered on the way.
+    Decrypt,
+    /// The message or invitation lies outside its time window.
+    Expired,
+    /// A valid message that does not fit the current state.
+    Unexpected,
+}
+
+impl From<wire::Error> for Error {
+    fn from(error: wire::Error) -> Self {
+        Self::Wire(error)
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Wire(error) => write!(f, "wire format: {error}"),
+            Self::Encrypt => f.write_str("encryption failed"),
+            Self::Decrypt => f.write_str("decryption failed"),
+            Self::Expired => f.write_str("outside the time window"),
+            Self::Unexpected => f.write_str("unexpected message"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 /// Default limits for incoming requests, as fixed in the concept.
 ///

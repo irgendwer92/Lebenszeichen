@@ -62,6 +62,7 @@ Wegwerf-Prototyp, der nur das Risiko klärt. Ergebnis und Einzelheiten stehen in
 
 ### M2 – Kern und Relay (begonnen am 14.11.2026)
 Erledigt: Drahtformat in `crates/wire` ohne Verschlüsselung (Klartext aller sechs Nachrichtentypen, Einladung als `LZ1-`-Code, Prüfung des Umschlags).
+Erledigt: Verschlüsselung und Kopplung in `crates/core` (beide Umschlagformen byteweise gegen libsodium geprüft, Prüfcode, Ablauf von Einladung bis `hello_ok`, Zeitfenster gegen Wiedereinspielen).
 - Nachrichtenhülle, Verschlüsselung, Kopplung, Anfrage und Antwort, Regeln samt Wochenlimit, Entfernen.
 - Relay mit Postfächern, Lesern, Gutscheinen, Aufräumregeln; als Docker-Image.
 - Mehrere Leser pro Postfach sind von Anfang an vorgesehen.

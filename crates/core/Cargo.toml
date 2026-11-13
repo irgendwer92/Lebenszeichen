@@ -10,6 +10,12 @@ publish.workspace = true
 
 [dependencies]
 lz-wire.workspace = true
+crypto_box = { version = "0.9.1", default-features = false, features = ["salsa20", "seal", "rand_core"] }
+rand_core = "0.6.4"
+sha2 = { version = "0.10.9", default-features = false }
+
+[dev-dependencies]
+rand_core = { version = "0.6.4", features = ["getrandom"] }
 
 [lints]
 workspace = true

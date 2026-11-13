@@ -29,14 +29,21 @@ Jede Nachricht auf dem Draht ist genau 297 Byte lang. Es gibt zwei Formen, die d
 |---|---|---|
 | 0 | 1 | Protokollversion, `0x01` |
 | 1 | 24 | Nonce, zufällig |
-| 25 | 272 | `crypto_box(klartext, nonce, pk_empfänger, sk_absender)`; Klartext 256 Byte, dahinter 16 Byte Prüfwert |
+| 25 | 16 | Prüfwert |
+| 41 | 256 | verschlüsselter Klartext |
+
+Byte 25 bis 296 sind genau die Ausgabe von `crypto_box_easy(klartext, nonce, pk_empfänger, sk_absender)`: libsodium stellt den Prüfwert vor das Chiffrat.
 
 **Form B, versiegelt** (`crypto_box_seal` aus libsodium), nur für `hello`:
 
 | Offset | Länge | Inhalt |
 |---|---|---|
 | 0 | 1 | Protokollversion, `0x01` |
-| 1 | 296 | `crypto_box_seal(klartext, pk_empfänger)`; Klartext 248 Byte, davor 32 Byte flüchtiger Schlüssel, dahinter 16 Byte Prüfwert |
+| 1 | 32 | flüchtiger öffentlicher Schlüssel |
+| 33 | 16 | Prüfwert |
+| 49 | 248 | verschlüsselter Klartext |
+
+Byte 1 bis 296 sind genau die Ausgabe von `crypto_box_seal(klartext, pk_empfänger)`.
 
 Form B ist nötig, weil der Empfänger von `hello` den Schlüssel des Absenders noch nicht kennt. Der Empfänger wählt die Form nach seinem eigenen Zustand: Solange zu einem Postfach eine offene Einladung gehört und noch kein Kontakt, erwartet er Form B, danach nur noch Form A. Was sich nicht entschlüsseln lässt, wird still verworfen.
 
@@ -198,6 +205,7 @@ Diese Punkte gehen über `protokoll.md` hinaus und sind neu:
 
 - **Festes Binärformat** statt JSON oder CBOR im Klartext: klein, ohne Parser und auf Microcontrollern einfach.
 - **Versiegelte Form für `hello`**, weil der Empfänger den Absender noch nicht kennt.
+- **Prüfwert vor dem Chiffrat**, wie libsodium ihn ausgibt. Die erste Fassung dieses Dokuments hatte ihn dahinter; berichtigt am 14.11.2026, bevor Code darauf aufbaute.
 - **Einladung als Base32 mit Vorsatz `LZ1-`**; damit ist die offene Frage zum Format aus `protokoll.md` beantwortet.
 - **Prüfcode über SHA-256.**
 - **Mindestabstand zählt ab der manuellen Antwort**; eine gemeldete Antwort schließt die Anfrage nicht.
