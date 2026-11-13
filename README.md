@@ -12,8 +12,12 @@ Kein Chat, kein Onlinestatus, kein Zeitplan, keine Alarmkette.
 Meilenstein M1 in Arbeit: Ein Wegwerf-Prototyp für Android prüft, ob ein
 Wecksignal die beendete App erreicht und die Kotlin-Schicht den Rust-Kern
 aufrufen kann. Der Test auf einem Gerät ist bestanden, ein Lauf über eine ganze
-Nacht steht noch aus; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md). Darüber hinaus gibt es noch
-keine Funktion.
+Nacht steht noch aus; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md).
+
+Meilenstein M2 in Arbeit: Das Relay (`crates/relay`, Programm `lz-relay`)
+ist fertig und nach [docs/drahtformat.md](docs/drahtformat.md) umgesetzt.
+Es wird über Umgebungsvariablen eingestellt und lässt sich als Docker-Image
+bauen: `docker build -f crates/relay/Dockerfile .`
 
 | Meilenstein | Inhalt |
 |---|---|

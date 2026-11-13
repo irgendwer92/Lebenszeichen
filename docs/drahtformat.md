@@ -207,4 +207,19 @@ Diese Punkte gehen über `protokoll.md` hinaus und sind neu:
 - **Schutz des Relays vor missbräuchlichen Push-Adressen.**
 - **SQLite als Speicher des Relays.** Das Speicherformat des Kerns bleibt offen; der Kern spricht seinen Speicher über eine Schnittstelle an.
 
+Klarstellungen, die bei der Umsetzung des Relays (`crates/relay`) getroffen wurden:
+
+- **Reihenfolge der Prüfungen:** Fehlt der Token oder ist er nicht `b64url` von 32 Byte, kommt `401`. Danach wird das Postfach gesucht; ein unbekanntes Postfach meldet `404 unknown_mailbox` auch dann, wenn der Token nicht passen würde, damit ein entfernter Client das sicher erkennt. Erst dann wird der Token verglichen (`401`).
+- **Unlesbare Kennungen** in Pfaden (nicht `b64url` oder falsche Länge) ergeben `400 bad_request`. Hashes in `POST /v1/mailboxes` müssen 64 Hex-Ziffern sein; Großbuchstaben werden geduldet.
+- **Gutschein:** Er steht wie ein Token im Kopf `Authorization: Bearer …`. Ein unbekannter, eingelöster oder abgelaufener Gutschein ergibt `401`. Er gilt genau 600 Sekunden.
+- **Leerer Rumpf** bei `POST …/messages` ergibt `400 bad_request`. Der `Content-Type` wird nicht geprüft.
+- **Grenzen gleichzeitig überschritten:** Die Ratenbegrenzung wird vor dem Füllstand geprüft, es kommt dann `rate_limited`. Abgelehnte Einlieferungen zählen nicht mit. „Wartend“ heißt: noch gespeichert, auch wenn einzelne Leser sie schon quittiert haben.
+- **Ratenbegrenzung nur im Speicher:** Die Eingangszeiten für die Grenze von 6 je Stunde hält das Relay nur im Arbeitsspeicher und nur eine Stunde lang. Nach einem Neustart beginnt die Zählung neu.
+- **Fehler des Relays selbst** melden `500` mit `{"error":"internal"}`.
+- **Leser:** Höchstens 16 Leser je Postfach, darüber `400 bad_request`, weil jeder Leser ein Wecksignal auslösen kann. Ein neu eingetragener Leser beginnt mit Quittung 0 und erhält alle wartenden Nachrichten; ein erneutes `PUT` ändert nur die Push-Adresse. Ein Rumpf `{}` gilt wie `{"push_url":null}`. Wird ein Leser ausgetragen, löscht das Relay sofort die Nachrichten, die alle verbleibenden Leser quittiert haben.
+- **Push-Adresse:** höchstens 1024 Byte, nur `https`, ohne Benutzername und Passwort, nicht `localhost`, als IP-Adresse nur öffentliche. Das Relay löst den Rechnernamen beim Wecken selbst auf und verbindet sich nur mit den geprüften öffentlichen Adressen (IPv4 und IPv6), damit eine zweite Auflösung nichts anderes liefern kann. Kein Proxy, keine Weiterleitungen, Zeitgrenze 5 Sekunden. `LZ_PUSH_ALLOWED_HOSTS` vergleicht den Rechnernamen genau, ohne Groß- und Kleinschreibung und ohne Unterdomänen. Ungültige Adressen ergeben beim Eintragen `400 bad_request`.
+- **Tag der letzten Nutzung:** Ihn setzen das Anlegen des Postfachs, das Eintragen eines Lesers, `subscribe` und `ack`, nicht aber das Einliefern. Gelöscht wird ein Postfach, dessen Tag mehr als 90 Tage zurückliegt. Das Relay räumt alle 5 Minuten auf.
+- **Quittungen:** `seq` wird nie wiederverwendet, auch nicht nach dem Löschen von Nachrichten. Eine Quittung über die höchste vergebene `seq` hinaus wird auf diese begrenzt, damit sie keine künftigen Nachrichten erfasst. Auf `ack` antwortet das Relay nicht, außer mit einem Fehler.
+- **WebSocket-Fehler:** `code` ist einer der Fehlercodes oben (`bad_request`, `unauthorized`, `unknown_mailbox`, `unknown_reader`, `internal`). Bei einem unlesbaren Rahmen fehlt das Feld `mailbox`. `ack` für ein Postfach, das diese Verbindung nicht abonniert hat, ergibt `bad_request`. Wird ein abonniertes Postfach gelöscht oder der Leser ausgetragen, schickt das Relay `unknown_mailbox` bzw. `unknown_reader` und beendet das Abonnement. Ein erneutes `subscribe` derselben Verbindung auf dasselbe Postfach ersetzt das alte Abonnement. Höchstens 256 Postfächer je Verbindung, Rahmen höchstens 4 KiB.
+
 Nicht festgelegt: die Nachrichten zwischen eigenen Geräten (M5) und das Verhalten beim Wechsel des Relays.
