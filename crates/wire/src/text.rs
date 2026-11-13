@@ -67,6 +67,34 @@ impl<const N: usize> core::fmt::Display for BoundedStr<N> {
     }
 }
 
+#[cfg(feature = "serde")]
+impl<const N: usize> serde::Serialize for BoundedStr<N> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, const N: usize> serde::Deserialize<'de> for BoundedStr<N> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor<const N: usize>;
+
+        impl<const N: usize> serde::de::Visitor<'_> for Visitor<N> {
+            type Value = BoundedStr<N>;
+
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                write!(f, "a string of at most {N} bytes")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<Self::Value, E> {
+                BoundedStr::new(text).map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(Visitor)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::BoundedStr;

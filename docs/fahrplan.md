@@ -64,6 +64,7 @@ Wegwerf-Prototyp, der nur das Risiko klärt. Ergebnis und Einzelheiten stehen in
 Erledigt: Drahtformat in `crates/wire` ohne Verschlüsselung (Klartext aller sechs Nachrichtentypen, Einladung als `LZ1-`-Code, Prüfung des Umschlags).
 Erledigt: Verschlüsselung und Kopplung in `crates/core` (beide Umschlagformen byteweise gegen libsodium geprüft, Prüfcode, Ablauf von Einladung bis `hello_ok`, Zeitfenster gegen Wiedereinspielen).
 Erledigt: Regeln für Anfragen in `crates/core` (offene Anfrage, Mindestabstand, gleitendes Wochenlimit, auf beiden Seiten mit derselben Prüfung), Antworten, gemeldete Antworten, Entfernen, Erkennen wiederholter Nachrichten.
+Erledigt: Speicher in `crates/core` als eine JSON-Datei je Gerät, mit Sperre und atomarem Ersetzen.
 - Nachrichtenhülle, Verschlüsselung, Kopplung, Anfrage und Antwort, Regeln samt Wochenlimit, Entfernen.
 - Relay mit Postfächern, Lesern, Gutscheinen, Aufräumregeln; als Docker-Image.
 - Mehrere Leser pro Postfach sind von Anfang an vorgesehen.
@@ -136,6 +137,6 @@ Was jetzt schon dafür getan wird, ohne Mehraufwand:
 
 - Wortlaut der App-Store-Ausnahme.
 - Technik der Oberfläche in `app/ui` (schlichtes HTML oder ein kleines Framework).
-- Speicherformat des Kerns (SQLite oder Dateien) und Schutz der Schlüssel auf dem Gerät.
+- Schutz der Schlüssel auf dem Gerät. Das Speicherformat ist entschieden, siehe `konzept.md`.
 - Lokale Schnittstelle um "offene Anfrage vorhanden?" und "beantworten" erweitern (für Microcontroller-Satelliten).
 - Eingeschränkte Geräterolle für Geräte ohne sicheren Speicher.

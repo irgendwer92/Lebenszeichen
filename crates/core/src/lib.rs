@@ -11,8 +11,10 @@ pub use lz_wire as wire;
 
 pub mod contact;
 pub mod crypto;
+mod hex;
 pub mod pairing;
 pub mod rules;
+pub mod store;
 
 /// Everything that can go wrong in the protocol part of the core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

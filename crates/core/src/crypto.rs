@@ -7,6 +7,7 @@
 use crypto_box::aead::AeadInPlace;
 use crypto_box::{SalsaBox, SecretKey};
 use rand_core::CryptoRngCore;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 use crate::Error;
@@ -35,6 +36,19 @@ impl ContactKey {
 
     pub fn public_key(&self) -> PublicKey {
         self.0.public_key().to_bytes()
+    }
+}
+
+/// Stored as the hex of the secret bytes.
+impl Serialize for ContactKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::hex::serialize(&self.to_bytes(), serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ContactKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::hex::deserialize(deserializer).map(Self::from_bytes)
     }
 }
 

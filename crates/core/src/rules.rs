@@ -10,14 +10,17 @@
 //! All times are Unix seconds. The time of a request is its sending time, so
 //! that both sides count the same moment even when delivery was late.
 
+use serde::{Deserialize, Serialize};
+
 use crate::wire::{MessageId, Reason, Rules};
 
 /// The weekly limit counts requests within this sliding window.
 pub const WEEK_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// One request as seen by either side.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
+    #[serde(with = "crate::hex")]
     pub id: MessageId,
     /// Sending time of the request.
     pub at: u64,
@@ -28,7 +31,7 @@ pub struct Entry {
 }
 
 /// History of requests in one direction between two people.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ledger {
     /// Requests of the last week and any still open, oldest first.
     pub entries: Vec<Entry>,

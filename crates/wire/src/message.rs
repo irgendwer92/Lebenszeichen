@@ -60,6 +60,7 @@ pub struct Hello {
 
 /// How often the sender of these rules may be asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Rules {
     /// Minutes after a manual response before the next request is accepted.
     pub min_interval_minutes: u32,

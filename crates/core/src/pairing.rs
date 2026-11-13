@@ -14,6 +14,7 @@
 //! ```
 
 use rand_core::CryptoRngCore;
+use serde::{Deserialize, Serialize};
 
 use crate::Error;
 use crate::crypto::{self, ContactKey};
@@ -23,15 +24,18 @@ use crate::wire::{
 };
 
 /// A mailbox on a relay and the token to deliver into it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Address {
     pub relay: RelayUrl,
+    #[serde(with = "crate::hex")]
     pub mailbox: MailboxId,
+    #[serde(with = "crate::hex")]
     pub send_token: Token,
 }
 
 /// Where a contact stands in the pairing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PairingState {
     /// Accepted an invitation and sent `hello`; waiting for `hello_ok`.
     AwaitingHelloOk,
@@ -43,19 +47,21 @@ pub enum PairingState {
 
 /// The cryptographic side of a contact. Names never leave the device and are
 /// not part of this.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Contact {
     pub key: ContactKey,
+    #[serde(with = "crate::hex")]
     pub peer_key: PublicKey,
     /// Mailbox of the other side, into which this side delivers.
     pub peer: Address,
     /// Own mailbox, from which this side reads messages of this contact.
+    #[serde(with = "crate::hex")]
     pub own_mailbox: MailboxId,
     pub state: PairingState,
 }
 
 /// An invitation handed out and not yet accepted.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingInvitation {
     pub key: ContactKey,
     pub own: Address,

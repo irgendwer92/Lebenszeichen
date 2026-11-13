@@ -6,6 +6,7 @@
 //! randomness as arguments and does no I/O.
 
 use rand_core::CryptoRngCore;
+use serde::{Deserialize, Serialize};
 
 use crate::Error;
 use crate::pairing::{Contact, PairingState, new_message};
@@ -15,7 +16,7 @@ use crate::wire::{
 };
 
 /// State of one contact as stored on the device.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContactState {
     pub contact: Contact,
     /// How often the other side may ask; enforced here.
@@ -26,10 +27,19 @@ pub struct ContactState {
     pub incoming: Ledger,
     /// Requests to the other side.
     pub outgoing: Ledger,
-    /// Identifier and sending time of recently received messages.
-    pub seen: Vec<(MessageId, u64)>,
+    /// Recently received messages, to drop repetitions.
+    pub seen: Vec<Seen>,
     /// One side has ended the contact. Nothing is sent or accepted anymore.
     pub ended: bool,
+}
+
+/// A received message, remembered for [`REPLAY_MEMORY_SECS`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Seen {
+    #[serde(with = "crate::hex")]
+    pub id: MessageId,
+    /// Sending time of the message.
+    pub at: u64,
 }
 
 /// What a received envelope meant.
@@ -235,11 +245,14 @@ impl ContactState {
         let message = self.contact.open(envelope, now)?;
 
         self.seen
-            .retain(|&(_, at)| now < at.saturating_add(REPLAY_MEMORY_SECS));
-        if self.seen.iter().any(|(id, _)| id == &message.id) {
+            .retain(|seen| now < seen.at.saturating_add(REPLAY_MEMORY_SECS));
+        if self.seen.iter().any(|seen| seen.id == message.id) {
             return Ok(Event::Ignored(Ignored::Duplicate));
         }
-        self.seen.push((message.id, message.sent_at));
+        self.seen.push(Seen {
+            id: message.id,
+            at: message.sent_at,
+        });
 
         if !self.is_paired() {
             return Ok(match self.contact.receive_hello_ok(&message) {

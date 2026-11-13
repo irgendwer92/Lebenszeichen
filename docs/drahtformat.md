@@ -218,6 +218,6 @@ Diese Punkte gehen über `protokoll.md` hinaus und sind neu:
 - **Relay: JSON für Steuerung, rohe Bytes für Nachrichten, kumulative Quittungen.**
 - **Wecksignal nur an Leser ohne offene Verbindung**, mit festem Rumpf `wake`.
 - **Schutz des Relays vor missbräuchlichen Push-Adressen.**
-- **SQLite als Speicher des Relays.** Das Speicherformat des Kerns bleibt offen; der Kern spricht seinen Speicher über eine Schnittstelle an.
+- **SQLite als Speicher des Relays.** Der Kern spricht seinen Speicher über eine Schnittstelle an und speichert in einer JSON-Datei je Gerät (siehe `konzept.md`).
 
 Nicht festgelegt: die Nachrichten zwischen eigenen Geräten (M5) und das Verhalten beim Wechsel des Relays.
