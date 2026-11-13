@@ -14,11 +14,13 @@ Wecksignal die beendete App erreicht und die Kotlin-Schicht den Rust-Kern
 aufrufen kann. Der Test auf einem Gerät ist bestanden, ein Lauf über eine ganze
 Nacht steht noch aus; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md).
 
-Meilenstein M2 hat begonnen: `crates/wire` setzt das Drahtformat aus
+Meilenstein M2 in Arbeit: `crates/wire` setzt das Drahtformat aus
 [docs/drahtformat.md](docs/drahtformat.md) um (Klartext der Nachrichten,
-Einladung, Prüfung des Umschlags), `crates/core` Verschlüsselung, Kopplung und
-die Regeln für Anfragen und den Speicher als JSON-Datei. Relay und Kommandozeile
-fehlen noch.
+Einladung, Prüfung des Umschlags), `crates/core` Verschlüsselung, Kopplung,
+die Regeln für Anfragen und den Speicher als JSON-Datei. Das Relay
+(`crates/relay`, Programm `lz-relay`) ist fertig; es wird über
+Umgebungsvariablen eingestellt und lässt sich als Docker-Image bauen:
+`docker build -f crates/relay/Dockerfile .` Die Kommandozeile fehlt noch.
 
 | Meilenstein | Inhalt |
 |---|---|

@@ -10,6 +10,25 @@ publish.workspace = true
 
 [dependencies]
 lz-wire.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "ws"] }
+base64 = "0.22"
+rand = "0.9"
+# The wake signal uses rustls with the `ring` provider and the system's root
+# certificates. reqwest 0.13 pulls in aws-lc-rs or webpki-root-certs, whose
+# licenses are not on the allowlist in deny.toml.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+url = "2"
+
+[dev-dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tempfile = "3"
+tokio-tungstenite = "0.29"
 
 [lints]
 workspace = true

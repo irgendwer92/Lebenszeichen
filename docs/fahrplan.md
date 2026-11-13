@@ -68,6 +68,7 @@ Erledigt: Speicher in `crates/core` als eine JSON-Datei je Gerät, mit Sperre un
 - Nachrichtenhülle, Verschlüsselung, Kopplung, Anfrage und Antwort, Regeln samt Wochenlimit, Entfernen.
 - Relay mit Postfächern, Lesern, Gutscheinen, Aufräumregeln; als Docker-Image.
 - Mehrere Leser pro Postfach sind von Anfang an vorgesehen.
+- Erledigt: Relay `lz-relay` (axum, SQLite) mit allen Aufrufen aus `drahtformat.md`, Zustellung per WebSocket mit Quittungen, Wecksignal mit Schutz vor privaten Zieladressen, Aufräumregeln und Docker-Image (`crates/relay/Dockerfile`); Integrationstests laufen ohne Netz.
 - Vorgaben, damit später Microcontroller-Clients möglich bleiben (siehe unten): sprachneutrales, dokumentiertes Drahtformat; Protokollteil des Kerns ohne Abhängigkeit vom Betriebssystem.
 - **Fertig, wenn:** zwei `cli`-Instanzen sich über ein Relay koppeln, anfragen und antworten und die Regeln greifen.
 
