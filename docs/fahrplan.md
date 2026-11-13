@@ -61,14 +61,21 @@ Wegwerf-Prototyp, der nur das Risiko klärt. Ergebnis und Einzelheiten stehen in
 - **Abbruchkriterium:** Geht das mit Tauri nicht zuverlässig, wird hier auf Flutter gewechselt. Kern und Relay bleiben davon unberührt.
 
 ### M2 – Kern und Relay (begonnen am 14.11.2026)
-Erledigt: Drahtformat in `crates/wire` ohne Verschlüsselung (Klartext aller sechs Nachrichtentypen, Einladung als `LZ1-`-Code, Prüfung des Umschlags).
-Erledigt: Verschlüsselung und Kopplung in `crates/core` (beide Umschlagformen byteweise gegen libsodium geprüft, Prüfcode, Ablauf von Einladung bis `hello_ok`, Zeitfenster gegen Wiedereinspielen).
-Erledigt: Regeln für Anfragen in `crates/core` (offene Anfrage, Mindestabstand, gleitendes Wochenlimit, auf beiden Seiten mit derselben Prüfung), Antworten, gemeldete Antworten, Entfernen, Erkennen wiederholter Nachrichten.
-Erledigt: Speicher in `crates/core` als eine JSON-Datei je Gerät, mit Sperre und atomarem Ersetzen.
+
+Stand:
+
+- Erledigt: Drahtformat in `crates/wire` ohne Verschlüsselung (Klartext aller sechs Nachrichtentypen, Einladung als `LZ1-`-Code, Prüfung des Umschlags).
+- Erledigt: Verschlüsselung und Kopplung in `crates/core` (beide Umschlagformen byteweise gegen libsodium geprüft, Prüfcode, Ablauf von Einladung bis `hello_ok`, Zeitfenster gegen Wiedereinspielen).
+- Erledigt: Regeln für Anfragen in `crates/core` (offene Anfrage, Mindestabstand, gleitendes Wochenlimit, auf beiden Seiten mit derselben Prüfung), Antworten, gemeldete Antworten, Entfernen, Erkennen wiederholter Nachrichten.
+- Erledigt: Speicher in `crates/core` als eine JSON-Datei je Gerät, mit Sperre und atomarem Ersetzen.
+- Erledigt: Relay `lz-relay` (axum, SQLite) mit allen Aufrufen aus `drahtformat.md`, Zustellung per WebSocket mit Quittungen, Wecksignal mit Schutz vor privaten Zieladressen, Aufräumregeln und Docker-Image (`crates/relay/Dockerfile`); Integrationstests laufen ohne Netz.
+- Erledigt: Kommandozeile `lz` in `crates/cli` (Einladen mit und ohne Gutschein, Annehmen, Bestätigen, Abrufen per WebSocket mit Quittung nach dem Speichern, Anfragen, Antworten, Melden, Regeln, Entfernen samt Erkennen über `unknown_mailbox`), getestet gegen ein Relay im Speicher.
+
+Umfang:
+
 - Nachrichtenhülle, Verschlüsselung, Kopplung, Anfrage und Antwort, Regeln samt Wochenlimit, Entfernen.
 - Relay mit Postfächern, Lesern, Gutscheinen, Aufräumregeln; als Docker-Image.
 - Mehrere Leser pro Postfach sind von Anfang an vorgesehen.
-- Erledigt: Relay `lz-relay` (axum, SQLite) mit allen Aufrufen aus `drahtformat.md`, Zustellung per WebSocket mit Quittungen, Wecksignal mit Schutz vor privaten Zieladressen, Aufräumregeln und Docker-Image (`crates/relay/Dockerfile`); Integrationstests laufen ohne Netz.
 - Vorgaben, damit später Microcontroller-Clients möglich bleiben (siehe unten): sprachneutrales, dokumentiertes Drahtformat; Protokollteil des Kerns ohne Abhängigkeit vom Betriebssystem.
 - **Fertig, wenn:** zwei `cli`-Instanzen sich über ein Relay koppeln, anfragen und antworten und die Regeln greifen.
 

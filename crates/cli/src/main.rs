@@ -1,13 +1,28 @@
-//! Command-line client without a user interface.
+//! Lebenszeichen client without user interface. Program name: `lz`.
 //!
-//! Used to test the protocol before any app exists, and later as the client
-//! for devices without a screen.
+//! Output and help texts are German; the commands live in [`app`] and
+//! [`sync`], callable from tests with a fake relay.
 
-fn main() {
-    println!(
-        "lz {} (Protokollversion {})",
-        env!("CARGO_PKG_VERSION"),
-        lz_core::wire::PROTOCOL_VERSION
-    );
-    println!("Noch ohne Funktion. Das Protokoll folgt in Meilenstein M2.");
+use std::process::ExitCode;
+
+mod app;
+mod cli;
+mod relay;
+mod show;
+mod sync;
+
+#[cfg(test)]
+mod tests;
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> ExitCode {
+    // TLS with ring only; see Cargo.toml.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    match cli::run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("lz: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }

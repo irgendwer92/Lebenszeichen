@@ -1,0 +1,161 @@
+//! Human-readable output: times in local time, rules, events.
+
+use chrono::{DateTime, Datelike, Local, TimeZone};
+use lz_core::wire::{Reason, ResponseKind, Rules};
+
+const WEEKDAYS: [&str; 7] = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+
+/// A point in time relative to `now`: "heute 18:00", "morgen 07:30",
+/// "Mo 16.11. 18:00", with the year if it differs.
+pub fn when(at: u64, now: u64) -> String {
+    if at == u64::MAX {
+        return "nie".into();
+    }
+    let (Some(at), Some(now)) = (local(at), local(now)) else {
+        return format!("{at} (Unix-Zeit)");
+    };
+    let time = at.format("%H:%M");
+    let days = (at.date_naive() - now.date_naive()).num_days();
+    match days {
+        -1 => format!("gestern {time}"),
+        0 => format!("heute {time}"),
+        1 => format!("morgen {time}"),
+        _ if at.year() == now.year() => format!(
+            "{} {} {time}",
+            WEEKDAYS[at.weekday().num_days_from_monday() as usize],
+            at.format("%d.%m.")
+        ),
+        _ => format!(
+            "{} {} {time}",
+            WEEKDAYS[at.weekday().num_days_from_monday() as usize],
+            at.format("%d.%m.%Y")
+        ),
+    }
+}
+
+fn local(at: u64) -> Option<DateTime<Local>> {
+    Local.timestamp_opt(i64::try_from(at).ok()?, 0).single()
+}
+
+/// A duration in minutes, in hours where that is exact.
+pub fn minutes(m: u32) -> String {
+    if m != 0 && m.is_multiple_of(60) {
+        format!("{} h", m / 60)
+    } else {
+        format!("{m} min")
+    }
+}
+
+/// The request rules in one line.
+pub fn rules(rules: &Rules) -> String {
+    format!(
+        "Mindestabstand {}, Ablauf nach {}, höchstens {} pro Woche",
+        minutes(rules.min_interval_minutes),
+        minutes(rules.expiry_minutes),
+        rules.weekly_limit
+    )
+}
+
+/// A response as the asking side sees it.
+pub fn response(kind: &ResponseKind, at: u64, now: u64) -> String {
+    match kind {
+        ResponseKind::Manual => format!("✓ {}", when(at, now)),
+        ResponseKind::Reported(reason) => reported(reason),
+    }
+}
+
+pub fn reported(reason: &Reason) -> String {
+    format!("„{reason}“ (gemeldet)")
+}
+
+/// Something that happened while fetching messages, for display and tests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Notice {
+    /// Someone accepted an invitation; the code must be compared.
+    Accepted {
+        name: String,
+        code: String,
+    },
+    /// The other side confirmed the pairing.
+    Paired {
+        name: String,
+    },
+    Rules {
+        name: String,
+        rules: Rules,
+    },
+    Request {
+        name: String,
+    },
+    Response {
+        name: String,
+        kind: ResponseKind,
+        at: u64,
+    },
+    /// The other side ended the contact, by `end` or because its mailbox is
+    /// gone.
+    Ended {
+        name: String,
+    },
+    /// A message was dropped. Shown only with `--verbose`.
+    Dropped {
+        name: Option<String>,
+        why: String,
+    },
+    /// A problem with a relay or mailbox that the person should know about.
+    Problem(String),
+}
+
+impl Notice {
+    pub fn is_dropped(&self) -> bool {
+        matches!(self, Self::Dropped { .. })
+    }
+
+    /// Text of the notice, with times relative to `now`.
+    pub fn text(&self, now: u64) -> String {
+        match self {
+            Self::Accepted { name, code } => format!(
+                "{name} hat die Einladung angenommen. Prüfcode: {code}\n\
+                 Stimmt er mit dem Prüfcode der Gegenseite überein, bestätigen mit: lz confirm {name}"
+            ),
+            Self::Paired { name } => format!("{name} hat die Kopplung bestätigt."),
+            Self::Rules { name, rules: r } => {
+                format!("Regeln von {name} für deine Anfragen: {}", rules(r))
+            }
+            Self::Request { name } => {
+                format!("{name} fragt nach einem Lebenszeichen. Antworten mit: lz respond {name}")
+            }
+            Self::Response { name, kind, at } => {
+                format!("{name}: {}", response(kind, *at, now))
+            }
+            Self::Ended { name } => format!("{name} hat die Verbindung beendet."),
+            Self::Dropped { name, why } => match name {
+                Some(name) => format!("(verworfen, {name}: {why})"),
+                None => format!("(verworfen: {why})"),
+            },
+            Self::Problem(text) => text.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{minutes, when};
+
+    #[test]
+    fn relative_days() {
+        let now = 1_794_650_000;
+        assert!(when(now, now).starts_with("heute "));
+        assert!(when(now + 24 * 3600, now).starts_with("morgen "));
+        assert!(when(now - 24 * 3600, now).starts_with("gestern "));
+        assert!(when(now + 3 * 24 * 3600, now).contains('.'));
+        assert_eq!(when(u64::MAX, now), "nie");
+    }
+
+    #[test]
+    fn durations() {
+        assert_eq!(minutes(360), "6 h");
+        assert_eq!(minutes(90), "90 min");
+        assert_eq!(minutes(0), "0 min");
+    }
+}

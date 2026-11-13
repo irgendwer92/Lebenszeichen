@@ -50,6 +50,10 @@ pub struct RelayAccount {
 pub struct StoredContact {
     /// Local name, never transmitted.
     pub name: String,
+    /// Relay of the own mailbox for this contact. Usually the own relay,
+    /// but the relay of the contact if the mailbox was created with a
+    /// voucher from its invitation.
+    pub own_relay: RelayUrl,
     /// Read token of the own mailbox for this contact.
     #[serde(with = "crate::hex")]
     pub read_token: Token,
@@ -250,6 +254,7 @@ mod tests {
             });
             device.contacts.push(StoredContact {
                 name: "Anna".into(),
+                own_relay: RelayUrl::new("https://relay.example").unwrap(),
                 read_token: [9; 32],
                 state: b.clone(),
             });
@@ -322,6 +327,7 @@ mod tests {
                     file.update(|device| {
                         device.contacts.push(StoredContact {
                             name: format!("c{i}"),
+                            own_relay: RelayUrl::new("https://relay.example").unwrap(),
                             read_token: [0; 32],
                             state: dummy_state(),
                         });
