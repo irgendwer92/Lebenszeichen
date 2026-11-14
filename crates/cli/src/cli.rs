@@ -173,6 +173,7 @@ pub async fn run() -> Result<()> {
         out: Box::new(std::io::stdout()),
         verbose: args.verbose,
         idle: SYNC_IDLE,
+        hints: crate::hints::cli,
     };
     match args.command {
         Command::Init { .. } => unreachable!("handled above"),

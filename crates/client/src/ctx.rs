@@ -24,7 +24,7 @@ use rand_core::{OsRng, RngCore};
 use serde::Serialize;
 
 use crate::relay::{Relay, RelayError, from_b64};
-use crate::show::{self, when};
+use crate::show::{self, Hint, Hints, when, with_hints};
 
 /// A failed command, with a message for the person at the keyboard.
 #[derive(Debug, PartialEq, Eq)]
@@ -89,6 +89,8 @@ pub struct Ctx<R> {
     pub verbose: bool,
     /// How long `sync` waits for further messages before it ends.
     pub idle: Duration,
+    /// Wording of hints such as "confirm with …"; see [`Hint`].
+    pub hints: Hints,
 }
 
 /// Creates the state file with a new device.
@@ -154,6 +156,11 @@ pub fn relay_url(text: &str) -> Result<RelayUrl> {
     RelayUrl::new(text).map_err(|_| fail!("Die Relay-Adresse ist zu lang."))
 }
 
+/// A hint to append to a sentence, with a leading space, or nothing.
+fn inline(hints: Hints, hint: Hint<'_>) -> String {
+    hints(&hint).map_or_else(String::new, |text| format!(" {text}"))
+}
+
 pub(crate) fn say(out: &mut dyn Write, text: &str) {
     // Output that cannot be written is not worth failing a command for.
     let _ = writeln!(out, "{text}");
@@ -168,6 +175,22 @@ fn random_token() -> Token {
 /// Compares two states by their stored form.
 fn same(a: &ContactState, b: &ContactState) -> bool {
     serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
+}
+
+/// Fails if a contact was already made from this invitation, so that the
+/// same code is not accepted twice by mistake.
+fn already_accepted(device: &Device, invitation: &Invitation) -> Result<()> {
+    let earlier = device.contacts.iter().find(|c| {
+        let peer = &c.state.contact.peer;
+        peer.relay == invitation.relay && peer.mailbox == invitation.mailbox
+    });
+    match earlier {
+        Some(contact) => Err(fail!(
+            "Diese Einladung hast du schon angenommen (als {}).",
+            contact.name
+        )),
+        None => Ok(()),
+    }
 }
 
 fn name_is_free(device: &Device, name: &str) -> Result<()> {
@@ -217,8 +240,9 @@ impl<R: Relay> Ctx<R> {
     fn load(&self) -> Result<Device> {
         self.store.load().map_err(|error| match error.kind() {
             io::ErrorKind::NotFound => fail!(
-                "Kein Gerät unter {}. Zuerst: lz init",
-                self.store.path().display()
+                "Kein Gerät unter {}.{}",
+                self.store.path().display(),
+                inline(self.hints, Hint::Init)
             ),
             _ => error.into(),
         })
@@ -234,7 +258,8 @@ impl<R: Relay> Ctx<R> {
         }) = device.relay
         else {
             return Err(fail!(
-                "Einladen braucht ein eigenes Relay mit Zugangstoken (lz init --relay … --access-token …)."
+                "Einladen braucht ein eigenes Relay mit Zugangstoken.{}",
+                inline(self.hints, Hint::InitWithAccessToken)
             ));
         };
         let read_token = random_token();
@@ -284,13 +309,14 @@ impl<R: Relay> Ctx<R> {
         let now = self.now();
         self.say(&format!("Einladung für {name}:\n\n{code}\n"));
         self.say(&format!(
-            "Gültig bis {} und nur einmal{}. Danach mit lz sync oder lz listen abholen.",
+            "Gültig bis {} und nur einmal{}.{}",
             when(invitation.expires_at, now),
             if invitation.voucher.is_some() {
                 ", mit Gutschein für ein Postfach auf deinem Relay"
             } else {
                 ""
-            }
+            },
+            inline(self.hints, Hint::Fetch)
         ));
         Ok(code)
     }
@@ -305,6 +331,7 @@ impl<R: Relay> Ctx<R> {
         }
         let device = self.load()?;
         name_is_free(&device, name)?;
+        already_accepted(&device, &invitation)?;
         let (own_relay, authorisation) = match (&device.relay, invitation.voucher) {
             (
                 Some(RelayAccount {
@@ -317,7 +344,8 @@ impl<R: Relay> Ctx<R> {
             _ => {
                 return Err(fail!(
                     "Kein Zugangstoken für ein eigenes Relay und kein Gutschein in der Einladung. \
-                     Die Gegenseite kann mit lz invite --voucher einladen."
+                     Die Gegenseite kann mit Gutschein einladen.{}",
+                    inline(self.hints, Hint::InviteWithVoucher)
                 ));
             }
         };
@@ -354,6 +382,7 @@ impl<R: Relay> Ctx<R> {
             let code = contact.verification_code();
             self.store.update(|device| {
                 name_is_free(device, name)?;
+                already_accepted(device, &invitation)?;
                 device.contacts.push(StoredContact {
                     name: name.into(),
                     own_relay,
@@ -376,15 +405,22 @@ impl<R: Relay> Ctx<R> {
             }
         };
         self.say(&format!("Einladung angenommen. Prüfcode: {code}"));
-        self.say(&format!(
-            "Vergleiche ihn mit dem Prüfcode bei {name}. Gekoppelt seid ihr, sobald {name} bestätigt hat (lz sync).\n\
-             Stimmt er nicht überein: lz reject {name}"
-        ));
+        let text = with_hints(
+            format!(
+                "Vergleiche ihn mit dem Prüfcode bei {name}. Gekoppelt seid ihr, sobald {name} \
+                 bestätigt hat.{}",
+                inline(self.hints, Hint::Fetch)
+            ),
+            self.hints,
+            &[Hint::Reject(name)],
+        );
+        self.say(&text);
         Ok(code)
     }
 
     /// Confirms a contact that accepted an own invitation.
     pub async fn confirm(&mut self, name: &str) -> Result<()> {
+        let hints = self.hints;
         self.change_and_send(name, |state, now| {
             if state.ended {
                 return Err(fail!("Die Verbindung mit {name} ist beendet."));
@@ -393,7 +429,8 @@ impl<R: Relay> Ctx<R> {
                 PairingState::AwaitingConfirmation => {}
                 PairingState::AwaitingHelloOk => {
                     return Err(fail!(
-                        "{name} muss bestätigen, nicht du. Danach bringt lz sync die Bestätigung."
+                        "{name} muss bestätigen, nicht du.{}",
+                        inline(hints, Hint::Fetch)
                     ));
                 }
                 PairingState::Paired => return Err(fail!("{name} ist schon gekoppelt.")),
@@ -460,10 +497,15 @@ impl<R: Relay> Ctx<R> {
             }
         })
         .await?;
-        self.say(&format!(
-            "An {name} gemeldet: {}. Die Anfrage bleibt offen, bis du mit lz respond {name} antwortest.",
-            show::reported(reason)
-        ));
+        let text = with_hints(
+            format!(
+                "An {name} gemeldet: {}. Die Anfrage bleibt offen, bis du antwortest.",
+                show::reported(reason)
+            ),
+            self.hints,
+            &[Hint::Respond(name)],
+        );
+        self.say(&text);
         Ok(())
     }
 
@@ -507,6 +549,12 @@ impl<R: Relay> Ctx<R> {
     pub async fn remove(&mut self, name: &str) -> Result<()> {
         let device = self.load()?;
         if let Some(invitation) = device.invitations.iter().find(|i| i.name == name) {
+            // Forget the invitation first: a running `listen` then knows that
+            // the mailbox is gone on purpose when the relay reports it.
+            self.store.update(|device| {
+                device.invitations.retain(|i| i.name != name);
+                Ok::<_, Fail>(())
+            })?;
             let own = &invitation.pending.own;
             if let Err(error) = self
                 .relay
@@ -515,10 +563,6 @@ impl<R: Relay> Ctx<R> {
             {
                 self.warn_unless_gone(&error);
             }
-            self.store.update(|device| {
-                device.invitations.retain(|i| i.name != name);
-                Ok::<_, Fail>(())
-            })?;
             self.say(&format!("Einladung für {name} zurückgezogen."));
             return Ok(());
         }
@@ -536,21 +580,28 @@ impl<R: Relay> Ctx<R> {
             .iter()
             .find(|c| c.name == name)
             .ok_or_else(|| fail!("Keinen Kontakt namens {name} gefunden."))?;
-        let hint = match contact.state.contact.state {
+        let next = match contact.state.contact.state {
             PairingState::Paired => {
                 return Err(fail!(
-                    "{name} ist schon gekoppelt. Entfernen mit: lz remove {name}"
+                    "{name} ist schon gekoppelt; ablehnen geht nur vorher.{}",
+                    inline(self.hints, Hint::Remove(name))
                 ));
             }
-            PairingState::AwaitingConfirmation => format!("Neu einladen mit: lz invite {name}"),
+            PairingState::AwaitingConfirmation => with_hints(
+                "Für einen neuen Versuch lade neu ein.".to_owned(),
+                self.hints,
+                &[Hint::Invite(name)],
+            ),
             PairingState::AwaitingHelloOk => format!("Bitte {name} um eine neue Einladung."),
         };
-        let seen = if self.end_contact(name).await? {
-            "; die Gegenseite sieht das"
+        // Delivered means the relay took it; whether the device on the
+        // other side can read it, this side cannot know.
+        let delivered = if self.end_contact(name).await? {
+            " Die Ablehnung wurde zugestellt."
         } else {
             ""
         };
-        self.say(&format!("{name} abgelehnt{seen}. {hint}"));
+        self.say(&format!("{name} abgelehnt.{delivered} {next}"));
         Ok(())
     }
 
@@ -644,14 +695,15 @@ impl<R: Relay> Ctx<R> {
         for contact in &overview.contacts {
             let name = &contact.name;
             let status = match &contact.status {
-                Status::Ended => "beendet; entfernen mit: lz remove".to_owned(),
+                Status::Ended => format!("beendet.{}", inline(self.hints, Hint::Remove(name))),
                 Status::AwaitingHelloOk { code } => format!(
-                    "wartet auf die Bestätigung durch {name}, Prüfcode {code}; \
-                     stimmt er nicht: lz reject {name}"
+                    "wartet auf die Bestätigung durch {name}, Prüfcode {code}.{}",
+                    inline(self.hints, Hint::Reject(name))
                 ),
                 Status::AwaitingConfirmation { code } => format!(
-                    "hat angenommen, Prüfcode {code}; bestätigen mit: lz confirm {name}, \
-                     ablehnen mit: lz reject {name}"
+                    "hat angenommen, Prüfcode {code}.{}{}",
+                    inline(self.hints, Hint::Confirm(name)),
+                    inline(self.hints, Hint::Reject(name))
                 ),
                 Status::Paired => "gekoppelt".to_owned(),
             };
@@ -698,7 +750,10 @@ impl<R: Relay> Ctx<R> {
             lines.push(format!("{}: {status}", invitation.name));
         }
         if lines.is_empty() {
-            lines.push("Noch keine Kontakte. Einladen mit: lz invite <name>".to_owned());
+            lines.push(format!(
+                "Noch keine Kontakte.{}",
+                inline(self.hints, Hint::InviteSomeone)
+            ));
         }
         for line in lines {
             self.say(&line);

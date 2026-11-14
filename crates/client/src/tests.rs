@@ -12,9 +12,14 @@ use lz_core::wire::{Reason, RelayUrl, ResponseKind, Rules, Token};
 use crate::ctx::{self, Clock, Ctx, Fail};
 use crate::relay::fake::FakeRelay;
 use crate::relay::{Relay, b64};
-use crate::show::Notice;
+use crate::show::{Hint, Notice};
 
 const T: u64 = 1_794_600_000;
+
+/// Shows every hint as its name, so tests see where hints go.
+fn test_hints(hint: &Hint<'_>) -> Option<String> {
+    Some(format!("[{hint:?}]"))
+}
 const MINUTE: u64 = 60;
 const HOUR: u64 = 3600;
 const RELAY_A: &str = "https://relay-a.example";
@@ -86,6 +91,7 @@ impl World {
                 out: Box::new(out.clone()),
                 verbose: true,
                 idle: Duration::from_millis(20),
+                hints: test_hints,
             },
             out,
             _dir: dir,
@@ -148,7 +154,7 @@ async fn paired(world: &World) -> (Person, Person) {
             code: verification.clone(),
         }]
     );
-    assert!(anna.out.take().contains("lz confirm Bert"));
+    assert!(anna.out.take().contains(r#"[Confirm("Bert")]"#));
     assert!(anna.device().invitations.is_empty());
     anna.ctx.confirm("Bert").await.unwrap();
 
@@ -479,7 +485,7 @@ async fn intercepted_invitation_is_noticed_and_rejected_visibly() {
     let out = anna.out.take();
     assert!(out.contains(&mallory_code), "{out}");
     assert!(out.contains("ein weiteres Mal angenommen"), "{out}");
-    assert!(out.contains("lz reject Bert"), "{out}");
+    assert!(out.contains(r#"[Reject("Bert")]"#), "{out}");
 
     // Anna compares with Bert, the codes differ, she rejects.
     anna.ctx.reject("Bert").await.unwrap();
@@ -507,7 +513,7 @@ async fn reject_only_before_pairing_is_complete() {
     let world = World::new();
     let (mut anna, _bert) = paired(&world).await;
     let error = anna.ctx.reject("Bert").await.unwrap_err();
-    assert!(error.0.contains("lz remove Bert"), "{error:?}");
+    assert!(error.0.contains(r#"[Remove("Bert")]"#), "{error:?}");
 }
 
 #[tokio::test]
@@ -534,4 +540,23 @@ async fn overview_shows_rules_and_requests() {
         Some(LastResponse::Manual { at: overview.now })
     );
     assert!(anna_seen.outgoing_since.is_none());
+}
+
+#[tokio::test]
+async fn the_same_invitation_is_not_accepted_twice() {
+    let world = World::new();
+    let mut anna = world.person(Some((RELAY_A, Some(TOKEN_A))));
+    let mut bert = world.person(Some((RELAY_B, Some(TOKEN_B))));
+
+    let code = anna.ctx.invite("Bert", false).await.unwrap();
+    bert.ctx.accept("Anna", &code).await.unwrap();
+    let error = bert.ctx.accept("anna", &code).await.unwrap_err();
+    assert_eq!(
+        error.0,
+        "Diese Einladung hast du schon angenommen (als Anna)."
+    );
+    assert_eq!(bert.device().contacts.len(), 1);
+    // No second `hello` went out, so Anna sees exactly one acceptance.
+    anna.sync().await;
+    assert!(!anna.out.take().contains("weiteres Mal"));
 }

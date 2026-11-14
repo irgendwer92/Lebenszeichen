@@ -6,6 +6,7 @@
 use std::process::ExitCode;
 
 mod cli;
+mod hints;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {

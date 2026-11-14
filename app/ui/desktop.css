@@ -78,6 +78,7 @@ button.quiet {
 }
 
 .log {
+  white-space: pre-line;
   font-size: 0.875rem;
   padding-left: 1.25rem;
   max-height: 12rem;

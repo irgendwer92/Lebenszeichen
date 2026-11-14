@@ -21,11 +21,36 @@ function el(tag, className, text) {
   return node;
 }
 
-function log(line) {
-  const item = el("li", "", line);
+/// Lines that arrive this close together belong to one message.
+const GROUP_MS = 300;
+
+let lastEntry = null;
+let lastEntryAt = 0;
+
+/// Adds lines to the log, newest message on top. A message keeps the order
+/// of its lines; the background fetch sends them one by one, so lines that
+/// follow each other quickly are put into the same entry.
+function log(...lines) {
+  const now = Date.now();
   const list = $("log");
-  list.prepend(item);
+  if (!lastEntry || now - lastEntryAt > GROUP_MS || !lastEntry.isConnected) {
+    lastEntry = el("li", "", "");
+    list.prepend(lastEntry);
+  }
+  lastEntryAt = now;
+  for (const line of lines) {
+    if (lastEntry.textContent) lastEntry.textContent += "\n";
+    lastEntry.textContent += line;
+  }
   while (list.children.length > 50) list.lastChild.remove();
+}
+
+/// Starts a new log entry, for the reply of a command.
+function logReply(lines) {
+  if (lines.length === 0) return;
+  lastEntry = null;
+  log(...lines);
+  lastEntry = null;
 }
 
 function showError(text) {
@@ -39,7 +64,7 @@ async function call(command, args = {}) {
   showError("");
   try {
     const reply = await tauri.core.invoke(command, args);
-    for (const line of reply.lines) log(line);
+    logReply(reply.lines);
     return reply.value;
   } catch (error) {
     showError(String(error));
@@ -221,7 +246,14 @@ onSubmit("invite-form", async (data, form) => {
 });
 
 onSubmit("accept-form", async (data, form) => {
-  await call("accept", { name: data.get("name"), code: data.get("code") });
+  const name = data.get("name").trim();
+  const result = $("accept-result");
+  result.hidden = true;
+  const code = await call("accept", { name, code: data.get("code") });
+  result.textContent =
+    `Angenommen. Prüfcode: ${code}. Vergleiche ihn mit dem Prüfcode bei ${name}; ` +
+    `gekoppelt seid ihr, sobald ${name} bestätigt hat.`;
+  result.hidden = false;
   form.reset();
 });
 

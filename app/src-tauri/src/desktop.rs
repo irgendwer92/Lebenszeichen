@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use lz_client::ctx::{self, Clock, ContactView, Ctx, LastResponse, Overview, Status};
 use lz_client::relay::Http;
-use lz_client::show::{reported, when};
+use lz_client::show::{no_hints, reported, when};
 use lz_core::store::JsonFile;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -105,6 +105,8 @@ fn new_ctx(path: PathBuf, out: Box<dyn Write>) -> Result<Ctx<Http>, String> {
         out,
         verbose: false,
         idle: SYNC_IDLE,
+        // The window has buttons for every next step.
+        hints: no_hints,
     })
 }
 
