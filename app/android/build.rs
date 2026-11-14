@@ -11,6 +11,7 @@ const COMMANDS: &[&str] = &[
     "open_settings",
     "read_log",
     "clear_log",
+    "scan_invitation",
 ];
 
 fn main() {

@@ -1,4 +1,4 @@
-//! Invitation codes as QR codes.
+//! Invitation codes as QR codes, and reading them back from a camera.
 //!
 //! `LZ1-` with Base32 in capitals fits the alphanumeric mode of QR codes
 //! (see `docs/drahtformat.md`); an invitation becomes version 8 to 12.
@@ -52,9 +52,39 @@ pub fn terminal(text: &str) -> String {
         .build()
 }
 
+/// Prefix of every invitation code.
+const INVITATION_PREFIX: &str = "LZ1-";
+
+/// Finds an invitation in a greyscale image, such as the brightness plane
+/// of a camera frame: `width` × `height` pixels, one byte each, rows
+/// `row_stride` bytes apart. Other QR codes in the picture are ignored.
+///
+/// Returns `None` if the buffer is too small for the given size.
+pub fn decode_invitation(
+    luma: &[u8],
+    width: usize,
+    height: usize,
+    row_stride: usize,
+) -> Option<String> {
+    if width == 0 || height == 0 || row_stride < width {
+        return None;
+    }
+    let needed = (height - 1).checked_mul(row_stride)?.checked_add(width)?;
+    if luma.len() < needed {
+        return None;
+    }
+    let mut image =
+        rqrr::PreparedImage::prepare_from_greyscale(width, height, |x, y| luma[y * row_stride + x]);
+    image
+        .detect_grids()
+        .into_iter()
+        .filter_map(|grid| grid.decode().ok().map(|(_, text)| text))
+        .find(|text| text.starts_with(INVITATION_PREFIX))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{QUIET_ZONE, modules, terminal};
+    use super::{QUIET_ZONE, decode_invitation, modules, terminal};
 
     /// An invitation of typical length: no voucher, short relay address.
     fn invitation() -> String {
@@ -96,6 +126,58 @@ mod tests {
         let qr = modules(&text);
         assert_eq!(qr.width, 65); // version 12
         assert_eq!(decode(qr.width, |x, y| qr.dark[y * qr.width + x]), text);
+    }
+
+    /// Draws a code into a camera-like frame: `scale` pixels per module,
+    /// at an offset, optionally turned by 90°, with padding at row ends.
+    fn frame(text: &str, scale: usize, turned: bool) -> (Vec<u8>, usize, usize, usize) {
+        let qr = modules(text);
+        let (width, height, stride) = (640, 480, 656);
+        let mut luma = vec![200u8; stride * height];
+        let (left, top) = (90, 40);
+        let side = qr.width * scale;
+        for y in 0..side {
+            for x in 0..side {
+                let (mx, my) = (x / scale, y / scale);
+                let (mx, my) = if turned {
+                    (my, qr.width - 1 - mx)
+                } else {
+                    (mx, my)
+                };
+                if qr.dark[my * qr.width + mx] {
+                    luma[(top + y) * stride + left + x] = 30;
+                }
+            }
+        }
+        (luma, width, height, stride)
+    }
+
+    #[test]
+    fn invitation_is_found_in_a_camera_frame() {
+        let text = invitation();
+        for turned in [false, true] {
+            let (luma, width, height, stride) = frame(&text, 7, turned);
+            assert_eq!(
+                decode_invitation(&luma, width, height, stride).as_deref(),
+                Some(text.as_str()),
+                "turned: {turned}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_codes_and_empty_frames_give_nothing() {
+        let (luma, width, height, stride) = frame("https://example.org", 7, false);
+        assert_eq!(decode_invitation(&luma, width, height, stride), None);
+        let blank = vec![200u8; 640 * 480];
+        assert_eq!(decode_invitation(&blank, 640, 480, 640), None);
+    }
+
+    #[test]
+    fn too_small_buffers_are_refused() {
+        assert_eq!(decode_invitation(&[0; 10], 640, 480, 640), None);
+        assert_eq!(decode_invitation(&[0; 10], 0, 0, 0), None);
+        assert_eq!(decode_invitation(&[0; 100], 10, 10, 5), None);
     }
 
     #[test]

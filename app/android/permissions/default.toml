@@ -9,4 +9,5 @@ permissions = [
   "allow-open-settings",
   "allow-read-log",
   "allow-clear-log",
+  "allow-scan-invitation",
 ]

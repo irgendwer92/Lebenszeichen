@@ -12,13 +12,16 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.webkit.WebView
+import androidx.activity.result.ActivityResult
 import androidx.core.app.NotificationManagerCompat
+import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import org.json.JSONObject
 import org.unifiedpush.android.connector.UnifiedPush
 
 /**
@@ -180,6 +183,26 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
     fun clearLog(invoke: Invoke) {
         EventLog.clear(activity)
         invoke.resolve()
+    }
+
+    /** Opens the camera to scan an invitation; the answer comes in [scanResult]. */
+    @Command
+    fun scanInvitation(invoke: Invoke) {
+        startActivityForResult(invoke, Intent(activity, ScanActivity::class.java), "scanResult")
+    }
+
+    @ActivityCallback
+    private fun scanResult(invoke: Invoke, result: ActivityResult) {
+        val data = result.data
+        val error = data?.getStringExtra(ScanActivity.EXTRA_ERROR)
+        if (error != null) {
+            invoke.reject(error)
+            return
+        }
+        val answer = JSObject()
+        val code = if (result.resultCode == Activity.RESULT_OK) data?.getStringExtra(ScanActivity.EXTRA_CODE) else null
+        answer.put("code", code ?: JSONObject.NULL)
+        invoke.resolve(answer)
     }
 
     companion object {

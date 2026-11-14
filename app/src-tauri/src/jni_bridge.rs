@@ -10,8 +10,8 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 
-use jni::objects::{JClass, JObject, JString};
-use jni::sys::{jlong, jstring};
+use jni::objects::{JByteBuffer, JClass, JObject, JString};
+use jni::sys::{jint, jlong, jstring};
 use jni::{JNIEnv, JavaVM};
 use serde::Serialize;
 
@@ -168,4 +168,48 @@ pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge
         let url = optional_string(env, &url);
         background::set_push_url(&path, url.as_deref())
     })
+}
+
+/// `CoreBridge.nativeDecodeQr(buffer, width, height, rowStride): String?`
+///
+/// Looks for an invitation in the brightness plane of a camera frame. The
+/// buffer must be direct (CameraX planes are); it is read in place, never
+/// copied or kept. `null` if there is none.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge_nativeDecodeQr<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    buffer: JByteBuffer<'local>,
+    width: jint,
+    height: jint,
+    row_stride: jint,
+) -> jstring {
+    let found = catch_unwind(AssertUnwindSafe(|| {
+        let address = env.get_direct_buffer_address(&buffer).ok()?;
+        let capacity = env.get_direct_buffer_capacity(&buffer).ok()?;
+        if address.is_null() {
+            return None;
+        }
+        // SAFETY: address and capacity describe the memory of a direct
+        // buffer that the caller keeps alive during this call, and nothing
+        // writes to it meanwhile (CameraX holds the frame until it is closed).
+        let luma = unsafe { std::slice::from_raw_parts(address, capacity) };
+        lz_client::qr::decode_invitation(
+            luma,
+            usize::try_from(width).ok()?,
+            usize::try_from(height).ok()?,
+            usize::try_from(row_stride).ok()?,
+        )
+    }))
+    .ok()
+    .flatten();
+    match found {
+        Some(text) => env
+            .new_string(text)
+            .map(|text| text.into_raw())
+            .unwrap_or(std::ptr::null_mut()),
+        None => std::ptr::null_mut(),
+    }
 }

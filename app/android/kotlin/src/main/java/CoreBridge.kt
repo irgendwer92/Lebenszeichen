@@ -1,6 +1,7 @@
 package io.github.irgendwer92.lebenszeichen.droid
 
 import android.content.Context
+import java.nio.ByteBuffer
 import org.json.JSONObject
 
 /**
@@ -32,6 +33,23 @@ object CoreBridge {
     @JvmStatic private external fun nativeRespond(context: Context, name: String, since: Long): String?
 
     @JvmStatic private external fun nativeSetPushUrl(context: Context, url: String?): String?
+
+    @JvmStatic private external fun nativeDecodeQr(buffer: ByteBuffer, width: Int, height: Int, rowStride: Int): String?
+
+    /**
+     * Looks for an invitation in the brightness plane of a camera frame.
+     * [buffer] must be a direct buffer (the Y plane of CameraX is). It is
+     * only read, in place. `null` if nothing was found or the core is
+     * not available.
+     */
+    fun decodeQr(buffer: ByteBuffer, width: Int, height: Int, rowStride: Int): String? {
+        if (loadError != null) return null
+        return try {
+            nativeDecodeQr(buffer, width, height, rowStride)
+        } catch (e: UnsatisfiedLinkError) {
+            null
+        }
+    }
 
     /** Fetches from the relays, then lists the open requests. */
     fun fetch(context: Context): JSONObject = call { nativeFetch(context.applicationContext) }

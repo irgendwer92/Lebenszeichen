@@ -281,6 +281,24 @@ document.addEventListener("visibilitychange", () => {
 tauri.core.invoke("platform").then((platform) => {
   document.documentElement.dataset.platform = platform;
   $("device-toggle").hidden = platform !== "android";
+  $("scan").hidden = platform !== "android";
+});
+
+/// Opens the camera; a recognized invitation lands in the code field.
+$("scan").addEventListener("click", async () => {
+  showError("");
+  let result;
+  try {
+    result = await tauri.core.invoke(PLUGIN + "scan_invitation");
+  } catch (error) {
+    showError(String(error));
+    return;
+  }
+  if (!result?.code) return;
+  const form = $("accept-form");
+  form.elements.code.value = result.code;
+  const name = form.elements.name;
+  (name.value.trim() ? form.querySelector("button[type=submit]") : name).focus();
 });
 
 // ---------------------------------------------------------------- Settings

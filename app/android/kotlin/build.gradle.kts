@@ -60,11 +60,17 @@ rootProject.allprojects {
     }
 }
 
+// CameraX, for scanning invitation QR codes; all artifacts need the same version.
+val cameraVersion = "1.4.2"
+
 dependencies {
     implementation("rustls:rustls-platform-verifier:${rustlsVerifier.second}")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.work:work-runtime:2.10.0")
+    implementation("androidx.camera:camera-camera2:$cameraVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraVersion")
+    implementation("androidx.camera:camera-view:$cameraVersion")
     implementation("org.unifiedpush.android:connector:3.3.5")
     // Needed to compile against the plugin API of Tauri (Invoke uses Jackson types).
     implementation("com.fasterxml.jackson.core:jackson-databind:2.15.3")

@@ -52,3 +52,8 @@ serde_json = "1"
 [profile.dev]
 debug = false
 strip = "debuginfo"
+
+# Reading QR codes from camera frames is far too slow unoptimized; the APK
+# is still a debug build.
+[profile.dev.package.rqrr]
+opt-level = 3
