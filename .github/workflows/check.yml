@@ -49,7 +49,7 @@ jobs:
       - name: Abhängigkeiten der Desktop-App
         run: >-
           cargo deny --manifest-path app/src-tauri/Cargo.toml --all-features
-          check --config deny.toml licenses bans sources
+          --config deny.toml check licenses bans sources
 
   desktop:
     name: Desktop-App (Linux)
