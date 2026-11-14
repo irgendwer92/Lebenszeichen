@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "title": "Lebenszeichen",
+        "url": "desktop.html",
+        "width": 520,
+        "height": 760
+      }
+    ]
+  }
+}

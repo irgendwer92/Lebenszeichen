@@ -94,14 +94,26 @@ crates/
 ├── cli/     Client ohne Oberfläche (Programm: lz)
 └── relay/   Relay-Server (Programm: lz-relay)
 app/
-├── src-tauri/   Tauri-Hülle, in M1 nur der Android-Prototyp
+├── src-tauri/   Tauri-Hülle: Linux-Desktop (M3) und Android-Prototyp (M1)
 ├── ui/          Oberfläche (schlichtes HTML ohne Build-Schritt)
 └── android/     Kotlin-Schicht: UnifiedPush, Vollbild-Anzeige, Benachrichtigungen
 docs/        Konzept, Protokoll, Fahrplan, Durchstich M1, Entwurf der Lizenz-Ausnahme
 ```
 
-`app/` gehört nicht zum Cargo-Workspace und wird nur vom CI-Ablauf
-"Android-Prototyp" gebaut. Die fertige APK liegt dort als Artefakt. Bis M4
+`app/` gehört nicht zum Cargo-Workspace. Die Desktop-App für Linux baut und
+startet man lokal (braucht WebKitGTK 4.1 und GTK 3):
+
+```sh
+cd app/src-tauri
+cargo build
+LZ_STATE=/pfad/zu/device.json target/debug/lebenszeichen-app   # LZ_STATE optional
+```
+
+Ohne `LZ_STATE` liegt der Zustand im Datenverzeichnis der App
+(`~/.local/share/io.github.irgendwer92.lebenszeichen/device.json`); die
+Desktop-App ist damit ein eigenes Gerät neben `lz`.
+
+Die Android-APK baut nur der CI-Ablauf "Android-Prototyp". Die fertige APK liegt dort als Artefakt. Bis M4
 läuft er nur, wenn man ihn von Hand startet:
 `gh workflow run android-prototype.yml --ref <zweig>`.
 

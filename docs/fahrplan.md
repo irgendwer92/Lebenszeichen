@@ -84,6 +84,8 @@ Umfang:
 Stand:
 
 - Erledigt: gemeinsame Client-Schicht `crates/client` (`lz-client`): Relay-Zugang, alle Befehle, Abruf mit `sync` und `listen`, deutsche Texte und eine strukturierte Übersicht der Kontakte. `lz` ist nur noch die Kommandozeile darüber; die Desktop-App nutzt dieselbe Schicht.
+- Erledigt: Desktop-Hülle für Linux in `app/` (`ui/desktop.html`, `src-tauri/src/desktop.rs`): Gerät einrichten, Kontaktliste mit Anfrage-Knopf und „wieder möglich ab“, Einladen (Code als Text), Annehmen, Prüfcode bestätigen oder ablehnen, Antworten, Entfernen; Abruf im Hintergrund über `lz-client`. Die Android-Teile aus M1 sind unverändert. Getestet: Build, Umwandlung der Übersicht, Abruf im Hintergrund gegen ein echtes Relay; die Oberfläche selbst ist noch nicht durchgeklickt.
+- Noch offen in M3: Einladung als QR-Code, Einstellungen pro Kontakt (Regeln, gemeldete Antworten), Tray, Vordergrund-Fenster ohne Tastaturfokus, Benachrichtigung als Rückfall, Texte ohne Hinweise auf `lz`-Befehle.
 
 Umfang:
 

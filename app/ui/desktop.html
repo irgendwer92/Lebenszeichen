@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lebenszeichen</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="desktop.css" />
+    <script src="desktop.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>Lebenszeichen</h1>
+
+      <p id="error" class="message error" role="alert" hidden></p>
+
+      <section id="setup" hidden>
+        <h2>Gerät einrichten</h2>
+        <p class="note">
+          Mit einem Zugangstoken für dein Relay kannst du selbst einladen. Ohne ihn kannst
+          du nur Einladungen mit Gutschein annehmen.
+        </p>
+        <form id="setup-form">
+          <label>
+            Relay-Adresse
+            <input name="relay" type="url" placeholder="https://relay.example.org" />
+          </label>
+          <label>
+            Zugangstoken (optional)
+            <input name="access_token" type="password" autocomplete="off" />
+          </label>
+          <button type="submit">Gerät anlegen</button>
+        </form>
+      </section>
+
+      <div id="app" hidden>
+        <section>
+          <h2>Kontakte</h2>
+          <ul id="contacts" class="cards"></ul>
+          <p id="no-contacts" class="note" hidden>Noch keine Kontakte.</p>
+          <ul id="invitations" class="cards"></ul>
+        </section>
+
+        <section>
+          <h2>Einladen</h2>
+          <form id="invite-form">
+            <label>
+              Name des Kontakts (nur für dich sichtbar)
+              <input name="name" required />
+            </label>
+            <label class="inline">
+              <input name="voucher" type="checkbox" />
+              Mit Gutschein: der Kontakt darf ein Postfach auf deinem Relay anlegen
+            </label>
+            <button type="submit">Einladung erzeugen</button>
+          </form>
+          <div id="invite-result" hidden>
+            <p class="note">
+              Diesen Code weitergeben. Er gilt 10 Minuten und nur einmal.
+            </p>
+            <textarea id="invite-code" readonly rows="4"></textarea>
+          </div>
+        </section>
+
+        <section>
+          <h2>Einladung annehmen</h2>
+          <form id="accept-form">
+            <label>
+              Name des Kontakts (nur für dich sichtbar)
+              <input name="name" required />
+            </label>
+            <label>
+              Einladungscode
+              <textarea name="code" rows="4" required placeholder="LZ1-…"></textarea>
+            </label>
+            <button type="submit">Annehmen</button>
+          </form>
+        </section>
+
+        <section>
+          <h2>Meldungen</h2>
+          <button id="sync" type="button">Jetzt abrufen</button>
+          <ol id="log" class="log"></ol>
+          <p id="state-path" class="note"></p>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>
