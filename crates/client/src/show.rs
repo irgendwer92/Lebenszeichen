@@ -1,7 +1,7 @@
 //! Human-readable output: times in local time, rules, events.
 
 use chrono::{DateTime, Datelike, Local, TimeZone};
-use lz_core::wire::{Reason, ResponseKind, Rules};
+use lz_core::wire::{ResponseKind, Rules};
 
 const WEEKDAYS: [&str; 7] = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 
@@ -64,7 +64,7 @@ pub fn response(kind: &ResponseKind, at: u64, now: u64) -> String {
     }
 }
 
-pub fn reported(reason: &Reason) -> String {
+pub fn reported(reason: impl std::fmt::Display) -> String {
     format!("„{reason}“ (gemeldet)")
 }
 

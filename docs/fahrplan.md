@@ -60,7 +60,7 @@ Wegwerf-Prototyp, der nur das Risiko klärt. Ergebnis und Einzelheiten stehen in
 - **Fertig, wenn:** das auf einem echten Gerät zehnmal hintereinander klappt, auch nach einem Neustart und über Nacht.
 - **Abbruchkriterium:** Geht das mit Tauri nicht zuverlässig, wird hier auf Flutter gewechselt. Kern und Relay bleiben davon unberührt.
 
-### M2 – Kern und Relay (begonnen am 14.11.2026)
+### M2 – Kern und Relay (abgeschlossen am 14.11.2026)
 
 Stand:
 
@@ -79,7 +79,14 @@ Umfang:
 - Vorgaben, damit später Microcontroller-Clients möglich bleiben (siehe unten): sprachneutrales, dokumentiertes Drahtformat; Protokollteil des Kerns ohne Abhängigkeit vom Betriebssystem.
 - **Fertig, wenn:** zwei `cli`-Instanzen sich über ein Relay koppeln, anfragen und antworten und die Regeln greifen.
 
-### M3 – Linux-Desktop
+### M3 – Linux-Desktop (begonnen am 14.11.2026)
+
+Stand:
+
+- Erledigt: gemeinsame Client-Schicht `crates/client` (`lz-client`): Relay-Zugang, alle Befehle, Abruf mit `sync` und `listen`, deutsche Texte und eine strukturierte Übersicht der Kontakte. `lz` ist nur noch die Kommandozeile darüber; die Desktop-App nutzt dieselbe Schicht.
+
+Umfang:
+
 - Oberfläche: Kontaktliste, Anfrage-Knopf, Einladung als QR- und Textcode, Einstellungen pro Kontakt.
 - Tray, dauerhafte Verbindung, Vordergrund-Fenster ohne Tastaturfokus, Benachrichtigung als Rückfall.
 - Offen aus einer Dependabot-Meldung vom 14.11.2026: Tauri 2 braucht auf Linux die GTK-3-Bindungen und damit `glib` 0.18; behoben ist der Fehler in `VariantStrIter` erst ab 0.20, das es nur für GTK 4 gibt. Die betroffene Funktion ruft weder Tauri noch GTK, WebKit, `wry` oder `tao` auf, und der Android-Build enthält `glib` gar nicht. Mit dem Linux-Build erneut prüfen, ob Tauri inzwischen auf neuere Bindungen umgestiegen ist.

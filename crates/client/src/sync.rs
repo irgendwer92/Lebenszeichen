@@ -16,7 +16,7 @@ use lz_core::wire::{ENVELOPE_LEN, MailboxId, RelayUrl, Token};
 use rand_core::OsRng;
 use tokio::sync::mpsc;
 
-use crate::app::{Ctx, Fail, Result};
+use crate::ctx::{Ctx, Fail, Result};
 use crate::relay::{Connection, Delivery, Relay, RelayError, ServerFrame};
 use crate::show::Notice;
 

@@ -9,7 +9,7 @@ use std::time::Duration;
 use lz_core::store::{Device, JsonFile, Store, StoredContact};
 use lz_core::wire::{Reason, RelayUrl, ResponseKind, Rules, Token};
 
-use crate::app::{self, Clock, Ctx, Fail};
+use crate::ctx::{self, Clock, Ctx, Fail};
 use crate::relay::fake::FakeRelay;
 use crate::relay::{Relay, b64};
 use crate::show::Notice;
@@ -70,7 +70,7 @@ impl World {
         let store = JsonFile::new(dir.path().join("sub").join("device.json"));
         let out = Output::default();
         let token = relay.and_then(|(_, t)| t).map(|t| b64(&t));
-        app::init(
+        ctx::init(
             &store,
             relay.map(|(url, _)| url),
             token.as_deref(),
@@ -450,15 +450,15 @@ fn init_checks_its_input() {
     let dir = tempfile::tempdir().unwrap();
     let store = JsonFile::new(dir.path().join("device.json"));
     let mut out = Vec::new();
-    assert!(app::init(&store, Some("ftp://x"), None, &mut out).is_err());
-    assert!(app::init(&store, Some(RELAY_A), Some("kurz"), &mut out).is_err());
-    assert!(app::init(&store, None, Some(&b64(&TOKEN_A)), &mut out).is_err());
-    app::init(&store, Some("http://localhost:8080/"), None, &mut out).unwrap();
+    assert!(ctx::init(&store, Some("ftp://x"), None, &mut out).is_err());
+    assert!(ctx::init(&store, Some(RELAY_A), Some("kurz"), &mut out).is_err());
+    assert!(ctx::init(&store, None, Some(&b64(&TOKEN_A)), &mut out).is_err());
+    ctx::init(&store, Some("http://localhost:8080/"), None, &mut out).unwrap();
     assert_eq!(
         store.load().unwrap().relay.unwrap().url,
         url("http://localhost:8080")
     );
-    let error = app::init(&store, None, None, &mut out).unwrap_err();
+    let error = ctx::init(&store, None, None, &mut out).unwrap_err();
     assert!(error.0.contains("gibt es schon"));
 }
 
@@ -508,4 +508,30 @@ async fn reject_only_before_pairing_is_complete() {
     let (mut anna, _bert) = paired(&world).await;
     let error = anna.ctx.reject("Bert").await.unwrap_err();
     assert!(error.0.contains("lz remove Bert"), "{error:?}");
+}
+
+#[tokio::test]
+async fn overview_shows_rules_and_requests() {
+    use crate::ctx::{LastResponse, Status};
+
+    let world = World::new();
+    let (mut anna, mut bert) = paired(&world).await;
+    bert.ctx.request("Anna").await.unwrap();
+    anna.sync().await;
+
+    let overview = anna.ctx.overview().unwrap();
+    let bert_seen = &overview.contacts[0];
+    assert_eq!(bert_seen.status, Status::Paired);
+    assert!(bert_seen.incoming.is_some());
+
+    anna.ctx.respond("Bert").await.unwrap();
+    bert.sync().await;
+    let overview = bert.ctx.overview().unwrap();
+    let anna_seen = &overview.contacts[0];
+    assert_eq!(anna_seen.next_request_at, overview.now + 6 * HOUR);
+    assert_eq!(
+        anna_seen.last_response,
+        Some(LastResponse::Manual { at: overview.now })
+    );
+    assert!(anna_seen.outgoing_since.is_none());
 }

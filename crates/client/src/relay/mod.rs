@@ -92,6 +92,10 @@ pub trait Connection {
 }
 
 /// The calls of the relay interface.
+///
+/// The futures are not required to be `Send`: every user runs the client on
+/// a single-threaded runtime (the desktop app on its own thread).
+#[allow(async_fn_in_trait)]
 pub trait Relay {
     /// Creates a voucher with which a contact may create one mailbox.
     async fn create_voucher(
