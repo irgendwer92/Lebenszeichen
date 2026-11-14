@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-init-device"
+description = "Enables the init_device command without any pre-configured scope."
+commands.allow = ["init_device"]
+
+[[permission]]
+identifier = "deny-init-device"
+description = "Denies the init_device command without any pre-configured scope."
+commands.deny = ["init_device"]

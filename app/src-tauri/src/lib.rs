@@ -44,6 +44,8 @@ pub fn run() {
             desktop::respond,
             desktop::remove,
             desktop::set_rules,
+            desktop::alert_text,
+            desktop::alert_answer,
         ]);
     builder
         .run(tauri::generate_context!())

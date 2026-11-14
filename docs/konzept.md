@@ -73,7 +73,9 @@ Regeln für die Vordergrund-Anzeige:
 - "Nicht stören" des Systems wird respektiert. Ausnahme: Unter Linux kommt die
   Benachrichtigung mit Dringlichkeit "kritisch", und KDE Plasma zeigt solche
   Benachrichtigungen standardmäßig auch bei "Nicht stören". Wer das nicht will,
-  schaltet es in den Systemeinstellungen ab.
+  schaltet es in den Systemeinstellungen ab. Das Vordergrund-Fenster unter
+  X11 erscheint ebenfalls immer, weil sich "Nicht stören" dort nicht
+  einheitlich abfragen lässt.
 - Auf dem Desktop nimmt das Fenster keinen Tastaturfokus. Nur Klick oder Tippen auf das Fenster oder das Schließen zählt als Antwort; ein Tastendruck mitten im Tippen darf nie als Lebenszeichen gelten.
 
 ### Ton und Vibration

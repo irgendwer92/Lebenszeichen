@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
+mod alert;
+#[cfg(target_os = "linux")]
 mod notify;
 
 use lz_client::ctx::{self, Clock, ContactView, Ctx, LastResponse, Overview, Status};
@@ -529,6 +531,70 @@ pub async fn set_rules(
         ctx.rules(&name, interval, expiry, weekly_limit).await
     })
     .await
+}
+
+/// Text of a foreground window.
+#[derive(Serialize)]
+pub struct AlertText {
+    title: String,
+    hint: &'static str,
+}
+
+/// The request a foreground window shows, from its label. A window can only
+/// ever see and answer its own request.
+#[cfg(target_os = "linux")]
+fn alert_of<'a>(
+    window: &tauri::WebviewWindow,
+    state: &'a tauri::State<'_, Desktop>,
+) -> Result<(&'a notify::Notifier, u32), String> {
+    let number = alert::number(window.label()).ok_or("Kein Vordergrund-Fenster.")?;
+    let notifier = state
+        .notifier
+        .as_ref()
+        .ok_or("Keine Anzeige von Anfragen.")?;
+    Ok((notifier, number))
+}
+
+#[tauri::command]
+pub fn alert_text(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Desktop>,
+) -> Result<AlertText, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let (notifier, number) = alert_of(&window, &state)?;
+        let name = notifier
+            .alert_name(number)
+            .ok_or("Die Anfrage ist nicht mehr offen.")?;
+        Ok(AlertText {
+            title: format!("{name} fragt nach einem Lebenszeichen"),
+            hint: "Klicken oder Schließen sendet dein Lebenszeichen.",
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (window, state);
+        Err("Vordergrund-Fenster gibt es hier noch nicht.".into())
+    }
+}
+
+/// A click into a foreground window: sends the sign of life for its request.
+#[tauri::command]
+pub fn alert_answer(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Desktop>,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let (notifier, number) = alert_of(&window, &state)?;
+        notifier.alert_clicked(number);
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (window, state);
+        Err("Vordergrund-Fenster gibt es hier noch nicht.".into())
+    }
 }
 
 /// Generates a command that takes the name of a contact.

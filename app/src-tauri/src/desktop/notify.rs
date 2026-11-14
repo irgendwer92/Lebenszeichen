@@ -1,16 +1,19 @@
-//! Notifications for open requests on Linux, over the D-Bus interface
-//! `org.freedesktop.Notifications`.
+//! Shows open requests on Linux: as a foreground window under X11, as a
+//! notification over the D-Bus interface `org.freedesktop.Notifications`
+//! otherwise, and whenever the window cannot be opened.
 //!
-//! The notification plugin of Tauri does not tell why a notification went
-//! away, and that is what counts here (see `docs/konzept.md`): the button, a
-//! click on the notification and closing it by hand answer the request; when
-//! it expires or the app withdraws it, nothing is sent.
+//! What counts as an answer is what the person did (see `docs/konzept.md`):
+//! the button, a click on the notification or the window, and closing either
+//! of them by hand. When a notification expires or the app withdraws one,
+//! nothing is sent. The notification plugin of Tauri does not tell why a
+//! notification went away, hence D-Bus directly.
 //!
-//! A worker compares the open requests with the notifications on screen
-//! whenever something may have changed, and at least every [`TICK`].
+//! A worker compares the open requests with what is on screen whenever
+//! something may have changed, and at least every [`TICK`].
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -20,6 +23,7 @@ use tauri::{AppHandle, Emitter};
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::Value;
 
+use super::alert;
 use super::{EventSink, LINE_EVENT, new_ctx, runtime};
 
 /// Longest pause between two comparisons, so that expired requests vanish.
@@ -38,10 +42,18 @@ const CRITICAL: u8 = 2;
 /// An open request: name of the contact and its sending time.
 type Key = (String, u64);
 
+/// What shows a request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Handle {
+    /// A notification, by the id the notification service gave it.
+    Notification(u32),
+    /// A foreground window, by the number in its label.
+    Window(u32),
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum Entry {
-    /// On screen under this notification id.
-    Shown(u32),
+    Shown(Handle),
     /// Gone without an answer, or being answered; not shown again.
     Quiet,
 }
@@ -50,14 +62,19 @@ enum Entry {
 #[derive(Debug, Default)]
 struct Screen {
     entries: HashMap<Key, Entry>,
-    ids: HashMap<u32, Key>,
+    handles: HashMap<Handle, Key>,
 }
 
-/// How a notification went away.
+/// How a notification or a window went away.
 #[derive(Debug)]
 enum Gone {
     Action(String),
     Closed(u32),
+    /// A click into the foreground window.
+    WindowClicked,
+    /// The foreground window closed by the person; the app itself closes
+    /// windows without this event.
+    WindowClosed,
 }
 
 impl Gone {
@@ -66,21 +83,22 @@ impl Gone {
             // "default" is the click on the notification itself.
             Gone::Action(key) => key == "default" || key == RESPOND,
             Gone::Closed(reason) => *reason == CLOSED_BY_USER,
+            Gone::WindowClicked | Gone::WindowClosed => true,
         }
     }
 }
 
 impl Screen {
     /// Compares with the open requests. Forgets requests that are no longer
-    /// open and returns the ids to withdraw and the requests to show.
-    fn compare(&mut self, open: &[Key]) -> (Vec<u32>, Vec<Key>) {
-        let Screen { entries, ids } = self;
+    /// open and returns what to withdraw and the requests to show.
+    fn compare(&mut self, open: &[Key]) -> (Vec<Handle>, Vec<Key>) {
+        let Screen { entries, handles } = self;
         let mut withdraw = Vec::new();
         entries.retain(|key, entry| {
             let keep = open.contains(key);
-            if !keep && let Entry::Shown(id) = entry {
-                ids.remove(id);
-                withdraw.push(*id);
+            if !keep && let Entry::Shown(handle) = entry {
+                handles.remove(handle);
+                withdraw.push(*handle);
             }
             keep
         });
@@ -92,16 +110,39 @@ impl Screen {
         (withdraw, show)
     }
 
-    fn shown(&mut self, key: Key, id: u32) {
-        self.ids.insert(id, key.clone());
-        self.entries.insert(key, Entry::Shown(id));
+    fn shown(&mut self, key: Key, handle: Handle) {
+        self.handles.insert(handle, key.clone());
+        self.entries.insert(key, Entry::Shown(handle));
     }
 
-    /// Notes that a notification went away. Returns the request to answer,
-    /// if that counts as an answer. Unknown ids, such as withdrawn ones or a
-    /// second signal for the same notification, return nothing.
-    fn gone(&mut self, id: u32, how: &Gone) -> Option<Key> {
-        let key = self.ids.remove(&id)?;
+    /// Takes back [`Screen::shown`] when showing failed.
+    fn not_shown(&mut self, handle: Handle) {
+        if let Some(key) = self.handles.remove(&handle) {
+            self.entries.remove(&key);
+        }
+    }
+
+    /// Foreground windows on screen, to place a new one beside them.
+    fn windows(&self) -> u32 {
+        let count = self
+            .handles
+            .keys()
+            .filter(|handle| matches!(handle, Handle::Window(_)))
+            .count();
+        u32::try_from(count).unwrap_or(u32::MAX)
+    }
+
+    /// The contact whose request a window shows.
+    fn name(&self, handle: Handle) -> Option<&str> {
+        self.handles.get(&handle).map(|(name, _)| name.as_str())
+    }
+
+    /// Notes that a notification or window went away. Returns the request to
+    /// answer, if that counts as an answer. Unknown handles, such as
+    /// withdrawn ones or a second signal for the same notification, return
+    /// nothing.
+    fn gone(&mut self, handle: Handle, how: &Gone) -> Option<Key> {
+        let key = self.handles.remove(&handle)?;
         self.entries.insert(key.clone(), Entry::Quiet);
         how.answers().then_some(key)
     }
@@ -112,15 +153,27 @@ impl Screen {
     }
 }
 
-/// Wakes the worker that keeps the notifications up to date.
+/// Keeps what is on screen in line with the open requests.
 pub struct Notifier {
-    wake: mpsc::Sender<()>,
+    shared: Shared,
 }
 
 impl Notifier {
     /// Something may have changed; compare again soon.
     pub fn poke(&self) {
-        let _ = self.wake.send(());
+        let _ = self.shared.wake.send(());
+    }
+
+    /// Name of the contact whose request the foreground window shows.
+    pub fn alert_name(&self, window: u32) -> Option<String> {
+        let screen = self.shared.screen();
+        screen.name(Handle::Window(window)).map(str::to_owned)
+    }
+
+    /// A click into a foreground window.
+    pub fn alert_clicked(&self, window: u32) {
+        self.shared
+            .gone(Handle::Window(window), &Gone::WindowClicked);
     }
 }
 
@@ -129,13 +182,17 @@ impl Notifier {
 struct Shared {
     app: AppHandle,
     path: PathBuf,
-    proxy: Proxy<'static>,
+    /// The notification service, if the session has one.
+    proxy: Option<Proxy<'static>>,
+    /// Whether requests come as foreground windows (X11).
+    foreground: bool,
+    next_window: Arc<AtomicU32>,
     screen: Arc<Mutex<Screen>>,
     wake: mpsc::Sender<()>,
 }
 
-/// Connects to the notification service of the session. Without one there
-/// are no notifications; the window still shows every request.
+/// Starts showing open requests. Without a notification service and
+/// without X11 nothing is shown; the main window still lists every request.
 pub fn start(app: AppHandle, path: PathBuf) -> Option<Notifier> {
     let proxy = Connection::session()
         .and_then(|connection| {
@@ -147,28 +204,37 @@ pub fn start(app: AppHandle, path: PathBuf) -> Option<Notifier> {
             )
         })
         .inspect_err(|error| eprintln!("Keine Benachrichtigungen: {error}"))
-        .ok()?;
+        .ok();
+    let foreground = alert::possible();
+    if proxy.is_none() && !foreground {
+        return None;
+    }
     let (wake, woken) = mpsc::channel();
     let shared = Shared {
         app,
         path,
         proxy,
+        foreground,
+        next_window: Arc::default(),
         screen: Arc::default(),
-        wake: wake.clone(),
+        wake,
     };
-    listen_for::<(u32, u32)>(shared.clone(), "NotificationClosed", |(id, reason)| {
-        (id, Gone::Closed(reason))
-    });
-    listen_for::<(u32, String)>(shared.clone(), "ActionInvoked", |(id, key)| {
-        (id, Gone::Action(key))
-    });
+    if shared.proxy.is_some() {
+        listen_for::<(u32, u32)>(shared.clone(), "NotificationClosed", |(id, reason)| {
+            (id, Gone::Closed(reason))
+        });
+        listen_for::<(u32, String)>(shared.clone(), "ActionInvoked", |(id, key)| {
+            (id, Gone::Action(key))
+        });
+    }
+    let worker = shared.clone();
     std::thread::spawn(move || {
         while let Ok(()) | Err(RecvTimeoutError::Timeout) = woken.recv_timeout(TICK) {
             while woken.try_recv().is_ok() {}
-            shared.update();
+            worker.update();
         }
     });
-    let notifier = Notifier { wake };
+    let notifier = Notifier { shared };
     notifier.poke();
     Some(notifier)
 }
@@ -179,7 +245,10 @@ where
     T: serde::de::DeserializeOwned + zbus::zvariant::Type + 'static,
 {
     std::thread::spawn(move || {
-        let signals = match shared.proxy.receive_signal(signal) {
+        let Some(proxy) = &shared.proxy else {
+            return;
+        };
+        let signals = match proxy.receive_signal(signal) {
             Ok(signals) => signals,
             Err(error) => {
                 eprintln!("Signal {signal} nicht verfügbar: {error}");
@@ -189,27 +258,63 @@ where
         for message in signals {
             if let Ok(body) = message.body().deserialize::<T>() {
                 let (id, how) = read(body);
-                shared.gone(id, &how);
+                shared.gone(Handle::Notification(id), &how);
             }
         }
     });
 }
 
 impl Shared {
-    /// Brings the notifications in line with the open requests.
+    /// Brings what is on screen in line with the open requests.
     fn update(&self) {
         let Some(open) = self.open_requests() else {
             return;
         };
         let (withdraw, show) = self.screen().compare(&open);
-        for id in withdraw {
-            self.close(id);
+        for handle in withdraw {
+            self.withdraw(handle);
         }
         for key in show {
-            match self.notify(&key.0) {
-                Ok(id) => self.screen().shown(key, id),
-                Err(error) => eprintln!("Benachrichtigung fehlgeschlagen: {error}"),
+            self.show(key);
+        }
+    }
+
+    /// Shows a request: as a foreground window if possible, else as a
+    /// notification.
+    fn show(&self, key: Key) {
+        if self.foreground {
+            let number = self.next_window.fetch_add(1, Ordering::Relaxed);
+            let handle = Handle::Window(number);
+            // Noted before the window exists: its page asks for the name
+            // right away.
+            let stacked = {
+                let mut screen = self.screen();
+                let stacked = screen.windows();
+                screen.shown(key.clone(), handle);
+                stacked
+            };
+            let shared = self.clone();
+            let on_close = move || shared.gone(handle, &Gone::WindowClosed);
+            match alert::open(&self.app, number, stacked, on_close) {
+                Ok(()) => return,
+                Err(error) => {
+                    eprintln!("Vordergrund-Fenster fehlgeschlagen: {error}");
+                    self.screen().not_shown(handle);
+                }
             }
+        }
+        match self.notify(&key.0) {
+            Some(Ok(id)) => self.screen().shown(key, Handle::Notification(id)),
+            Some(Err(error)) => eprintln!("Benachrichtigung fehlgeschlagen: {error}"),
+            None => {}
+        }
+    }
+
+    /// Takes a notification or window away without answering.
+    fn withdraw(&self, handle: Handle) {
+        match handle {
+            Handle::Notification(id) => self.close(id),
+            Handle::Window(number) => alert::close(&self.app, number),
         }
     }
 
@@ -229,13 +334,16 @@ impl Shared {
         )
     }
 
-    fn gone(&self, id: u32, how: &Gone) {
-        let Some(key) = self.screen().gone(id, how) else {
+    fn gone(&self, handle: Handle, how: &Gone) {
+        let Some(key) = self.screen().gone(handle, how) else {
             return;
         };
-        if matches!(how, Gone::Action(_)) {
+        match (handle, how) {
             // Some services leave the notification open after the button.
-            self.close(id);
+            (Handle::Notification(id), Gone::Action(_)) => self.close(id),
+            // A clicked window goes; a closed one is going anyway.
+            (Handle::Window(number), Gone::WindowClicked) => alert::close(&self.app, number),
+            _ => {}
         }
         let shared = self.clone();
         std::thread::spawn(move || shared.answer(key));
@@ -265,7 +373,9 @@ impl Shared {
         let _ = self.wake.send(());
     }
 
-    fn notify(&self, name: &str) -> zbus::Result<u32> {
+    /// Shows a notification; `None` without a notification service.
+    fn notify(&self, name: &str) -> Option<zbus::Result<u32>> {
+        let proxy = self.proxy.as_ref()?;
         let hints: HashMap<&str, Value<'_>> = HashMap::from([
             ("urgency", Value::U8(CRITICAL)),
             ("suppress-sound", Value::Bool(true)),
@@ -279,7 +389,7 @@ impl Shared {
             RESPOND,
             "Lebenszeichen senden",
         ];
-        self.proxy.call(
+        Some(proxy.call(
             "Notify",
             &(
                 "Lebenszeichen",
@@ -291,11 +401,13 @@ impl Shared {
                 hints,
                 0i32,
             ),
-        )
+        ))
     }
 
     fn close(&self, id: u32) {
-        let _: zbus::Result<()> = self.proxy.call("CloseNotification", &(id,));
+        if let Some(proxy) = &self.proxy {
+            let _: zbus::Result<()> = proxy.call("CloseNotification", &(id,));
+        }
     }
 
     fn screen(&self) -> std::sync::MutexGuard<'_, Screen> {
@@ -305,7 +417,10 @@ impl Shared {
 
 #[cfg(test)]
 mod tests {
-    use super::{Entry, Gone, Key, Screen};
+    use super::{Entry, Gone, Handle, Key, Screen};
+
+    const NOTE: Handle = Handle::Notification(7);
+    const WINDOW: Handle = Handle::Window(0);
 
     fn key(name: &str, since: u64) -> Key {
         (name.to_owned(), since)
@@ -318,36 +433,41 @@ mod tests {
         let (withdraw, show) = screen.compare(&open);
         assert!(withdraw.is_empty());
         assert_eq!(show, open);
-        screen.shown(key("Bert", 10), 7);
+        screen.shown(key("Bert", 10), NOTE);
         assert_eq!(screen.compare(&open), (vec![], vec![]));
     }
 
     #[test]
     fn withdraws_requests_that_are_no_longer_open() {
-        let mut screen = Screen::default();
-        screen.shown(key("Bert", 10), 7);
-        // Answered in the window, or a new request replaced the old one.
-        let (withdraw, show) = screen.compare(&[key("Bert", 20)]);
-        assert_eq!(withdraw, vec![7]);
-        assert_eq!(show, vec![key("Bert", 20)]);
-        // The withdrawal comes back as a signal; it answers nothing.
-        assert_eq!(screen.gone(7, &Gone::Closed(3)), None);
+        for handle in [NOTE, WINDOW] {
+            let mut screen = Screen::default();
+            screen.shown(key("Bert", 10), handle);
+            // Answered in the main window, or a new request replaced the old one.
+            let (withdraw, show) = screen.compare(&[key("Bert", 20)]);
+            assert_eq!(withdraw, vec![handle]);
+            assert_eq!(show, vec![key("Bert", 20)]);
+            // A withdrawn notification reports back with reason 3; it answers
+            // nothing.
+            assert_eq!(screen.gone(handle, &Gone::Closed(3)), None);
+        }
     }
 
     #[test]
     fn only_the_user_answers() {
-        for (how, answers) in [
-            (Gone::Closed(1), false), // expired
-            (Gone::Closed(2), true),  // closed by the user
-            (Gone::Closed(3), false), // withdrawn by the app
-            (Gone::Closed(4), false), // other
-            (Gone::Action("default".into()), true),
-            (Gone::Action("respond".into()), true),
-            (Gone::Action("other".into()), false),
+        for (handle, how, answers) in [
+            (NOTE, Gone::Closed(1), false), // expired
+            (NOTE, Gone::Closed(2), true),  // closed by the user
+            (NOTE, Gone::Closed(3), false), // withdrawn by the app
+            (NOTE, Gone::Closed(4), false), // other
+            (NOTE, Gone::Action("default".into()), true),
+            (NOTE, Gone::Action("respond".into()), true),
+            (NOTE, Gone::Action("other".into()), false),
+            (WINDOW, Gone::WindowClicked, true),
+            (WINDOW, Gone::WindowClosed, true),
         ] {
             let mut screen = Screen::default();
-            screen.shown(key("Bert", 10), 7);
-            let answer = screen.gone(7, &how);
+            screen.shown(key("Bert", 10), handle);
+            let answer = screen.gone(handle, &how);
             assert_eq!(answer.is_some(), answers, "{how:?}");
             // Gone either way: not shown again while the request is open.
             assert_eq!(screen.entries[&key("Bert", 10)], Entry::Quiet);
@@ -356,19 +476,41 @@ mod tests {
     }
 
     #[test]
-    fn answers_once_when_button_and_close_both_arrive() {
+    fn answers_once_when_two_events_arrive() {
         let mut screen = Screen::default();
-        screen.shown(key("Bert", 10), 7);
-        assert!(screen.gone(7, &Gone::Action("respond".into())).is_some());
-        assert_eq!(screen.gone(7, &Gone::Closed(2)), None);
+        screen.shown(key("Bert", 10), NOTE);
+        assert!(screen.gone(NOTE, &Gone::Action("respond".into())).is_some());
+        assert_eq!(screen.gone(NOTE, &Gone::Closed(2)), None);
+
+        // A click, then the window closes.
+        screen.shown(key("Carla", 10), WINDOW);
+        assert!(screen.gone(WINDOW, &Gone::WindowClicked).is_some());
+        assert_eq!(screen.gone(WINDOW, &Gone::WindowClosed), None);
     }
 
     #[test]
     fn shows_again_after_a_failed_answer() {
         let mut screen = Screen::default();
-        screen.shown(key("Bert", 10), 7);
-        let answer = screen.gone(7, &Gone::Closed(2)).unwrap();
+        screen.shown(key("Bert", 10), WINDOW);
+        let answer = screen.gone(WINDOW, &Gone::WindowClosed).unwrap();
         screen.answer_failed(&answer);
         assert_eq!(screen.compare(&[key("Bert", 10)]).1, vec![key("Bert", 10)]);
+    }
+
+    #[test]
+    fn windows_know_their_request() {
+        let mut screen = Screen::default();
+        screen.shown(key("Bert", 10), NOTE);
+        screen.shown(key("Carla", 10), WINDOW);
+        screen.shown(key("Dora", 10), Handle::Window(1));
+        assert_eq!(screen.windows(), 2);
+        assert_eq!(screen.name(WINDOW), Some("Carla"));
+        // A window that could not be opened leaves nothing behind.
+        screen.not_shown(Handle::Window(1));
+        assert_eq!(screen.windows(), 1);
+        assert_eq!(screen.compare(&[key("Dora", 10)]).1, vec![key("Dora", 10)]);
+        // After the answer, a window no longer names a request.
+        screen.gone(WINDOW, &Gone::WindowClicked);
+        assert_eq!(screen.name(WINDOW), None);
     }
 }
