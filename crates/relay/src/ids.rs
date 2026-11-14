@@ -40,9 +40,9 @@ pub fn decode_hex_hash(text: &str) -> Option<Hash> {
         return None;
     }
     let mut out = [0u8; 32];
-    for (i, pair) in bytes.chunks_exact(2).enumerate() {
-        let digit = |c: u8| (c as char).to_digit(16);
-        out[i] = (digit(pair[0])? * 16 + digit(pair[1])?) as u8;
+    let digit = |c: u8| (c as char).to_digit(16);
+    for (byte, &[high, low]) in out.iter_mut().zip(bytes.as_chunks::<2>().0) {
+        *byte = (digit(high)? * 16 + digit(low)?) as u8;
     }
     Some(out)
 }
