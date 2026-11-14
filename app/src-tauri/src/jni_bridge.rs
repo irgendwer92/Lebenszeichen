@@ -11,7 +11,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 
 use jni::objects::{JByteBuffer, JClass, JObject, JString};
-use jni::sys::{jint, jlong, jstring};
+use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::{JNIEnv, JavaVM};
 use serde::Serialize;
 
@@ -212,4 +212,17 @@ pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge
             .unwrap_or(std::ptr::null_mut()),
         None => std::ptr::null_mut(),
     }
+}
+
+/// `CoreBridge.nativeSetForeground(on)`: the app went to the background or
+/// came back; the live connection of the window follows.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge_nativeSetForeground<
+    'local,
+>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    on: jboolean,
+) {
+    let _ = catch_unwind(|| crate::commands::set_foreground(on != 0));
 }

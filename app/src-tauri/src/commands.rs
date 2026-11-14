@@ -8,7 +8,7 @@
 
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use lz_client::ctx::{self, Clock, ContactView, Ctx, LastResponse, Overview, Status};
@@ -19,6 +19,7 @@ use lz_core::store::JsonFile;
 use lz_core::wire::Rules;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::watch;
 
 /// How long a one-off fetch waits for further messages.
 const SYNC_IDLE: Duration = Duration::from_millis(1500);
@@ -188,22 +189,52 @@ pub(crate) fn runtime() -> Result<tokio::runtime::Runtime, String> {
         .map_err(|error| error.to_string())
 }
 
-/// Fetches messages in the background for as long as the app runs.
+/// Whether the app is in the foreground. Only then the live connection is
+/// open: the relay does not wake a device that is connected, and Android
+/// freezes the process of an app in the background without closing its
+/// connection. The desktop never leaves the foreground.
+static FOREGROUND: OnceLock<watch::Sender<bool>> = OnceLock::new();
+
+fn foreground() -> &'static watch::Sender<bool> {
+    FOREGROUND.get_or_init(|| watch::Sender::new(true))
+}
+
+/// Called by the Android layer when the app goes to the background or
+/// comes back (`onPause`, `onResume`).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn set_foreground(on: bool) {
+    foreground().send_replace(on);
+}
+
+/// Fetches messages in the background while the app is in the foreground.
 ///
 /// `listen` returns only on errors with the state file, most often because
-/// the device is not set up yet; then it starts again after a pause.
+/// the device is not set up yet; then it starts again after a pause. Going
+/// to the background drops the connection, which closes it at the relay.
 fn spawn_listener(app: AppHandle, path: PathBuf) {
     std::thread::spawn(move || {
-        loop {
-            let sink = EventSink::new(app.clone());
-            if path.exists()
-                && let Ok(runtime) = runtime()
-                && let Ok(mut ctx) = new_ctx(path.clone(), Box::new(sink))
-            {
-                let _ = runtime.block_on(ctx.listen());
+        let Ok(runtime) = runtime() else { return };
+        let mut active = foreground().subscribe();
+        runtime.block_on(async move {
+            loop {
+                if active.wait_for(|on| *on).await.is_err() {
+                    return;
+                }
+                let sink = EventSink::new(app.clone());
+                if path.exists()
+                    && let Ok(mut ctx) = new_ctx(path.clone(), Box::new(sink))
+                {
+                    tokio::select! {
+                        _ = ctx.listen() => {}
+                        _ = active.wait_for(|on| !*on) => continue,
+                    }
+                }
+                tokio::select! {
+                    () = tokio::time::sleep(LISTEN_RETRY) => {}
+                    _ = active.wait_for(|on| !*on) => {}
+                }
             }
-            std::thread::sleep(LISTEN_RETRY);
-        }
+        });
     });
 }
 

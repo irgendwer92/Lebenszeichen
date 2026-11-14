@@ -23,7 +23,7 @@ tauri-plugin-lebenszeichen = { path = "../android" }
 lz-core = { path = "../../crates/core" }
 lz-client = { path = "../../crates/client" }
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["rt", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri = { version = "2.12", features = ["tray-icon"] }

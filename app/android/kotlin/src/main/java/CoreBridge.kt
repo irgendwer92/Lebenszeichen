@@ -34,6 +34,22 @@ object CoreBridge {
 
     @JvmStatic private external fun nativeSetPushUrl(context: Context, url: String?): String?
 
+    @JvmStatic private external fun nativeSetForeground(on: Boolean)
+
+    /**
+     * Tells the core whether the app is in the foreground. Only then the
+     * window keeps a live connection to the relay; in the background the
+     * relay has to wake the device instead.
+     */
+    fun setForeground(on: Boolean) {
+        if (loadError != null) return
+        try {
+            nativeSetForeground(on)
+        } catch (e: UnsatisfiedLinkError) {
+            // Without the core there is no connection to close either.
+        }
+    }
+
     @JvmStatic private external fun nativeDecodeQr(buffer: ByteBuffer, width: Int, height: Int, rowStride: Int): String?
 
     /**

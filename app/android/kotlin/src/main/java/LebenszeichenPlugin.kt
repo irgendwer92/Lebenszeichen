@@ -48,6 +48,19 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
+     * In the background Android freezes the process but keeps its sockets;
+     * the relay would then see the device as connected and not wake it.
+     * So the live connection ends here and starts again on return.
+     */
+    override fun onPause() {
+        CoreBridge.setForeground(false)
+    }
+
+    override fun onResume() {
+        CoreBridge.setForeground(true)
+    }
+
+    /**
      * Makes the notifications follow the state file, after the interface
      * fetched, answered or changed something. Off the main thread, because
      * the core reads the file.
