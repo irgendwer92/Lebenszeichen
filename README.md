@@ -14,13 +14,17 @@ Wecksignal die beendete App erreicht und die Kotlin-Schicht den Rust-Kern
 aufrufen kann. Der Test auf einem Gerät ist bestanden, ein Lauf über eine ganze
 Nacht steht noch aus; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md).
 
-Meilenstein M2 in Arbeit: `crates/wire` setzt das Drahtformat aus
+Meilenstein M2 ist abgeschlossen: `crates/wire` setzt das Drahtformat aus
 [docs/drahtformat.md](docs/drahtformat.md) um (Klartext der Nachrichten,
 Einladung, Prüfung des Umschlags), `crates/core` Verschlüsselung, Kopplung,
-die Regeln für Anfragen und den Speicher als JSON-Datei, `crates/cli` den
-Client `lz` für die Kommandozeile (siehe unten). Das Relay (`crates/relay`,
+die Regeln für Anfragen und den Speicher als JSON-Datei, `crates/client` die
+gemeinsame Client-Schicht und `crates/cli` den Client `lz` für die
+Kommandozeile (siehe unten). Das Relay (`crates/relay`,
 Programm `lz-relay`) wird über Umgebungsvariablen eingestellt und lässt sich
 als Docker-Image bauen: `docker build -f crates/relay/Dockerfile .`
+
+Meilenstein M3 (Linux-Desktop) hat begonnen; Stand in
+[docs/fahrplan.md](docs/fahrplan.md).
 
 | Meilenstein | Inhalt |
 |---|---|
@@ -86,17 +90,30 @@ die einladende Seite die Annahme auch später, bis zu 24 Stunden danach.
 crates/
 ├── wire/    Nachrichtenhülle und Relay-Schnittstelle (no_std)
 ├── core/    Protokoll, Verschlüsselung, Regelprüfung, Speicher
+├── client/  Relay-Zugang, Befehle, Abruf; genutzt von lz und der Desktop-App
 ├── cli/     Client ohne Oberfläche (Programm: lz)
 └── relay/   Relay-Server (Programm: lz-relay)
 app/
-├── src-tauri/   Tauri-Hülle, in M1 nur der Android-Prototyp
+├── src-tauri/   Tauri-Hülle: Linux-Desktop (M3) und Android-Prototyp (M1)
 ├── ui/          Oberfläche (schlichtes HTML ohne Build-Schritt)
 └── android/     Kotlin-Schicht: UnifiedPush, Vollbild-Anzeige, Benachrichtigungen
 docs/        Konzept, Protokoll, Fahrplan, Durchstich M1, Entwurf der Lizenz-Ausnahme
 ```
 
-`app/` gehört nicht zum Cargo-Workspace und wird nur vom CI-Ablauf
-"Android-Prototyp" gebaut. Die fertige APK liegt dort als Artefakt. Bis M4
+`app/` gehört nicht zum Cargo-Workspace. Die Desktop-App für Linux baut und
+startet man lokal (braucht WebKitGTK 4.1 und GTK 3):
+
+```sh
+cd app/src-tauri
+cargo build
+LZ_STATE=/pfad/zu/device.json target/debug/lebenszeichen-app   # LZ_STATE optional
+```
+
+Ohne `LZ_STATE` liegt der Zustand im Datenverzeichnis der App
+(`~/.local/share/io.github.irgendwer92.lebenszeichen/device.json`); die
+Desktop-App ist damit ein eigenes Gerät neben `lz`.
+
+Die Android-APK baut nur der CI-Ablauf "Android-Prototyp". Die fertige APK liegt dort als Artefakt. Bis M4
 läuft er nur, wenn man ihn von Hand startet:
 `gh workflow run android-prototype.yml --ref <zweig>`.
 

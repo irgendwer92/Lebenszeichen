@@ -1,3 +1,31 @@
+/// Commands of the app. Listing them turns each into a permission
+/// (`allow-…`), so that a window may only call what its capability in
+/// `capabilities/` grants: the main window everything, a foreground window
+/// only what concerns its own request.
+const COMMANDS: &[&str] = &[
+    "setup_state",
+    "init_device",
+    "overview",
+    "sync",
+    "invite",
+    "accept",
+    "confirm",
+    "reject",
+    "request",
+    "respond",
+    "remove",
+    "set_rules",
+    "alert_text",
+    "alert_answer",
+];
+
 fn main() {
-    tauri_build::build();
+    // tauri-build does not watch the platform-specific configuration, so a
+    // change to it alone would not rebuild the app with the new settings.
+    println!("cargo:rerun-if-changed=tauri.linux.conf.json");
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
+    )
+    .expect("failed to run tauri-build");
 }

@@ -1,4 +1,4 @@
-//! Command line arguments and dispatch to the commands in [`crate::app`].
+//! Command line arguments and dispatch to the commands in [`lz_client::ctx`].
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -6,8 +6,8 @@ use std::time::Duration;
 use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
 use lz_core::store::JsonFile;
 
-use crate::app::{self, Clock, Ctx, Result};
-use crate::relay::Http;
+use lz_client::ctx::{self, Clock, Ctx, Result};
+use lz_client::relay::Http;
 
 /// How long `lz sync` waits for further messages before it ends.
 const SYNC_IDLE: Duration = Duration::from_millis(1500);
@@ -69,6 +69,9 @@ enum Command {
         /// Gutschein beilegen, damit die Gegenseite ein Postfach auf deinem Relay anlegen kann
         #[arg(long)]
         voucher: bool,
+        /// Den Code zusätzlich als QR-Code zeigen (für ein dunkles Terminal)
+        #[arg(long)]
+        qr: bool,
     },
     /// Nimmt eine Einladung an und zeigt den Prüfcode
     Accept {
@@ -151,7 +154,7 @@ pub async fn run() -> Result<()> {
     let args = parse();
     let path = match args.state {
         Some(path) => path,
-        None => app::default_state_path()?,
+        None => ctx::default_state_path()?,
     };
     let store = JsonFile::new(path);
     if let Command::Init {
@@ -159,7 +162,7 @@ pub async fn run() -> Result<()> {
         access_token,
     } = &args.command
     {
-        return app::init(
+        return ctx::init(
             &store,
             relay.as_deref(),
             access_token.as_deref(),
@@ -173,10 +176,15 @@ pub async fn run() -> Result<()> {
         out: Box::new(std::io::stdout()),
         verbose: args.verbose,
         idle: SYNC_IDLE,
+        hints: crate::hints::cli,
     };
     match args.command {
         Command::Init { .. } => unreachable!("handled above"),
-        Command::Invite { name, voucher } => ctx.invite(&name, voucher).await.map(drop),
+        Command::Invite { name, voucher, qr } => ctx.invite(&name, voucher).await.map(|code| {
+            if qr {
+                println!("\n{}", lz_client::qr::terminal(&code));
+            }
+        }),
         Command::Accept { name, code } => ctx.accept(&name, &code).await.map(drop),
         Command::Confirm { name } => ctx.confirm(&name).await,
         Command::Reject { name } => ctx.reject(&name).await,

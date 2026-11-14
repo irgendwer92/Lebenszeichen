@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-alert-answer"
+description = "Enables the alert_answer command without any pre-configured scope."
+commands.allow = ["alert_answer"]
+
+[[permission]]
+identifier = "deny-alert-answer"
+description = "Denies the alert_answer command without any pre-configured scope."
+commands.deny = ["alert_answer"]

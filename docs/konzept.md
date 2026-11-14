@@ -23,6 +23,7 @@ Eine Person fragt bei einer anderen ein minimales Lebenszeichen an. Die Antwort 
 | Kontakt entfernen | Für die Gegenseite sichtbar. |
 | Forward Secrecy | Bewusster Verzicht zugunsten eines kleinen, mehrgerätefähigen Protokolls. |
 | Speicher des Clients | Eine JSON-Datei je Gerät hinter einer Schnittstelle im Kern, bei jeder Änderung als Ganzes ersetzt. Genau ein Prozess besitzt den Zustand eines Geräts. Schlüssel vorerst unverschlüsselt, nur für den Besitzer lesbar; Schutz über den Schlüsselspeicher des Systems folgt mit den Apps. Entschieden am 14.11.2026. |
+| Technik der Oberfläche | Schlichtes HTML, CSS und JavaScript in `app/ui`, ohne Build-Schritt und ohne Framework. Reicht für Kontaktliste, Anfrage-Knopf und Einstellungen und bringt keine npm-Abhängigkeiten mit. Entschieden am 14.11.2026. |
 | Framework | Tauri, mit eigenständigem Rust-Kern und dünner Kotlin-Schicht auf Android. |
 | Lizenz | Clients und Kern: GPL-3.0-or-later mit App-Store-Ausnahme. Relay: AGPL-3.0-or-later. |
 | Quellcode-Hosting | GitHub, mit GitHub Actions und Renovate. |
@@ -69,7 +70,12 @@ Das Wecksignal vom Relay ans Gerät ist unsichtbar. Sichtbar ist nur, was die Ap
 | iOS (später) | Nicht möglich | Nur Benachrichtigung. |
 
 Regeln für die Vordergrund-Anzeige:
-- "Nicht stören" des Systems wird respektiert.
+- "Nicht stören" des Systems wird respektiert. Ausnahme: Unter Linux kommt die
+  Benachrichtigung mit Dringlichkeit "kritisch", und KDE Plasma zeigt solche
+  Benachrichtigungen standardmäßig auch bei "Nicht stören". Wer das nicht will,
+  schaltet es in den Systemeinstellungen ab. Das Vordergrund-Fenster unter
+  X11 erscheint ebenfalls immer, weil sich "Nicht stören" dort nicht
+  einheitlich abfragen lässt.
 - Auf dem Desktop nimmt das Fenster keinen Tastaturfokus. Nur Klick oder Tippen auf das Fenster oder das Schließen zählt als Antwort; ein Tastendruck mitten im Tippen darf nie als Lebenszeichen gelten.
 
 ### Ton und Vibration
@@ -77,7 +83,8 @@ Regeln für die Vordergrund-Anzeige:
 - Standardmäßig aus, bei Vordergrund-Anzeige und Benachrichtigung gleichermaßen.
 - Der Angefragte kann beides pro Gerät einschalten. So bleibt etwa das Handy am Bett still, während der Rechner im Arbeitszimmer einen Ton gibt.
 - Die Einstellung gilt nur lokal und wird nicht übertragen.
-- "Nicht stören" des Systems hat auch bei eingeschaltetem Ton Vorrang.
+- "Nicht stören" des Systems hat auch bei eingeschaltetem Ton Vorrang (zur
+  Anzeige unter Linux siehe die Ausnahme oben).
 - Auf Android steuert das System Ton und Vibration über den Benachrichtigungskanal. Die App legt den Kanal still an und verweist für Änderungen auf die Systemeinstellungen.
 
 ### Benachrichtigung (Rückfall und wählbare Alternative)
@@ -169,7 +176,7 @@ Kurzfassung der bestätigten Reihenfolge; Einzelheiten und Abnahmekriterien steh
 ## Offene Punkte
 
 - Wortlaut der App-Store-Ausnahme.
-- Technik der Oberfläche und Schutz der Schlüssel auf dem Gerät (siehe `fahrplan.md`).
+- Schutz der Schlüssel auf dem Gerät (siehe `fahrplan.md`).
 
 ## Recherche: ähnliche Apps
 

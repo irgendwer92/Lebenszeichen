@@ -1,7 +1,7 @@
 //! Human-readable output: times in local time, rules, events.
 
 use chrono::{DateTime, Datelike, Local, TimeZone};
-use lz_core::wire::{Reason, ResponseKind, Rules};
+use lz_core::wire::{ResponseKind, Rules};
 
 const WEEKDAYS: [&str; 7] = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 
@@ -64,8 +64,51 @@ pub fn response(kind: &ResponseKind, at: u64, now: u64) -> String {
     }
 }
 
-pub fn reported(reason: &Reason) -> String {
+pub fn reported(reason: impl std::fmt::Display) -> String {
     format!("„{reason}“ (gemeldet)")
+}
+
+/// A point where a client may tell the person what to do next.
+///
+/// The shared texts are complete sentences without commands; each client
+/// turns a hint into its own wording (`lz` names a command, the desktop app
+/// has buttons and mostly says nothing).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hint<'a> {
+    /// There is no device yet.
+    Init,
+    /// Inviting needs an own relay with access token.
+    InitWithAccessToken,
+    /// The other side can invite with a voucher.
+    InviteWithVoucher,
+    /// Something will arrive that has to be fetched.
+    Fetch,
+    /// Fetching goes on until the person stops it.
+    StopListening,
+    Confirm(&'a str),
+    Reject(&'a str),
+    Respond(&'a str),
+    Remove(&'a str),
+    /// Invite this contact again.
+    Invite(&'a str),
+    /// Invite someone; there are no contacts yet.
+    InviteSomeone,
+}
+
+/// Turns a hint into the wording of a client, or into nothing.
+pub type Hints = fn(&Hint<'_>) -> Option<String>;
+
+/// For clients that show no hints.
+pub fn no_hints(_: &Hint<'_>) -> Option<String> {
+    None
+}
+
+/// The hints that apply, each on a line of its own after `text`.
+pub fn with_hints(text: String, hints: Hints, wanted: &[Hint<'_>]) -> String {
+    wanted
+        .iter()
+        .filter_map(hints)
+        .fold(text, |text, hint| format!("{text}\n{hint}"))
 }
 
 /// Something that happened while fetching messages, for display and tests.
@@ -120,21 +163,27 @@ impl Notice {
         matches!(self, Self::Dropped { .. })
     }
 
-    /// Text of the notice, with times relative to `now`.
-    pub fn text(&self, now: u64) -> String {
+    /// Text of the notice, with times relative to `now` and the hints of
+    /// the client.
+    pub fn text(&self, now: u64, hints: Hints) -> String {
         match self {
-            Self::Accepted { name, code } => format!(
-                "{name} hat die Einladung angenommen. Prüfcode: {code}\n\
-                 Stimmt er mit dem Prüfcode der Gegenseite überein, bestätigen mit: lz confirm {name}\n\
-                 Stimmt er nicht, ablehnen mit: lz reject {name}"
+            Self::Accepted { name, code } => with_hints(
+                format!(
+                    "{name} hat die Einladung angenommen. Prüfcode: {code}\n\
+                     Bestätige nur, wenn er mit dem Prüfcode bei {name} übereinstimmt."
+                ),
+                hints,
+                &[Hint::Confirm(name), Hint::Reject(name)],
             ),
             Self::Paired { name } => format!("{name} hat die Kopplung bestätigt."),
             Self::Rules { name, rules: r } => {
                 format!("Regeln von {name} für deine Anfragen: {}", rules(r))
             }
-            Self::Request { name } => {
-                format!("{name} fragt nach einem Lebenszeichen. Antworten mit: lz respond {name}")
-            }
+            Self::Request { name } => with_hints(
+                format!("{name} fragt nach einem Lebenszeichen."),
+                hints,
+                &[Hint::Respond(name)],
+            ),
             Self::Response { name, kind, at } => {
                 format!("{name}: {}", response(kind, *at, now))
             }
@@ -144,20 +193,30 @@ impl Notice {
                  Für einen neuen Versuch braucht es eine neue Einladung."
             ),
             Self::SecondAcceptance { name, paired } => {
-                let what = if *paired {
-                    format!(
-                        "Prüfe mit {name}, ob der Prüfcode wirklich übereinstimmte. \
-                         Wenn nicht: lz remove {name} und neu einladen."
+                let (what, undo) = if *paired {
+                    (
+                        format!(
+                            "Prüfe mit {name}, ob der Prüfcode wirklich übereinstimmte. \
+                             Wenn nicht, entferne den Kontakt und lade neu ein."
+                        ),
+                        Hint::Remove(name),
                     )
                 } else {
-                    format!(
-                        "Vergleiche den Prüfcode mit {name} besonders sorgfältig, bevor du bestätigst. \
-                         Stimmt er nicht: lz reject {name} und neu einladen."
+                    (
+                        format!(
+                            "Vergleiche den Prüfcode mit {name} besonders sorgfältig, bevor du \
+                             bestätigst. Stimmt er nicht, lehne ab und lade neu ein."
+                        ),
+                        Hint::Reject(name),
                     )
                 };
-                format!(
-                    "Achtung: Die Einladung an {name} wurde ein weiteres Mal angenommen, \
-                     der Code ist also noch jemand anderem bekannt. {what}"
+                with_hints(
+                    format!(
+                        "Achtung: Die Einladung an {name} wurde ein weiteres Mal angenommen, \
+                         der Code ist also noch jemand anderem bekannt. {what}"
+                    ),
+                    hints,
+                    &[undo],
                 )
             }
             Self::Dropped { name, why } => match name {

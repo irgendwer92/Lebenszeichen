@@ -16,7 +16,7 @@ use lz_core::wire::{ENVELOPE_LEN, MailboxId, RelayUrl, Token};
 use rand_core::OsRng;
 use tokio::sync::mpsc;
 
-use crate::app::{Ctx, Fail, Result};
+use crate::ctx::{Ctx, Fail, Result};
 use crate::relay::{Connection, Delivery, Relay, RelayError, ServerFrame};
 use crate::show::Notice;
 
@@ -109,7 +109,15 @@ impl<R: Relay> Ctx<R> {
             return Ok(notices);
         }
         if listen {
-            self.say("Warte auf Nachrichten (Abbruch mit Strg+C) …");
+            let text = format!(
+                "Warte auf Nachrichten …{}",
+                crate::show::with_hints(
+                    String::new(),
+                    self.hints,
+                    &[crate::show::Hint::StopListening]
+                )
+            );
+            self.say(&text);
         }
         let mut tick = tokio::time::interval(LISTEN_TICK);
         tick.tick().await;
@@ -147,14 +155,16 @@ impl<R: Relay> Ctx<R> {
                         l.awaiting.remove(&mailbox);
                     }
                     let device = self.store.load()?;
-                    // The own mailbox of an ended contact was deleted on purpose.
+                    // Mailboxes of ended contacts and of withdrawn invitations
+                    // are deleted on purpose, possibly by another command.
                     let deleted_on_purpose = code == "unknown_mailbox"
                         && mailbox.is_some_and(|m| {
-                            device.contacts.iter().any(|c| {
-                                c.state.ended
-                                    && c.own_relay == relay
-                                    && c.state.contact.own_mailbox == m
-                            })
+                            name_of(&device, &relay, &m).is_none()
+                                || device.contacts.iter().any(|c| {
+                                    c.state.ended
+                                        && c.own_relay == relay
+                                        && c.state.contact.own_mailbox == m
+                                })
                         });
                     if deleted_on_purpose {
                         continue;
@@ -201,7 +211,7 @@ impl<R: Relay> Ctx<R> {
 
     fn show(&mut self, notice: &Notice) {
         if self.verbose || !notice.is_dropped() {
-            let text = notice.text(self.now());
+            let text = notice.text(self.now(), self.hints);
             self.say(&text);
         }
     }

@@ -1,7 +1,22 @@
 {
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "default",
-  "description": "Rechte des Hauptfensters: Kern-Funktionen von Tauri und die Kotlin-Schicht",
+  "description": "Rechte des Hauptfensters: Kern-Funktionen von Tauri, die Kotlin-Schicht und alle Befehle der Desktop-App",
   "windows": ["main"],
-  "permissions": ["core:default", "lebenszeichen:default"]
+  "permissions": [
+    "core:default",
+    "lebenszeichen:default",
+    "allow-setup-state",
+    "allow-init-device",
+    "allow-overview",
+    "allow-sync",
+    "allow-invite",
+    "allow-accept",
+    "allow-confirm",
+    "allow-reject",
+    "allow-request",
+    "allow-respond",
+    "allow-remove",
+    "allow-set-rules"
+  ]
 }

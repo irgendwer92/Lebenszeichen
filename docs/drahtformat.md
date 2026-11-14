@@ -1,8 +1,8 @@
 # Lebenszeichen – Drahtformat und Relay-Schnittstelle (Version 1)
 
-Stand: 13.11.2026. Konkretisiert `protokoll.md` für Meilenstein M2. Dieses Dokument ist die verbindliche Vorlage für `crates/wire`, `crates/core` und `crates/relay` und soll ausreichen, um einen Client in einer anderen Sprache zu schreiben, etwa für einen Microcontroller.
+Stand: 14.11.2026. Konkretisiert `protokoll.md` für Meilenstein M2. Dieses Dokument ist die verbindliche Vorlage für `crates/wire`, `crates/core` und `crates/relay` und soll ausreichen, um einen Client in einer anderen Sprache zu schreiben, etwa für einen Microcontroller.
 
-Die Festlegungen hier sind neu und noch nicht einzeln bestätigt. Sie sind im Abschnitt [Festlegungen dieses Dokuments](#festlegungen-dieses-dokuments) gesammelt.
+Die Festlegungen, die über `protokoll.md` hinausgehen, sind im Abschnitt [Festlegungen dieses Dokuments](#festlegungen-dieses-dokuments) gesammelt und am 14.11.2026 einzeln bestätigt.
 
 Schreibweisen: Alle Zahlen sind vorzeichenlos und Big-Endian. `b64url` heißt Base64 mit URL-Alphabet ohne Füllzeichen (RFC 4648, Abschnitt 5). `hex` heißt Kleinbuchstaben. Zeiten sind Unix-Sekunden in UTC.
 
@@ -207,7 +207,7 @@ Das Relay schreibt keine IP-Adressen und keine Postfach-Kennungen in seine Ausga
 
 ## Festlegungen dieses Dokuments
 
-Diese Punkte gehen über `protokoll.md` hinaus und sind neu:
+Diese Punkte gehen über `protokoll.md` hinaus. Am 14.11.2026 einzeln durchgegangen und bestätigt:
 
 - **Festes Binärformat** statt JSON oder CBOR im Klartext: klein, ohne Parser und auf Microcontrollern einfach.
 - **Versiegelte Form für `hello`**, weil der Empfänger den Absender noch nicht kennt.
@@ -223,14 +223,14 @@ Diese Punkte gehen über `protokoll.md` hinaus und sind neu:
 - **Schutz des Relays vor missbräuchlichen Push-Adressen.**
 - **SQLite als Speicher des Relays.** Der Kern spricht seinen Speicher über eine Schnittstelle an und speichert in einer JSON-Datei je Gerät (siehe `konzept.md`).
 
-Klarstellungen, die bei der Umsetzung des Relays (`crates/relay`) getroffen wurden:
+Klarstellungen, die bei der Umsetzung des Relays (`crates/relay`) getroffen wurden. Sie sind Einzelheiten der Umsetzung und nicht einzeln bestätigt:
 
 - **Reihenfolge der Prüfungen:** Fehlt der Token oder ist er nicht `b64url` von 32 Byte, kommt `401`. Danach wird das Postfach gesucht; ein unbekanntes Postfach meldet `404 unknown_mailbox` auch dann, wenn der Token nicht passen würde, damit ein entfernter Client das sicher erkennt. Erst dann wird der Token verglichen (`401`).
 - **Unlesbare Kennungen** in Pfaden (nicht `b64url` oder falsche Länge) ergeben `400 bad_request`. Hashes in `POST /v1/mailboxes` müssen 64 Hex-Ziffern sein; Großbuchstaben werden geduldet.
 - **Gutschein:** Er steht wie ein Token im Kopf `Authorization: Bearer …`. Ein unbekannter, eingelöster oder abgelaufener Gutschein ergibt `401`. Er gilt genau 600 Sekunden.
 - **Leerer Rumpf** bei `POST …/messages` ergibt `400 bad_request`. Der `Content-Type` wird nicht geprüft.
 - **Grenzen gleichzeitig überschritten:** Die Ratenbegrenzung wird vor dem Füllstand geprüft, es kommt dann `rate_limited`. Abgelehnte Einlieferungen zählen nicht mit. „Wartend“ heißt: noch gespeichert, auch wenn einzelne Leser sie schon quittiert haben.
-- **Ratenbegrenzung nur im Speicher:** Die Eingangszeiten für die Grenze von 6 je Stunde hält das Relay nur im Arbeitsspeicher und nur eine Stunde lang. Nach einem Neustart beginnt die Zählung neu.
+- **Ratenbegrenzung nur im Speicher:** Die Eingangszeiten für die Grenze von 20 je Stunde hält das Relay nur im Arbeitsspeicher und nur eine Stunde lang. Nach einem Neustart beginnt die Zählung neu.
 - **Fehler des Relays selbst** melden `500` mit `{"error":"internal"}`.
 - **Leser:** Höchstens 16 Leser je Postfach, darüber `400 bad_request`, weil jeder Leser ein Wecksignal auslösen kann. Ein neu eingetragener Leser beginnt mit Quittung 0 und erhält alle wartenden Nachrichten; ein erneutes `PUT` ändert nur die Push-Adresse. Ein Rumpf `{}` gilt wie `{"push_url":null}`. Wird ein Leser ausgetragen, löscht das Relay sofort die Nachrichten, die alle verbleibenden Leser quittiert haben.
 - **Push-Adresse:** höchstens 1024 Byte, nur `https`, ohne Benutzername und Passwort, nicht `localhost`, als IP-Adresse nur öffentliche. Das Relay löst den Rechnernamen beim Wecken selbst auf und verbindet sich nur mit den geprüften öffentlichen Adressen (IPv4 und IPv6), damit eine zweite Auflösung nichts anderes liefern kann. Kein Proxy, keine Weiterleitungen, Zeitgrenze 5 Sekunden. `LZ_PUSH_ALLOWED_HOSTS` vergleicht den Rechnernamen genau, ohne Groß- und Kleinschreibung und ohne Unterdomänen. Ungültige Adressen ergeben beim Eintragen `400 bad_request`.

@@ -9,12 +9,17 @@ use std::time::Duration;
 use lz_core::store::{Device, JsonFile, Store, StoredContact};
 use lz_core::wire::{Reason, RelayUrl, ResponseKind, Rules, Token};
 
-use crate::app::{self, Clock, Ctx, Fail};
+use crate::ctx::{self, Clock, Ctx, Fail};
 use crate::relay::fake::FakeRelay;
 use crate::relay::{Relay, b64};
-use crate::show::Notice;
+use crate::show::{Hint, Notice};
 
 const T: u64 = 1_794_600_000;
+
+/// Shows every hint as its name, so tests see where hints go.
+fn test_hints(hint: &Hint<'_>) -> Option<String> {
+    Some(format!("[{hint:?}]"))
+}
 const MINUTE: u64 = 60;
 const HOUR: u64 = 3600;
 const RELAY_A: &str = "https://relay-a.example";
@@ -70,7 +75,7 @@ impl World {
         let store = JsonFile::new(dir.path().join("sub").join("device.json"));
         let out = Output::default();
         let token = relay.and_then(|(_, t)| t).map(|t| b64(&t));
-        app::init(
+        ctx::init(
             &store,
             relay.map(|(url, _)| url),
             token.as_deref(),
@@ -86,6 +91,7 @@ impl World {
                 out: Box::new(out.clone()),
                 verbose: true,
                 idle: Duration::from_millis(20),
+                hints: test_hints,
             },
             out,
             _dir: dir,
@@ -148,7 +154,7 @@ async fn paired(world: &World) -> (Person, Person) {
             code: verification.clone(),
         }]
     );
-    assert!(anna.out.take().contains("lz confirm Bert"));
+    assert!(anna.out.take().contains(r#"[Confirm("Bert")]"#));
     assert!(anna.device().invitations.is_empty());
     anna.ctx.confirm("Bert").await.unwrap();
 
@@ -450,15 +456,15 @@ fn init_checks_its_input() {
     let dir = tempfile::tempdir().unwrap();
     let store = JsonFile::new(dir.path().join("device.json"));
     let mut out = Vec::new();
-    assert!(app::init(&store, Some("ftp://x"), None, &mut out).is_err());
-    assert!(app::init(&store, Some(RELAY_A), Some("kurz"), &mut out).is_err());
-    assert!(app::init(&store, None, Some(&b64(&TOKEN_A)), &mut out).is_err());
-    app::init(&store, Some("http://localhost:8080/"), None, &mut out).unwrap();
+    assert!(ctx::init(&store, Some("ftp://x"), None, &mut out).is_err());
+    assert!(ctx::init(&store, Some(RELAY_A), Some("kurz"), &mut out).is_err());
+    assert!(ctx::init(&store, None, Some(&b64(&TOKEN_A)), &mut out).is_err());
+    ctx::init(&store, Some("http://localhost:8080/"), None, &mut out).unwrap();
     assert_eq!(
         store.load().unwrap().relay.unwrap().url,
         url("http://localhost:8080")
     );
-    let error = app::init(&store, None, None, &mut out).unwrap_err();
+    let error = ctx::init(&store, None, None, &mut out).unwrap_err();
     assert!(error.0.contains("gibt es schon"));
 }
 
@@ -479,7 +485,7 @@ async fn intercepted_invitation_is_noticed_and_rejected_visibly() {
     let out = anna.out.take();
     assert!(out.contains(&mallory_code), "{out}");
     assert!(out.contains("ein weiteres Mal angenommen"), "{out}");
-    assert!(out.contains("lz reject Bert"), "{out}");
+    assert!(out.contains(r#"[Reject("Bert")]"#), "{out}");
 
     // Anna compares with Bert, the codes differ, she rejects.
     anna.ctx.reject("Bert").await.unwrap();
@@ -507,5 +513,68 @@ async fn reject_only_before_pairing_is_complete() {
     let world = World::new();
     let (mut anna, _bert) = paired(&world).await;
     let error = anna.ctx.reject("Bert").await.unwrap_err();
-    assert!(error.0.contains("lz remove Bert"), "{error:?}");
+    assert!(error.0.contains(r#"[Remove("Bert")]"#), "{error:?}");
+}
+
+#[tokio::test]
+async fn overview_shows_rules_and_requests() {
+    use crate::ctx::{LastResponse, Status};
+
+    let world = World::new();
+    let (mut anna, mut bert) = paired(&world).await;
+    bert.ctx.request("Anna").await.unwrap();
+    anna.sync().await;
+
+    let overview = anna.ctx.overview().unwrap();
+    let bert_seen = &overview.contacts[0];
+    assert_eq!(bert_seen.status, Status::Paired);
+    assert!(bert_seen.incoming.is_some());
+
+    anna.ctx.respond("Bert").await.unwrap();
+    bert.sync().await;
+    let overview = bert.ctx.overview().unwrap();
+    let anna_seen = &overview.contacts[0];
+    assert_eq!(anna_seen.next_request_at, overview.now + 6 * HOUR);
+    assert_eq!(
+        anna_seen.last_response,
+        Some(LastResponse::Manual { at: overview.now })
+    );
+    assert!(anna_seen.outgoing_since.is_none());
+
+    // Own rules on one side are the rules of the contact on the other.
+    let changed = Rules {
+        min_interval_minutes: 30,
+        expiry_minutes: 90,
+        weekly_limit: 3,
+    };
+    anna.ctx
+        .rules("Bert", Some(30), Some(90), Some(3))
+        .await
+        .unwrap();
+    bert.sync().await;
+    let bert_seen = &anna.ctx.overview().unwrap().contacts[0];
+    assert_eq!(bert_seen.own_rules, changed);
+    assert_eq!(bert_seen.peer_rules, Rules::DEFAULT);
+    let anna_seen = &bert.ctx.overview().unwrap().contacts[0];
+    assert_eq!(anna_seen.own_rules, Rules::DEFAULT);
+    assert_eq!(anna_seen.peer_rules, changed);
+}
+
+#[tokio::test]
+async fn the_same_invitation_is_not_accepted_twice() {
+    let world = World::new();
+    let mut anna = world.person(Some((RELAY_A, Some(TOKEN_A))));
+    let mut bert = world.person(Some((RELAY_B, Some(TOKEN_B))));
+
+    let code = anna.ctx.invite("Bert", false).await.unwrap();
+    bert.ctx.accept("Anna", &code).await.unwrap();
+    let error = bert.ctx.accept("anna", &code).await.unwrap_err();
+    assert_eq!(
+        error.0,
+        "Diese Einladung hast du schon angenommen (als Anna)."
+    );
+    assert_eq!(bert.device().contacts.len(), 1);
+    // No second `hello` went out, so Anna sees exactly one acceptance.
+    anna.sync().await;
+    assert!(!anna.out.take().contains("weiteres Mal"));
 }

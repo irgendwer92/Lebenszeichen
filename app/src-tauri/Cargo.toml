@@ -1,6 +1,6 @@
 [package]
 name = "lebenszeichen-app"
-description = "Lebenszeichen-App: Tauri-Hülle, in M1 nur als Wegwerf-Prototyp für Android"
+description = "Lebenszeichen-App: Tauri-Hülle für den Linux-Desktop (M3) und den Android-Prototyp aus M1"
 version = "0.1.0"
 license = "GPL-3.0-or-later"
 edition = "2024"
@@ -21,6 +21,19 @@ tauri-build = { version = "2.7", features = [] }
 tauri = { version = "2.12", features = [] }
 tauri-plugin-lebenszeichen = { path = "../android" }
 lz-core = { path = "../../crates/core" }
+
+# Desktop only, so the Android prototype from M1 keeps its dependencies.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+lz-client = { path = "../../crates/client" }
+tauri = { version = "2.12", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt", "sync"] }
+
+# Notifications over D-Bus (desktop/notify.rs); already in the build through
+# tauri-plugin-single-instance.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Same major line as Tauri itself uses, so only one copy ends up in the build.
