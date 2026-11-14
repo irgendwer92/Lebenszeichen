@@ -41,12 +41,15 @@ jobs:
       # Die App liegt außerhalb des Workspace und hat ein eigenes Lockfile.
       # Sicherheitsmeldungen zu ihren GTK-Abhängigkeiten meldet Dependabot;
       # hier zählen Lizenzen, Quellen und Verbote nach derselben deny.toml.
-      - name: Abhängigkeiten der Desktop-App
-        uses: EmbarkStudios/cargo-deny-action@v2
+      # Die Action reicht weitere Argumente nur als ein einziges weiter,
+      # deshalb hier cargo-deny direkt.
+      - uses: taiki-e/install-action@v2
         with:
-          manifest-path: app/src-tauri/Cargo.toml
-          command: check
-          command-arguments: --config deny.toml licenses bans sources
+          tool: cargo-deny
+      - name: Abhängigkeiten der Desktop-App
+        run: >-
+          cargo deny --manifest-path app/src-tauri/Cargo.toml --all-features
+          check --config deny.toml licenses bans sources
 
   desktop:
     name: Desktop-App (Linux)
