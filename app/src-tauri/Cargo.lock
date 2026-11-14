@@ -2042,6 +2042,7 @@ dependencies = [
  "ndk-context",
  "rustls-platform-verifier",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-lebenszeichen",

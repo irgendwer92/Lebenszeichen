@@ -44,6 +44,8 @@ jni = "0.21"
 ndk-context = "0.1"
 # Same version as in lz-client; set up with the context in jni_bridge.rs.
 rustls-platform-verifier = "0.6"
+# Answers to the Kotlin layer (jni_bridge.rs).
+serde_json = "1"
 
 # The prototype is sideloaded as a debug build. Without debug information the
 # library and with it the APK stay small.
