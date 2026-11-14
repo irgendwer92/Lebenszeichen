@@ -22,7 +22,16 @@ object RequestPresenter {
      * Android never lets an app change sound or vibration of an existing
      * channel. If the defaults change, the id needs a new suffix.
      */
-    const val CHANNEL_ID = "requests_silent_v1"
+    const val CHANNEL_ID = "requests_silent_v2"
+
+    /**
+     * Channels before v2: deleted, because v1 forced full content on the
+     * lock screen and a channel cannot be changed afterwards.
+     */
+    private val OLD_CHANNELS = listOf("requests_silent_v1")
+
+    /** Shown on the lock screen instead of the name of the contact. */
+    const val NEUTRAL_TITLE = "Lebenszeichen?"
     const val EXTRA_NAME = "io.github.irgendwer92.lebenszeichen.NAME"
     const val EXTRA_SINCE = "io.github.irgendwer92.lebenszeichen.SINCE"
     const val EXTRA_TITLE = "io.github.irgendwer92.lebenszeichen.TITLE"
@@ -46,6 +55,7 @@ object RequestPresenter {
      */
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
+        OLD_CHANNELS.forEach { manager(context).deleteNotificationChannel(it) }
         val channel =
             NotificationChannel(CHANNEL_ID, "Anfragen", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Anfragen nach einem Lebenszeichen. Standardmäßig ohne Ton und Vibration."
@@ -53,7 +63,7 @@ object RequestPresenter {
                 enableVibration(false)
                 enableLights(false)
                 setShowBadge(false)
-                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                // No override: the notification decides (private, with a neutral public version).
             }
         manager(context).createNotificationChannel(channel)
     }
@@ -113,7 +123,17 @@ object RequestPresenter {
                 .setDefaults(0)
                 .setSound(null)
                 .setVibrate(null)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                // On the lock screen only "Lebenszeichen?", the name after unlocking.
+                // Android honours this when the lock screen hides sensitive content.
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(
+                    NotificationCompat.Builder(app, CHANNEL_ID)
+                        .setSmallIcon(R.drawable.ic_lz_request)
+                        .setContentTitle(NEUTRAL_TITLE)
+                        .setContentText(HINT)
+                        .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                        .build(),
+                )
                 .setWhen(request.since * 1000)
                 .setShowWhen(true)
                 .setAutoCancel(true)

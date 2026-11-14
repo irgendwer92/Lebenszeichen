@@ -1,5 +1,10 @@
 package io.github.irgendwer92.lebenszeichen.droid
 
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -8,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.core.content.ContextCompat
 
 /**
  * Full-screen display of a request over the lock screen.
@@ -19,6 +25,16 @@ import androidx.activity.OnBackPressedCallback
  */
 class RequestActivity : ComponentActivity() {
     private var name: String = ""
+    private var titleText: String = RequestPresenter.NEUTRAL_TITLE
+    private var titleView: TextView? = null
+
+    /** Unlocking while the display is open: now the name may show. */
+    private val unlocked =
+        object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                showTitle()
+            }
+        }
     private var since: Long = -1
     private val key: String get() = "$name@$since"
 
@@ -37,7 +53,7 @@ class RequestActivity : ComponentActivity() {
 
         name = intent.getStringExtra(RequestPresenter.EXTRA_NAME) ?: ""
         since = intent.getLongExtra(RequestPresenter.EXTRA_SINCE, -1)
-        val titleText = intent.getStringExtra(RequestPresenter.EXTRA_TITLE) ?: "Lebenszeichen?"
+        titleText = intent.getStringExtra(RequestPresenter.EXTRA_TITLE) ?: RequestPresenter.NEUTRAL_TITLE
         if (name.isEmpty() || since < 0 || Store.isAnswered(this, key)) {
             finish()
             return
@@ -46,10 +62,17 @@ class RequestActivity : ComponentActivity() {
         val padding = (32 * resources.displayMetrics.density).toInt()
         val title =
             TextView(this).apply {
-                text = titleText
                 textSize = 32f
                 gravity = Gravity.CENTER
             }
+        titleView = title
+        showTitle()
+        ContextCompat.registerReceiver(
+            this,
+            unlocked,
+            IntentFilter(Intent.ACTION_USER_PRESENT),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         val hint =
             TextView(this).apply {
                 text = "Antippen oder Schließen sendet dein Lebenszeichen."
@@ -80,9 +103,21 @@ class RequestActivity : ComponentActivity() {
         EventLog.add(this, key, "fullscreen-shown", "")
     }
 
+    /** The name of the contact only when the device is unlocked. */
+    private fun showTitle() {
+        val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        titleView?.text = if (keyguard.isKeyguardLocked) RequestPresenter.NEUTRAL_TITLE else titleText
+    }
+
+    override fun onDestroy() {
+        if (titleView != null) unregisterReceiver(unlocked)
+        super.onDestroy()
+    }
+
     /** Closes the display if the request was answered through the notification meanwhile. */
     override fun onResume() {
         super.onResume()
+        showTitle()
         if (name.isNotEmpty() && Store.isAnswered(this, key)) {
             finish()
         }
