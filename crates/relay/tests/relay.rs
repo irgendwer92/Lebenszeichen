@@ -474,15 +474,42 @@ async fn message_size_limit() {
 async fn rate_limit_and_full_mailbox() {
     let relay = Relay::start().await;
     let mailbox = relay.mailbox().await;
-    for _ in 0..6 {
+    let reader = reader_id(1);
+    relay.put_reader(&mailbox, &reader, None).await;
+
+    // Without acknowledgements, the mailbox is full after 8 messages.
+    for n in 1..=8 {
         assert_eq!(
-            relay.post(&mailbox, ENVELOPE.to_vec()).await.0,
+            relay.post(&mailbox, envelope(n)).await.0,
             StatusCode::ACCEPTED
         );
     }
-    let (status, json) = relay.post(&mailbox, ENVELOPE.to_vec()).await;
+    assert_eq!(relay.waiting(&mailbox), 8);
+    // Refused messages do not count against the rate limit.
+    for _ in 0..15 {
+        assert_eq!(
+            relay.post(&mailbox, ENVELOPE.to_vec()).await,
+            (StatusCode::TOO_MANY_REQUESTS, error("mailbox_full"))
+        );
+    }
+
+    // Once acknowledged, there is room again, up to 20 accepted per hour.
+    let mut client = relay.connect().await;
+    assert_eq!(client.subscribe(&mailbox, &reader).await, subscribed(&mailbox));
+    for n in 1..=8u8 {
+        client.expect_message(&mailbox, n.into(), &envelope(n)).await;
+    }
+    client.ack(&mailbox, 8).await;
+    for n in 9..=20u8 {
+        assert_eq!(
+            relay.post(&mailbox, envelope(n)).await.0,
+            StatusCode::ACCEPTED
+        );
+        client.expect_message(&mailbox, n.into(), &envelope(n)).await;
+        client.ack(&mailbox, n.into()).await;
+    }
     assert_eq!(
-        (status, json),
+        relay.post(&mailbox, ENVELOPE.to_vec()).await,
         (StatusCode::TOO_MANY_REQUESTS, error("rate_limited"))
     );
 
@@ -493,27 +520,12 @@ async fn rate_limit_and_full_mailbox() {
         StatusCode::ACCEPTED
     );
 
-    // An hour later two more fit, then the mailbox holds 8 and is full.
+    // An hour later, the mailbox accepts messages again.
     relay.clock.advance(3600);
-    for _ in 0..2 {
-        assert_eq!(
-            relay.post(&mailbox, ENVELOPE.to_vec()).await.0,
-            StatusCode::ACCEPTED
-        );
-    }
-    assert_eq!(relay.waiting(&mailbox), 8);
-    let (status, json) = relay.post(&mailbox, ENVELOPE.to_vec()).await;
     assert_eq!(
-        (status, json),
-        (StatusCode::TOO_MANY_REQUESTS, error("mailbox_full"))
+        relay.post(&mailbox, ENVELOPE.to_vec()).await.0,
+        StatusCode::ACCEPTED
     );
-    // A refused message does not count against the rate limit.
-    for _ in 0..4 {
-        assert_eq!(
-            relay.post(&mailbox, ENVELOPE.to_vec()).await.1,
-            error("mailbox_full")
-        );
-    }
 }
 
 #[tokio::test]

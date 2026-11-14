@@ -155,7 +155,7 @@ Fehlercodes:
 | 404 | `unknown_reader` | Leser nicht eingetragen |
 | 413 | `too_large` | Rumpf länger als 512 Byte |
 | 429 | `mailbox_full` | Schon 8 wartende Nachrichten |
-| 429 | `rate_limited` | Mehr als 6 Einlieferungen in der letzten Stunde |
+| 429 | `rate_limited` | Mehr als 20 Einlieferungen in der letzten Stunde |
 
 Ein Gutschein gilt 10 Minuten und für genau ein Postfach. Das Relay nimmt beliebige Rümpfe bis 512 Byte an und prüft ihren Inhalt nicht.
 

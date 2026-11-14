@@ -165,7 +165,7 @@ Der Push-Dienst (ntfy) sieht nur, wann ein Gerät geweckt wird.
 ### Schutz vor Missbrauch
 
 - Postfächer nur mit Zugangstoken oder Gutschein.
-- Höchstens 8 wartende Nachrichten und 6 Einlieferungen pro Stunde je Postfach.
+- Höchstens 8 wartende Nachrichten und 20 Einlieferungen pro Stunde je Postfach (entschieden am 14.11.2026; zuvor 6, was bei Kopplung, Regeländerungen und Antworten schon im normalen Gebrauch das `ende` blockieren konnte). Die Grenze zählt alle Nachrichten, weil das Relay die Typen nicht kennt; sie ist kein Ersatz für die Regeln für Anfragen.
 - Postfächer ohne Abruf seit 90 Tagen werden gelöscht.
 
 Diese Grenzen schützen nur das Relay. Die Regeln für Anfragen setzt das Gerät des Angefragten durch, weil das Relay die Nachrichtentypen nicht kennt.

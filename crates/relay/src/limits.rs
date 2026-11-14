@@ -16,7 +16,7 @@ pub const MAX_WAITING_MESSAGES: usize = 8;
 
 /// At most this many messages are accepted per mailbox within
 /// [`RATE_WINDOW_SECS`].
-pub const MAX_DELIVERIES_PER_WINDOW: usize = 6;
+pub const MAX_DELIVERIES_PER_WINDOW: usize = 20;
 
 /// Window for [`MAX_DELIVERIES_PER_WINDOW`].
 pub const RATE_WINDOW_SECS: i64 = 60 * 60;

@@ -108,6 +108,7 @@ Umfang:
 ### M8 – Härtung
 - Durchsicht von Verschlüsselung und Relay durch eine zweite Person.
 - Anleitung für Selbsthoster, inklusive abgeschalteter Protokolle im Reverse-Proxy.
+  - Hinweis darin: Das Relay schickt Wecksignale nur an öffentliche Adressen. ntfy muss ohnehin aus dem Internet erreichbar sein, sonst bekommt das Handy unterwegs keine Wecksignale. Laufen Relay und ntfy auf demselben Heimserver und kann der Router Verbindungen an die eigene öffentliche Adresse nicht zurückleiten (NAT-Loopback), hilft kein lokaler DNS-Eintrag auf die private Adresse, weil das Relay ihn ablehnt. Die Lösung liegt im eigenen Netz, etwa NAT-Loopback im Router einschalten.
 - Verhalten bei Relay-Ausfall, Uhrzeitabweichung und verlorenem Gerät testen.
 - **Fertig, wenn:** jemand ohne Vorwissen mit der Anleitung ein Relay aufsetzen und zwei Geräte koppeln kann.
 
