@@ -9,8 +9,9 @@ exclude = ["app"]
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.85"
-repository = "https://github.com/irgendwer92/Are-You-Alive-"
+# 1.89 for file locks in std (lz-core store).
+rust-version = "1.89"
+repository = "https://github.com/irgendwer92/Lebenszeichen"
 publish = false
 
 [workspace.dependencies]

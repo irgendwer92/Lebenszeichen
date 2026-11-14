@@ -1,0 +1,6 @@
+# Used by "docker build -f crates/relay/Dockerfile ." (BuildKit).
+*
+!Cargo.toml
+!Cargo.lock
+!crates/
+crates/**/target/

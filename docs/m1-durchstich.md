@@ -122,7 +122,7 @@ Die CI prüft nach dem Bauen, dass das Symbol `Java_io_github_irgendwer92_lebens
 1. Auf GitHub: **Actions → Android-Prototyp →** letzter grüner Lauf **→ Artifacts →** `lebenszeichen-m1-arm64-debug-apk` herunterladen und entpacken. Darin liegt `lebenszeichen-m1-arm64-debug.apk`. Mit der GitHub-CLI:
 
    ```sh
-   gh run download --repo irgendwer92/are-you-alive- --name lebenszeichen-m1-arm64-debug-apk
+   gh run download --repo irgendwer92/Lebenszeichen --name lebenszeichen-m1-arm64-debug-apk
    ```
 
 2. Installieren, entweder per USB:

@@ -36,6 +36,8 @@ B lädt A ein. Danach sind beide gleichberechtigt und können sich gegenseitig a
 3. **Beide sehen einen Prüfcode.** Sechs Ziffern, abgeleitet aus beiden öffentlichen Schlüsseln. Wurde der QR-Code direkt vom Bildschirm gescannt, ist der Vergleich überflüssig. Wurde die Einladung verschickt, schützt er vor einem Angreifer, der sie unterwegs ausgetauscht hat.
 4. **B bestätigt** und schickt `hallo-ok`. Beide vergeben lokal einen Namen für den Kontakt und tauschen ihre `regeln` aus.
 
+Stimmt der Prüfcode nicht, lehnt die Seite, die das bemerkt, die Kopplung ab: Sie schickt `ende` und löscht ihr Postfach, die Gegenseite sieht "Kopplung abgelehnt" (entschieden am 14.11.2026). Geht bei B nach der ersten Annahme ein weiteres `hallo` für dieselbe Einladung ein, warnt Bs App deutlich: Der Code ist dann noch jemandem bekannt, und der Prüfcode muss besonders sorgfältig verglichen werden.
+
 Namen werden nie übertragen. Jede Seite benennt ihre Kontakte selbst.
 
 ## Kontakt entfernen
@@ -165,7 +167,7 @@ Der Push-Dienst (ntfy) sieht nur, wann ein Gerät geweckt wird.
 ### Schutz vor Missbrauch
 
 - Postfächer nur mit Zugangstoken oder Gutschein.
-- Höchstens 8 wartende Nachrichten und 6 Einlieferungen pro Stunde je Postfach.
+- Höchstens 8 wartende Nachrichten und 20 Einlieferungen pro Stunde je Postfach (entschieden am 14.11.2026; zuvor 6, was bei Kopplung, Regeländerungen und Antworten schon im normalen Gebrauch das `ende` blockieren konnte). Die Grenze zählt alle Nachrichten, weil das Relay die Typen nicht kennt; sie ist kein Ersatz für die Regeln für Anfragen.
 - Postfächer ohne Abruf seit 90 Tagen werden gelöscht.
 
 Diese Grenzen schützen nur das Relay. Die Regeln für Anfragen setzt das Gerät des Angefragten durch, weil das Relay die Nachrichtentypen nicht kennt.

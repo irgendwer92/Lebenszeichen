@@ -2,13 +2,12 @@ name: Android-Prototyp
 
 # Baut die Debug-APK des Durchstichs aus M1. Der Ablauf ist die einzige
 # Stelle, an der der Android-Teil übersetzt wird; siehe docs/m1-durchstich.md.
+#
+# Bis M4 nur von Hand zu starten (Actions → Android-Prototyp → Run workflow,
+# oder: gh workflow run android-prototype.yml --ref <zweig>). Für M4 kommt der
+# Auslöser für Pull Requests auf app/** und crates/** zurück.
 
 on:
-  pull_request:
-    paths:
-      - "app/**"
-      - "crates/**"
-      - ".github/workflows/android-prototype.yml"
   workflow_dispatch:
 
 permissions:

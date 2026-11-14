@@ -12,8 +12,15 @@ Kein Chat, kein Onlinestatus, kein Zeitplan, keine Alarmkette.
 Meilenstein M1 in Arbeit: Ein Wegwerf-Prototyp für Android prüft, ob ein
 Wecksignal die beendete App erreicht und die Kotlin-Schicht den Rust-Kern
 aufrufen kann. Der Test auf einem Gerät ist bestanden, ein Lauf über eine ganze
-Nacht steht noch aus; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md). Darüber hinaus gibt es noch
-keine Funktion.
+Nacht steht noch aus; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md).
+
+Meilenstein M2 in Arbeit: `crates/wire` setzt das Drahtformat aus
+[docs/drahtformat.md](docs/drahtformat.md) um (Klartext der Nachrichten,
+Einladung, Prüfung des Umschlags), `crates/core` Verschlüsselung, Kopplung,
+die Regeln für Anfragen und den Speicher als JSON-Datei, `crates/cli` den
+Client `lz` für die Kommandozeile (siehe unten). Das Relay (`crates/relay`,
+Programm `lz-relay`) wird über Umgebungsvariablen eingestellt und lässt sich
+als Docker-Image bauen: `docker build -f crates/relay/Dockerfile .`
 
 | Meilenstein | Inhalt |
 |---|---|
@@ -26,6 +33,44 @@ keine Funktion.
 | M6 | Windows |
 | M7 | Lokale Schnittstelle für Zustandsmeldungen |
 | M8 | Härtung |
+
+## Kommandozeile
+
+`lz` ist der Client ohne Oberfläche. Jedes Gerät hat eine Zustandsdatei, wählbar
+mit `--state <pfad>` oder `LZ_STATE`; Vorgabe ist
+`$XDG_DATA_HOME/lebenszeichen/device.json` (sonst
+`~/.local/share/lebenszeichen/device.json`).
+
+```sh
+# Einmalig: Gerät anlegen. Mit Zugangstoken kann es einladen.
+lz init --relay https://relay.example.org --access-token <b64url>
+
+# Anna lädt Bert ein und gibt ihm den Code (10 Minuten gültig).
+lz invite Bert              # mit --voucher darf Bert ein Postfach auf Annas Relay anlegen
+# Bert nimmt an und sieht einen sechsstelligen Prüfcode.
+lz accept Anna LZ1-…
+# Anna holt die Annahme ab, vergleicht den Prüfcode und bestätigt.
+lz sync
+lz confirm Bert             # stimmt der Prüfcode nicht: lz reject Bert
+# Bert holt die Bestätigung und Annas Regeln ab.
+lz sync
+
+lz request Anna             # nach einem Lebenszeichen fragen
+lz respond Bert             # die offene Anfrage beantworten
+lz report Bert "schläft"    # einen Zustand melden; die Anfrage bleibt offen
+lz rules Bert --interval-min 360 --expiry-min 1440 --weekly 7
+lz contacts                 # Kontakte, offene Anfragen, „wieder möglich ab …“
+lz listen                   # verbunden bleiben und Nachrichten sofort zeigen
+lz remove Bert              # Kontakt entfernen; Bert sieht das beim nächsten Abruf
+```
+
+`lz sync` holt alles Wartende ab und endet, `lz listen` bleibt verbunden.
+`--verbose` zeigt auch verworfene Nachrichten. Ein Gerät ohne Zugangstoken
+kann nur Einladungen mit Gutschein annehmen. Für lokale Tests sind
+`http://`-Adressen erlaubt; im Betrieb steht das Relay hinter TLS.
+
+Die Einladung muss innerhalb von 10 Minuten angenommen werden. Abholen kann
+die einladende Seite die Annahme auch später, bis zu 24 Stunden danach.
 
 ## Grundsätze
 
@@ -51,7 +96,9 @@ docs/        Konzept, Protokoll, Fahrplan, Durchstich M1, Entwurf der Lizenz-Aus
 ```
 
 `app/` gehört nicht zum Cargo-Workspace und wird nur vom CI-Ablauf
-"Android-Prototyp" gebaut. Die fertige APK liegt dort als Artefakt.
+"Android-Prototyp" gebaut. Die fertige APK liegt dort als Artefakt. Bis M4
+läuft er nur, wenn man ihn von Hand startet:
+`gh workflow run android-prototype.yml --ref <zweig>`.
 
 ## Entwickeln
 

@@ -29,16 +29,25 @@ Jede Nachricht auf dem Draht ist genau 297 Byte lang. Es gibt zwei Formen, die d
 |---|---|---|
 | 0 | 1 | Protokollversion, `0x01` |
 | 1 | 24 | Nonce, zufällig |
-| 25 | 272 | `crypto_box(klartext, nonce, pk_empfänger, sk_absender)`; Klartext 256 Byte, dahinter 16 Byte Prüfwert |
+| 25 | 16 | Prüfwert |
+| 41 | 256 | verschlüsselter Klartext |
+
+Byte 25 bis 296 sind genau die Ausgabe von `crypto_box_easy(klartext, nonce, pk_empfänger, sk_absender)`: libsodium stellt den Prüfwert vor das Chiffrat.
 
 **Form B, versiegelt** (`crypto_box_seal` aus libsodium), nur für `hello`:
 
 | Offset | Länge | Inhalt |
 |---|---|---|
 | 0 | 1 | Protokollversion, `0x01` |
-| 1 | 296 | `crypto_box_seal(klartext, pk_empfänger)`; Klartext 248 Byte, davor 32 Byte flüchtiger Schlüssel, dahinter 16 Byte Prüfwert |
+| 1 | 32 | flüchtiger öffentlicher Schlüssel |
+| 33 | 16 | Prüfwert |
+| 49 | 248 | verschlüsselter Klartext |
 
-Form B ist nötig, weil der Empfänger von `hello` den Schlüssel des Absenders noch nicht kennt. Der Empfänger wählt die Form nach seinem eigenen Zustand: Solange zu einem Postfach eine offene Einladung gehört und noch kein Kontakt, erwartet er Form B, danach nur noch Form A. Was sich nicht entschlüsseln lässt, wird still verworfen.
+Byte 1 bis 296 sind genau die Ausgabe von `crypto_box_seal(klartext, pk_empfänger)`.
+
+Form B ist nötig, weil der Empfänger von `hello` den Schlüssel des Absenders noch nicht kennt. Der Empfänger wählt die Form nach seinem eigenen Zustand: Solange zu einem Postfach eine offene Einladung gehört und noch kein Kontakt, erwartet er Form B, danach Form A. Lässt sich eine Nachricht an einen Kontakt nicht in Form A öffnen, versucht der Einladende Form B: Ein weiteres `hello` mit einem anderen Schlüssel als dem des Kontakts heißt, dass die Einladung ein zweites Mal angenommen wurde, und wird als Warnung angezeigt. Was sich auch so nicht entschlüsseln lässt, wird still verworfen.
+
+`end` gilt auch vor dem Abschluss der Kopplung, in beide Richtungen. So lehnt eine Seite eine Kopplung sichtbar ab, deren Prüfcode nicht stimmt.
 
 ## Klartext
 
@@ -93,7 +102,7 @@ Die Einladung wird als QR-Code oder als Text weitergegeben: die Zeichen `LZ1-`, 
 
 Base32 in Großbuchstaben passt in den alphanumerischen Modus von QR-Codes und bleibt als Text abtippbar. Beim Einlesen sind Kleinbuchstaben, Leerzeichen und Zeilenumbrüche zu dulden.
 
-Der Einladende nimmt je Einladung genau ein `hello` an, und nur vor der Ablaufzeit (Vorgabe: 10 Minuten nach dem Erzeugen).
+Der Einladende nimmt je Einladung genau ein `hello` an, und nur, wenn es vor der Ablaufzeit abgeschickt wurde (Vorgabe: 10 Minuten nach dem Erzeugen). Maßgeblich ist die Absendezeit im `hello`, nicht der Zeitpunkt des Abholens; abholen kann der Einladende, solange das Zeitfenster gegen Wiedereinspielen es erlaubt, also bis gut 24 Stunden nach der Ablaufzeit. Erst danach löscht er Einladung und Postfach.
 
 ### Prüfcode
 
@@ -115,6 +124,10 @@ Der Angefragte prüft jede eingehende `request` gegen seine Regeln für diesen K
 3. In den letzten 7 × 24 Stunden wurden bereits so viele Anfragen dieses Kontakts angenommen, wie das Wochenlimit erlaubt.
 
 Sonst wird die Anfrage angenommen und gezählt. Eine gemeldete Antwort schließt die Anfrage nicht; sie bleibt offen, bis sie manuell beantwortet wird oder abläuft.
+
+Zeitpunkt einer Anfrage ist ihre Absendezeit, höchstens aber die eigene Uhrzeit beim Empfang. Ablaufzeit und Wochenlimit rechnen ab diesem Zeitpunkt, damit beide Seiten denselben Moment zählen, auch wenn die Zustellung sich verzögert hat. Eine Anfrage, die erst nach ihrer Ablaufzeit ankommt, wird verworfen und nicht gezählt.
+
+Eine Antwort gilt, wenn sie abgeschickt wurde, solange die Anfrage noch nicht abgelaufen war, auch wenn sie später ankommt. Je Anfrage nimmt der Anfragende höchstens eine gemeldete und eine manuelle Antwort an; nach einer manuellen wird keine gemeldete mehr angenommen.
 
 Der Anfragende wendet dieselbe Prüfung mit den Regeln der Gegenseite auf seine eigenen gesendeten Anfragen an, um den Knopf zu sperren und den nächsten möglichen Zeitpunkt anzuzeigen. Maßgeblich bleibt die Prüfung beim Angefragten.
 
@@ -144,7 +157,7 @@ Fehlercodes:
 | 404 | `unknown_reader` | Leser nicht eingetragen |
 | 413 | `too_large` | Rumpf länger als 512 Byte |
 | 429 | `mailbox_full` | Schon 8 wartende Nachrichten |
-| 429 | `rate_limited` | Mehr als 6 Einlieferungen in der letzten Stunde |
+| 429 | `rate_limited` | Mehr als 20 Einlieferungen in der letzten Stunde |
 
 Ein Gutschein gilt 10 Minuten und für genau ein Postfach. Das Relay nimmt beliebige Rümpfe bis 512 Byte an und prüft ihren Inhalt nicht.
 
@@ -198,13 +211,31 @@ Diese Punkte gehen über `protokoll.md` hinaus und sind neu:
 
 - **Festes Binärformat** statt JSON oder CBOR im Klartext: klein, ohne Parser und auf Microcontrollern einfach.
 - **Versiegelte Form für `hello`**, weil der Empfänger den Absender noch nicht kennt.
+- **Prüfwert vor dem Chiffrat**, wie libsodium ihn ausgibt. Die erste Fassung dieses Dokuments hatte ihn dahinter; berichtigt am 14.11.2026, bevor Code darauf aufbaute.
 - **Einladung als Base32 mit Vorsatz `LZ1-`**; damit ist die offene Frage zum Format aus `protokoll.md` beantwortet.
 - **Prüfcode über SHA-256.**
 - **Mindestabstand zählt ab der manuellen Antwort**; eine gemeldete Antwort schließt die Anfrage nicht.
+- **Annahme einer Einladung zählt nach der Absendezeit des `hello`**, damit der Einladende nicht innerhalb von 10 Minuten abholen muss. Preis: Die Absendezeit setzt der Absender selbst. Wer einen Code abfängt, kann ein zurückdatiertes `hello` schicken; ein abgefangener Code bleibt so bis zu gut 24 Stunden statt 10 Minuten nutzbar. Er gilt weiterhin nur einmal, und der Prüfcode zeigt, dass der falsche Kontakt angenommen hat.
+- **Zeitpunkt einer Anfrage ist ihre Absendezeit**, begrenzt durch die Uhr des Empfängers; verspätet angekommene Anfragen und rechtzeitig abgeschickte Antworten werden danach beurteilt.
 - **Zeitfenster gegen Wiedereinspielen** von 24 Stunden plus 10 Minuten Toleranz. Ein Gerät mit stark falscher Uhr kann deshalb nicht teilnehmen.
 - **Relay: JSON für Steuerung, rohe Bytes für Nachrichten, kumulative Quittungen.**
 - **Wecksignal nur an Leser ohne offene Verbindung**, mit festem Rumpf `wake`.
 - **Schutz des Relays vor missbräuchlichen Push-Adressen.**
-- **SQLite als Speicher des Relays.** Das Speicherformat des Kerns bleibt offen; der Kern spricht seinen Speicher über eine Schnittstelle an.
+- **SQLite als Speicher des Relays.** Der Kern spricht seinen Speicher über eine Schnittstelle an und speichert in einer JSON-Datei je Gerät (siehe `konzept.md`).
+
+Klarstellungen, die bei der Umsetzung des Relays (`crates/relay`) getroffen wurden:
+
+- **Reihenfolge der Prüfungen:** Fehlt der Token oder ist er nicht `b64url` von 32 Byte, kommt `401`. Danach wird das Postfach gesucht; ein unbekanntes Postfach meldet `404 unknown_mailbox` auch dann, wenn der Token nicht passen würde, damit ein entfernter Client das sicher erkennt. Erst dann wird der Token verglichen (`401`).
+- **Unlesbare Kennungen** in Pfaden (nicht `b64url` oder falsche Länge) ergeben `400 bad_request`. Hashes in `POST /v1/mailboxes` müssen 64 Hex-Ziffern sein; Großbuchstaben werden geduldet.
+- **Gutschein:** Er steht wie ein Token im Kopf `Authorization: Bearer …`. Ein unbekannter, eingelöster oder abgelaufener Gutschein ergibt `401`. Er gilt genau 600 Sekunden.
+- **Leerer Rumpf** bei `POST …/messages` ergibt `400 bad_request`. Der `Content-Type` wird nicht geprüft.
+- **Grenzen gleichzeitig überschritten:** Die Ratenbegrenzung wird vor dem Füllstand geprüft, es kommt dann `rate_limited`. Abgelehnte Einlieferungen zählen nicht mit. „Wartend“ heißt: noch gespeichert, auch wenn einzelne Leser sie schon quittiert haben.
+- **Ratenbegrenzung nur im Speicher:** Die Eingangszeiten für die Grenze von 6 je Stunde hält das Relay nur im Arbeitsspeicher und nur eine Stunde lang. Nach einem Neustart beginnt die Zählung neu.
+- **Fehler des Relays selbst** melden `500` mit `{"error":"internal"}`.
+- **Leser:** Höchstens 16 Leser je Postfach, darüber `400 bad_request`, weil jeder Leser ein Wecksignal auslösen kann. Ein neu eingetragener Leser beginnt mit Quittung 0 und erhält alle wartenden Nachrichten; ein erneutes `PUT` ändert nur die Push-Adresse. Ein Rumpf `{}` gilt wie `{"push_url":null}`. Wird ein Leser ausgetragen, löscht das Relay sofort die Nachrichten, die alle verbleibenden Leser quittiert haben.
+- **Push-Adresse:** höchstens 1024 Byte, nur `https`, ohne Benutzername und Passwort, nicht `localhost`, als IP-Adresse nur öffentliche. Das Relay löst den Rechnernamen beim Wecken selbst auf und verbindet sich nur mit den geprüften öffentlichen Adressen (IPv4 und IPv6), damit eine zweite Auflösung nichts anderes liefern kann. Kein Proxy, keine Weiterleitungen, Zeitgrenze 5 Sekunden. `LZ_PUSH_ALLOWED_HOSTS` vergleicht den Rechnernamen genau, ohne Groß- und Kleinschreibung und ohne Unterdomänen. Ungültige Adressen ergeben beim Eintragen `400 bad_request`.
+- **Tag der letzten Nutzung:** Ihn setzen das Anlegen des Postfachs, das Eintragen eines Lesers, `subscribe` und `ack`, nicht aber das Einliefern. Gelöscht wird ein Postfach, dessen Tag mehr als 90 Tage zurückliegt. Das Relay räumt alle 5 Minuten auf.
+- **Quittungen:** `seq` wird nie wiederverwendet, auch nicht nach dem Löschen von Nachrichten. Eine Quittung über die höchste vergebene `seq` hinaus wird auf diese begrenzt, damit sie keine künftigen Nachrichten erfasst. Auf `ack` antwortet das Relay nicht, außer mit einem Fehler.
+- **WebSocket-Fehler:** `code` ist einer der Fehlercodes oben (`bad_request`, `unauthorized`, `unknown_mailbox`, `unknown_reader`, `internal`). Bei einem unlesbaren Rahmen fehlt das Feld `mailbox`. `ack` für ein Postfach, das diese Verbindung nicht abonniert hat, ergibt `bad_request`. Wird ein abonniertes Postfach gelöscht oder der Leser ausgetragen, schickt das Relay `unknown_mailbox` bzw. `unknown_reader` und beendet das Abonnement. Ein erneutes `subscribe` derselben Verbindung auf dasselbe Postfach ersetzt das alte Abonnement. Höchstens 256 Postfächer je Verbindung, Rahmen höchstens 4 KiB.
 
 Nicht festgelegt: die Nachrichten zwischen eigenen Geräten (M5) und das Verhalten beim Wechsel des Relays.

@@ -60,7 +60,19 @@ Wegwerf-Prototyp, der nur das Risiko klärt. Ergebnis und Einzelheiten stehen in
 - **Fertig, wenn:** das auf einem echten Gerät zehnmal hintereinander klappt, auch nach einem Neustart und über Nacht.
 - **Abbruchkriterium:** Geht das mit Tauri nicht zuverlässig, wird hier auf Flutter gewechselt. Kern und Relay bleiben davon unberührt.
 
-### M2 – Kern und Relay
+### M2 – Kern und Relay (begonnen am 14.11.2026)
+
+Stand:
+
+- Erledigt: Drahtformat in `crates/wire` ohne Verschlüsselung (Klartext aller sechs Nachrichtentypen, Einladung als `LZ1-`-Code, Prüfung des Umschlags).
+- Erledigt: Verschlüsselung und Kopplung in `crates/core` (beide Umschlagformen byteweise gegen libsodium geprüft, Prüfcode, Ablauf von Einladung bis `hello_ok`, Zeitfenster gegen Wiedereinspielen).
+- Erledigt: Regeln für Anfragen in `crates/core` (offene Anfrage, Mindestabstand, gleitendes Wochenlimit, auf beiden Seiten mit derselben Prüfung), Antworten, gemeldete Antworten, Entfernen, Erkennen wiederholter Nachrichten.
+- Erledigt: Speicher in `crates/core` als eine JSON-Datei je Gerät, mit Sperre und atomarem Ersetzen.
+- Erledigt: Relay `lz-relay` (axum, SQLite) mit allen Aufrufen aus `drahtformat.md`, Zustellung per WebSocket mit Quittungen, Wecksignal mit Schutz vor privaten Zieladressen, Aufräumregeln und Docker-Image (`crates/relay/Dockerfile`); Integrationstests laufen ohne Netz.
+- Erledigt: Kommandozeile `lz` in `crates/cli` (Einladen mit und ohne Gutschein, Annehmen, Bestätigen, Abrufen per WebSocket mit Quittung nach dem Speichern, Anfragen, Antworten, Melden, Regeln, Entfernen samt Erkennen über `unknown_mailbox`), getestet gegen ein Relay im Speicher.
+
+Umfang:
+
 - Nachrichtenhülle, Verschlüsselung, Kopplung, Anfrage und Antwort, Regeln samt Wochenlimit, Entfernen.
 - Relay mit Postfächern, Lesern, Gutscheinen, Aufräumregeln; als Docker-Image.
 - Mehrere Leser pro Postfach sind von Anfang an vorgesehen.
@@ -70,12 +82,13 @@ Wegwerf-Prototyp, der nur das Risiko klärt. Ergebnis und Einzelheiten stehen in
 ### M3 – Linux-Desktop
 - Oberfläche: Kontaktliste, Anfrage-Knopf, Einladung als QR- und Textcode, Einstellungen pro Kontakt.
 - Tray, dauerhafte Verbindung, Vordergrund-Fenster ohne Tastaturfokus, Benachrichtigung als Rückfall.
+- Offen aus einer Dependabot-Meldung vom 14.11.2026: Tauri 2 braucht auf Linux die GTK-3-Bindungen und damit `glib` 0.18; behoben ist der Fehler in `VariantStrIter` erst ab 0.20, das es nur für GTK 4 gibt. Die betroffene Funktion ruft weder Tauri noch GTK, WebKit, `wry` oder `tao` auf, und der Android-Build enthält `glib` gar nicht. Mit dem Linux-Build erneut prüfen, ob Tauri inzwischen auf neuere Bindungen umgestiegen ist.
 - **Fertig, wenn:** Desktop-App und `cli` sich gegenseitig anfragen können.
 
 ### M4 – Android-App
 - Der Prototyp aus M1 wird durch die richtige Anbindung an den Kern ersetzt.
 - QR-Code scannen, Vollbild-Anzeige, Benachrichtigung als Rückfall.
-- Signierte APK aus der CI.
+- Signierte APK aus der CI. Dafür den Ablauf "Android-Prototyp" wieder automatisch bei Pull Requests starten lassen; seit dem 14.11.2026 läuft er nur von Hand. Mit den Abhängigkeiten aus M2 (`crypto_box`, `serde`, `rust-version` 1.89) wurde er noch nicht gebaut; der erste Lauf zeigt, ob der Android-Build damit durchläuft.
 - **Fertig, wenn:** Handy und Desktop zweier Personen sich gegenseitig anfragen können. Ab hier ist die App im Alltag nutzbar, mit einem Gerät pro Person.
 
 ### M5 – Mehrere Geräte
@@ -96,6 +109,7 @@ Wegwerf-Prototyp, der nur das Risiko klärt. Ergebnis und Einzelheiten stehen in
 ### M8 – Härtung
 - Durchsicht von Verschlüsselung und Relay durch eine zweite Person.
 - Anleitung für Selbsthoster, inklusive abgeschalteter Protokolle im Reverse-Proxy.
+  - Hinweis darin: Das Relay schickt Wecksignale nur an öffentliche Adressen. ntfy muss ohnehin aus dem Internet erreichbar sein, sonst bekommt das Handy unterwegs keine Wecksignale. Laufen Relay und ntfy auf demselben Heimserver und kann der Router Verbindungen an die eigene öffentliche Adresse nicht zurückleiten (NAT-Loopback), hilft kein lokaler DNS-Eintrag auf die private Adresse, weil das Relay ihn ablehnt. Die Lösung liegt im eigenen Netz, etwa NAT-Loopback im Router einschalten.
 - Verhalten bei Relay-Ausfall, Uhrzeitabweichung und verlorenem Gerät testen.
 - **Fertig, wenn:** jemand ohne Vorwissen mit der Anleitung ein Relay aufsetzen und zwei Geräte koppeln kann.
 
@@ -133,6 +147,6 @@ Was jetzt schon dafür getan wird, ohne Mehraufwand:
 
 - Wortlaut der App-Store-Ausnahme.
 - Technik der Oberfläche in `app/ui` (schlichtes HTML oder ein kleines Framework).
-- Speicherformat des Kerns (SQLite oder Dateien) und Schutz der Schlüssel auf dem Gerät.
+- Schutz der Schlüssel auf dem Gerät. Das Speicherformat ist entschieden, siehe `konzept.md`.
 - Lokale Schnittstelle um "offene Anfrage vorhanden?" und "beantworten" erweitern (für Microcontroller-Satelliten).
 - Eingeschränkte Geräterolle für Geräte ohne sicheren Speicher.
