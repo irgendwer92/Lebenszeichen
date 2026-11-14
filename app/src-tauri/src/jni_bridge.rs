@@ -1,13 +1,30 @@
-//! JNI entry points for the Kotlin layer.
+//! JNI entry points for the Kotlin layer, and the Android setup of the
+//! certificate check.
 //!
-//! These functions are called by `CoreBridge.kt` after it has loaded this
+//! The entry points are called by `CoreBridge.kt` after it has loaded this
 //! library with `System.loadLibrary`. They must not touch Tauri: when a wake
 //! signal starts the process there is no activity, no WebView and no Tauri
 //! runtime. They only forward to `lz-core`.
 
-use jni::JNIEnv;
-use jni::objects::{JClass, JString};
+use jni::objects::{JClass, JObject, JString};
 use jni::sys::jstring;
+use jni::{JNIEnv, JavaVM};
+
+/// Sets up `rustls-platform-verifier` with the application context that Tao
+/// keeps for the running app. Without it, every TLS connection fails. Later
+/// calls do nothing.
+pub fn init_tls() -> Result<(), String> {
+    let android = ndk_context::android_context();
+    // SAFETY: Tao stores the Java VM and a global reference to the
+    // application context before the app starts (`ndk_glue::onCreate`);
+    // both stay valid for the life of the process. Neither type frees
+    // anything when dropped.
+    let vm = unsafe { JavaVM::from_raw(android.vm().cast()) }.map_err(|e| e.to_string())?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let context = unsafe { JObject::from_raw(android.context().cast()) };
+    rustls_platform_verifier::android::init_with_env(&mut env, context)
+        .map_err(|e| format!("Zertifikatsprüfung nicht eingerichtet: {e}"))
+}
 
 /// `CoreBridge.marker(event: String, requestId: String): String`
 ///

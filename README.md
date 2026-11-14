@@ -9,10 +9,9 @@ Kein Chat, kein Onlinestatus, kein Zeitplan, keine Alarmkette.
 
 ## Stand
 
-Meilenstein M1 in Arbeit: Ein Wegwerf-Prototyp für Android prüft, ob ein
-Wecksignal die beendete App erreicht und die Kotlin-Schicht den Rust-Kern
-aufrufen kann. Der Test auf einem Gerät ist bestanden, ein Lauf über eine ganze
-Nacht steht noch aus; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md).
+Meilenstein M1 ist abgeschlossen: Ein Wegwerf-Prototyp für Android hat
+gezeigt, dass ein Wecksignal die beendete App erreicht und die Kotlin-Schicht
+den Rust-Kern aufrufen kann; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md).
 
 Meilenstein M2 ist abgeschlossen: `crates/wire` setzt das Drahtformat aus
 [docs/drahtformat.md](docs/drahtformat.md) um (Klartext der Nachrichten,
@@ -23,7 +22,8 @@ Kommandozeile (siehe unten). Das Relay (`crates/relay`,
 Programm `lz-relay`) wird über Umgebungsvariablen eingestellt und lässt sich
 als Docker-Image bauen: `docker build -f crates/relay/Dockerfile .`
 
-Meilenstein M3 (Linux-Desktop) hat begonnen; Stand in
+Meilenstein M3 (Linux-Desktop) ist bis auf zwei Prüfungen auf anderen
+Systemen fertig, M4 (Android-App) hat begonnen; Stand in
 [docs/fahrplan.md](docs/fahrplan.md).
 
 | Meilenstein | Inhalt |
@@ -93,12 +93,12 @@ die einladende Seite die Annahme auch später, bis zu 24 Stunden danach.
 crates/
 ├── wire/    Nachrichtenhülle und Relay-Schnittstelle (no_std)
 ├── core/    Protokoll, Verschlüsselung, Regelprüfung, Speicher
-├── client/  Relay-Zugang, Befehle, Abruf; genutzt von lz und der Desktop-App
+├── client/  Relay-Zugang, Befehle, Abruf; genutzt von lz und der App
 ├── cli/     Client ohne Oberfläche (Programm: lz)
 └── relay/   Relay-Server (Programm: lz-relay)
 app/
-├── src-tauri/   Tauri-Hülle: Linux-Desktop (M3) und Android-Prototyp (M1)
-├── ui/          Oberfläche (schlichtes HTML ohne Build-Schritt)
+├── src-tauri/   Tauri-Hülle für Linux-Desktop und Android
+├── ui/          Oberfläche für beide (schlichtes HTML ohne Build-Schritt)
 └── android/     Kotlin-Schicht: UnifiedPush, Vollbild-Anzeige, Benachrichtigungen
 docs/        Konzept, Protokoll, Fahrplan, Durchstich M1, Entwurf der Lizenz-Ausnahme
 ```
@@ -116,9 +116,10 @@ Ohne `LZ_STATE` liegt der Zustand im Datenverzeichnis der App
 (`~/.local/share/io.github.irgendwer92.lebenszeichen/device.json`); die
 Desktop-App ist damit ein eigenes Gerät neben `lz`.
 
-Die Android-APK baut nur der CI-Ablauf "Android-Prototyp". Die fertige APK liegt dort als Artefakt. Bis M4
-läuft er nur, wenn man ihn von Hand startet:
-`gh workflow run android-prototype.yml --ref <zweig>`.
+Die Android-APK baut der CI-Ablauf "Android-Prototyp" bei Pull Requests, die
+`app/` oder `crates/` berühren, oder von Hand:
+`gh workflow run android-prototype.yml --ref <zweig>`. Die fertige APK liegt
+dort als Artefakt.
 
 ## Entwickeln
 
@@ -131,8 +132,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check        # braucht: cargo install cargo-deny
 ```
 
-Dieselben Schritte laufen bei jedem Push und Pull Request in der CI. Sie
-erfassen `crates/`, nicht `app/`.
+Dieselben Schritte laufen bei jedem Push und Pull Request in der CI, für
+`app/src-tauri` in einem eigenen Schritt (Desktop-App für Linux).
 Bezeichner im Code sind englisch, die Dokumentation ist deutsch.
 
 ## Lizenz

@@ -109,6 +109,11 @@ jobs:
           "$build_tools/aapt2" dump badging "$apk" | grep -E "^(package|sdkVersion|targetSdkVersion|native-code)" || true
           echo "::endgroup::"
 
+          echo "::group::Zertifikatsprüfung (rustls-platform-verifier)"
+          grep -a -l -F "Lorg/rustls/platformverifier/CertificateVerifier;" "$unpacked"/classes*.dex \
+            || { echo "fehlt im Bytecode: CertificateVerifier"; exit 1; }
+          echo "::endgroup::"
+
           echo "::group::Klassen der Kotlin-Schicht"
           for class in CoreBridge PushServiceImpl ReactionReceiver RequestActivity AnswerWorker LebenszeichenPlugin; do
             grep -a -l -F "Lio/github/irgendwer92/lebenszeichen/droid/$class;" "$unpacked"/classes*.dex \

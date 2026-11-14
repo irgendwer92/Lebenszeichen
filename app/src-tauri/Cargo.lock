@@ -2039,6 +2039,8 @@ dependencies = [
  "jni",
  "lz-client",
  "lz-core",
+ "ndk-context",
+ "rustls-platform-verifier",
  "serde",
  "tauri",
  "tauri-build",
