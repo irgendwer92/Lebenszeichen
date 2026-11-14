@@ -52,8 +52,8 @@ Jeder Meilenstein endet mit etwas, das sich ausprobieren lässt.
 - **Fertig, wenn:** ein Commit grün durch die CI läuft. Erfüllt.
 - Noch offen aus M0: Renovate-App installieren, Wortlaut der App-Store-Ausnahme juristisch gegenlesen (Entwurf in `lizenz-ausnahme.md`).
 
-### M1 – Durchstich auf Android (vorläufig abgeschlossen am 13.11.2026)
-Wegwerf-Prototyp, der nur das Risiko klärt. Ergebnis und Einzelheiten stehen in `m1-durchstich.md`: Alle zehn Durchläufe sind auf einem Fairphone 4 bestanden, die Entscheidung für Tauri bleibt. Offen ist ein Lauf über eine ganze Nacht; getestet wurde mit einer Stunde Ruhezeit.
+### M1 – Durchstich auf Android (abgeschlossen am 14.11.2026)
+Wegwerf-Prototyp, der nur das Risiko klärt. Ergebnis und Einzelheiten stehen in `m1-durchstich.md`: Alle zehn Durchläufe sind auf einem Fairphone 4 bestanden, die Entscheidung für Tauri bleibt. Der Nachtlauf (Zeilen 9 und 10 des Testprotokolls) ist in der Nacht vom 13. auf den 14.11.2026 nach Protokoll nachgeholt und bestanden.
 - Wecksignal über UnifiedPush kommt an, während die App beendet ist.
 - Die Kotlin-Schicht ruft eine Funktion im Rust-Kern auf.
 - Die Anfrage erscheint im Vordergrund; Antippen und Wegklicken lösen je einen Aufruf an einen Testserver aus.

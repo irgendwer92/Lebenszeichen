@@ -1,10 +1,10 @@
 # Lebenszeichen – M1: Durchstich auf Android
 
-Stand: 13.11.2026. Gehört zu `konzept.md` und `fahrplan.md`.
+Stand: 14.11.2026. Gehört zu `konzept.md` und `fahrplan.md`.
 
 M1 ist ein Wegwerf-Prototyp. Er klärt eine einzige Frage: Trägt die Entscheidung für Tauri auf Android, obwohl beim Wecksignal keine WebView läuft? Wenn nicht, wird laut Fahrplan hier auf Flutter gewechselt.
 
-**Ergebnis: Der Durchstich ist auf einem Gerät gelungen.** Alle zehn Durchläufe des Testprotokolls sind am 13.11.2026 auf einem Fairphone 4 bestanden, die beiden Nacht-Durchläufe allerdings mit einer Stunde Ruhezeit statt sechs. Einzelheiten stehen im Abschnitt [Testergebnis](#testergebnis-vom-13112026), was weiterhin offen ist, im Abschnitt [Nicht verifiziert](#nicht-verifiziert).
+**Ergebnis: Der Durchstich ist auf einem Gerät gelungen.** Alle zehn Durchläufe des Testprotokolls sind auf einem Fairphone 4 bestanden. Die beiden Nacht-Durchläufe liefen am 13.11.2026 zunächst mit einer Stunde Ruhezeit und in der Nacht vom 13. auf den 14.11.2026 dann nach Protokoll. Einzelheiten stehen im Abschnitt [Testergebnis](#testergebnis-vom-13112026), was weiterhin offen ist, im Abschnitt [Nicht verifiziert](#nicht-verifiziert).
 
 ## Was der Prototyp tut
 
@@ -256,8 +256,8 @@ Getestet vom Projektinhaber mit der APK aus der CI.
 | 6 | Bildschirm an, „Alle löschen“ | ja |
 | 7 | Zwei Wecksignale, eine antippen, eine wegwischen | ja |
 | 8 | Nach Neustart, ohne die App zu öffnen | ja |
-| 9 | Ruhezeit, Wecksignal danach | ja, mit 1 Stunde statt 6 Stunden Ruhezeit |
-| 10 | Wecksignal vor der Ruhezeit, Reaktion danach | ja, mit 1 Stunde statt 6 Stunden Ruhezeit |
+| 9 | Ruhezeit, Wecksignal danach | ja; in der Nacht vom 13. auf den 14.11.2026 nach Protokoll wiederholt (mindestens 6 Stunden, nicht am Ladegerät, Bildschirm aus) |
+| 10 | Wecksignal vor der Ruhezeit, Reaktion danach | ja; in der Nacht vom 13. auf den 14.11.2026 nach Protokoll wiederholt (mindestens 6 Stunden, nicht am Ladegerät, Bildschirm aus) |
 
 Die Zeiten lagen durchweg im erwarteten Bereich, fast ohne Verzögerung. Einzelne Uhrzeiten wurden deshalb nicht je Durchlauf notiert. Ein Beispielpaar (Themennamen gekürzt):
 
@@ -274,11 +274,11 @@ Die Kennung der Anfrage trägt die Uhrzeit, zu der das Gerät geweckt wurde: die
 **Bewertung:**
 
 - Die Frage von M1 ist für dieses Gerät beantwortet: Wecken, Aufruf des Kerns, Vollbild und Banner, Antwort beim Antippen, Schließen und Wegwischen funktionieren mit Tauri und der Kotlin-Schicht. Für einen Wechsel auf Flutter gibt es keinen Anlass.
-- Das Abnahmekriterium „über Nacht“ ist streng genommen noch offen. Eine Stunde Ruhe reicht, damit Android in den Schlafmodus wechselt, sagt aber wenig über das Verhalten nach vielen Stunden. Ein Nachtlauf nach den Zeilen 9 und 10 der Tabelle oben holt das nach.
+- Das Abnahmekriterium „über Nacht“ ist erfüllt. Am 13.11.2026 liefen die Zeilen 9 und 10 zunächst nur mit einer Stunde Ruhe; in der Nacht vom 13. auf den 14.11.2026 sind beide nach Protokoll wiederholt und bestanden.
 - „Nicht stören“ (nachträglich geprüft): Die Anfrage erscheint dann nur in der Benachrichtigungsleiste, ohne Vollbild und ohne Banner. Das entspricht dem Konzept.
 - Netzausfall (beobachtet, nicht gezielt getestet): Nach abgeschaltetem Netz kommt die Anfrage an, kurz nachdem das Netz wieder da ist. Die Wiederholung der Antwort nach einem Netzfehler bleibt ungeprüft.
 - Weitere Geräte: Ein Praxistest mit zwei Android-Geräten ist für später vorgesehen.
-- Der Projektinhaber hat M1 damit vorläufig abgeschlossen. Der Nachtlauf wird nachgeholt.
+- M1 ist abgeschlossen.
 - Beim Einrichten waren zunächst Endpunkt und Antwort-Adresse gleich. Der Hinweis dazu steht jetzt unter „Einrichten“.
 
 ## Fallstricke auf Android
@@ -301,7 +301,7 @@ Geprüft ist: Der Rust-Teil des Workspace besteht Formatierung, Clippy und Tests
 
 Die folgende Liste stammt aus der Zeit vor dem ersten Gerätetest. Der Test vom 13.11.2026 hat auf einem Gerät gezeigt, dass die App startet, die Oberfläche arbeitet, Registrierung und Empfang über UnifiedPush mit ntfy klappen, der Kern im geweckten Prozess aufrufbar ist, Anzeige und Reaktionen stimmen, genau ein POST entsteht und nach einem Neustart nichts zu tun ist.
 
-Weiterhin offen sind: ein Lauf über eine ganze Nacht, andere Geräte und Hersteller, die Reaktion über die Home-Taste, die Wiederholung nach Netzfehlern, Android unter 12 und die Lizenzen der App-Abhängigkeiten.
+Weiterhin offen sind: andere Geräte und Hersteller, die Reaktion über die Home-Taste, die Wiederholung nach Netzfehlern, Android unter 12 und die Lizenzen der Android-Bibliotheken (Connector, WorkManager, Tink). Die Rust-Abhängigkeiten der App prüft seit M3 die CI.
 
 Die ursprüngliche Liste, zur Einordnung:
 
@@ -320,6 +320,6 @@ Nicht ausprobiert und deshalb ohne Gewähr sind auch die Hinweise zur ntfy-App (
 
 ## Wie es weitergeht
 
-- Der Test ist bestanden, die Entscheidung für Tauri bleibt. Offen ist ein Lauf über eine ganze Nacht.
+- Der Test ist bestanden, auch über Nacht; die Entscheidung für Tauri bleibt.
 - Der Prototyp bleibt liegen, bis M4 ihn ersetzt. Übernommen werden die Erkenntnisse, nicht der Code.
 - Für M4 offen: Android-Projekt einchecken, eigene Signatur, App-Symbol, Ablauf nach 24 Stunden, Ton und Vibration über die Systemeinstellungen des Kanals.
