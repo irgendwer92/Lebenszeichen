@@ -92,14 +92,19 @@ Stand:
 - Erledigt: Strenge Content Security Policy für die App (nur eigene Dateien und Tauris IPC, kein eingebetteter Code) statt `"csp": null` aus M1. Die Desktop-Oberfläche läuft damit; der Android-Prototyp nutzt dieselbe Konfiguration und wird in M4 geprüft.
 - Erledigt: Einladung als QR-Code (`crates/client/src/qr.rs`, Fehlerkorrektur M, alphanumerischer Modus; Version 8 bis 12). Die Desktop-App zeigt ihn schwarz auf weiß über dem Textcode, als SVG aus dem DOM, sodass die CSP unverändert bleibt; `lz invite --qr` zeigt ihn im Terminal. Mit einer QR-App auf dem Handy gescannt, der Text stimmt. Scannen in der App kommt mit M4.
 - Erledigt: Einstellungen pro Kontakt in der Desktop-App: wie oft der Kontakt fragen darf (Mindestabstand und Ablauf in halben Stunden bis zu einer Woche, Wochenlimit 0 bis 999), dazu lesend, wie oft man selbst fragen darf. Gesendet werden nur geänderte Werte. Entschieden: Der Schalter für gemeldete Antworten kommt mit M7, zusammen mit der Automatik, die ihn nutzt.
-- Noch offen in M3: Vordergrund-Fenster ohne Tastaturfokus (X11; unter Wayland bleibt die Benachrichtigung der Weg), Gestaltung der Desktop-Oberfläche überarbeiten (bisher nur die schlichten Regeln aus M1).
+- Benachrichtigung: Die App fragt den Benachrichtigungsdienst nach seinen Fähigkeiten (`GetCapabilities`) und bietet Knopf und Klick nur an, wo er sie kennt; der Text nennt nur die Wege, die es gibt. Genutzt wird nur der freedesktop-Standard, nichts KDE-Eigenes. Geprüft ist bisher nur KDE Plasma.
+- Teil des Fertig-Kriteriums erfüllt am 14.11.2026: Desktop-App und `lz` haben sich gegenseitig angefragt und geantwortet, gegen ein lokales Relay mit frisch gekoppelten Geräten. Die App fragt über den Knopf und erhält die Antwort im Hintergrund; `lz` fragt, die App zeigt die Anfrage als Benachrichtigung und im Fenster, die Antwort kommt bei `lz` an. Die Sperren danach folgen den Regeln beider Seiten.
+- Noch offen in M3: Benachrichtigung unter GNOME prüfen (bisher nur KDE Plasma), Vordergrund-Fenster ohne Tastaturfokus (X11; unter Wayland bleibt die Benachrichtigung der Weg), Gestaltung der Desktop-Oberfläche überarbeiten (bisher nur die schlichten Regeln aus M1).
 
 Umfang:
 
 - Oberfläche: Kontaktliste, Anfrage-Knopf, Einladung als QR- und Textcode, Einstellungen pro Kontakt.
 - Tray, dauerhafte Verbindung, Vordergrund-Fenster ohne Tastaturfokus, Benachrichtigung als Rückfall.
 - Offen aus einer Dependabot-Meldung vom 14.11.2026: Tauri 2 braucht auf Linux die GTK-3-Bindungen und damit `glib` 0.18; behoben ist der Fehler in `VariantStrIter` erst ab 0.20, das es nur für GTK 4 gibt. Die betroffene Funktion ruft weder Tauri noch GTK, WebKit, `wry` oder `tao` auf, und der Android-Build enthält `glib` gar nicht. Mit dem Linux-Build erneut prüfen, ob Tauri inzwischen auf neuere Bindungen umgestiegen ist.
-- **Fertig, wenn:** Desktop-App und `cli` sich gegenseitig anfragen können.
+- **Fertig, wenn:** Desktop-App und `cli` sich gegenseitig anfragen können,
+  die Anfrage unter X11 als Vordergrund-Fenster ohne Tastaturfokus erscheint,
+  die Benachrichtigung unter KDE Plasma und GNOME geprüft ist und die
+  Desktop-Oberfläche überarbeitet ist.
 
 ### M4 – Android-App
 - Der Prototyp aus M1 wird durch die richtige Anbindung an den Kern ersetzt.

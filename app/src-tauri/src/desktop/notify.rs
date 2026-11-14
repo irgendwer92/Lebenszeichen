@@ -35,6 +35,59 @@ const CLOSED_BY_USER: u32 = 2;
 /// during "Nicht stören"; that is intended (see `docs/konzept.md`).
 const CRITICAL: u8 = 2;
 
+/// What the notification server can do, from `GetCapabilities`.
+#[derive(Clone, Copy, Debug, Default)]
+struct Capabilities {
+    /// Buttons, and the click on the notification itself.
+    actions: bool,
+    /// A text below the summary.
+    body: bool,
+}
+
+impl Capabilities {
+    fn from_list(list: &[String]) -> Self {
+        Self {
+            actions: list.iter().any(|c| c == "actions"),
+            body: list.iter().any(|c| c == "body"),
+        }
+    }
+}
+
+/// Text and buttons of a notification.
+#[derive(Debug, PartialEq, Eq)]
+struct Content {
+    summary: String,
+    body: &'static str,
+    actions: Vec<&'static str>,
+}
+
+/// Builds the notification for what the server can do: the text names
+/// only the ways of answering that the server offers.
+fn content(name: &str, caps: Capabilities) -> Content {
+    // The summary is plain text, so the name needs no escaping there.
+    let summary = format!("{name} fragt nach einem Lebenszeichen");
+    let body = match (caps.body, caps.actions) {
+        (false, _) => "",
+        (true, true) => "Klicken oder Schließen sendet dein Lebenszeichen.",
+        (true, false) => "Schließen sendet dein Lebenszeichen.",
+    };
+    let actions = if caps.actions {
+        vec![
+            "default",
+            "Lebenszeichen senden",
+            RESPOND,
+            "Lebenszeichen senden",
+        ]
+    } else {
+        Vec::new()
+    };
+    Content {
+        summary,
+        body,
+        actions,
+    }
+}
+
 /// An open request: name of the contact and its sending time.
 type Key = (String, u64);
 
@@ -130,6 +183,7 @@ struct Shared {
     app: AppHandle,
     path: PathBuf,
     proxy: Proxy<'static>,
+    caps: Capabilities,
     screen: Arc<Mutex<Screen>>,
     wake: mpsc::Sender<()>,
 }
@@ -148,11 +202,17 @@ pub fn start(app: AppHandle, path: PathBuf) -> Option<Notifier> {
         })
         .inspect_err(|error| eprintln!("Keine Benachrichtigungen: {error}"))
         .ok()?;
+    // Without an answer, assume a server that can only show and close.
+    let caps = proxy
+        .call::<_, _, Vec<String>>("GetCapabilities", &())
+        .map(|list| Capabilities::from_list(&list))
+        .unwrap_or_default();
     let (wake, woken) = mpsc::channel();
     let shared = Shared {
         app,
         path,
         proxy,
+        caps,
         screen: Arc::default(),
         wake: wake.clone(),
     };
@@ -270,24 +330,16 @@ impl Shared {
             ("urgency", Value::U8(CRITICAL)),
             ("suppress-sound", Value::Bool(true)),
         ]);
-        // The summary is plain text, so the name needs no escaping there.
-        let summary = format!("{name} fragt nach einem Lebenszeichen");
-        let body = "Klicken oder Schließen sendet dein Lebenszeichen.";
-        let actions = [
-            "default",
-            "Lebenszeichen senden",
-            RESPOND,
-            "Lebenszeichen senden",
-        ];
+        let content = content(name, self.caps);
         self.proxy.call(
             "Notify",
             &(
                 "Lebenszeichen",
                 0u32,
                 "",
-                summary.as_str(),
-                body,
-                &actions[..],
+                content.summary.as_str(),
+                content.body,
+                &content.actions[..],
                 hints,
                 0i32,
             ),
@@ -305,7 +357,32 @@ impl Shared {
 
 #[cfg(test)]
 mod tests {
-    use super::{Entry, Gone, Key, Screen};
+    use super::{Capabilities, Entry, Gone, Key, Screen, content};
+
+    #[test]
+    fn content_follows_the_capabilities() {
+        let caps = |list: &[&str]| {
+            Capabilities::from_list(&list.iter().map(|c| c.to_string()).collect::<Vec<_>>())
+        };
+
+        let full = content("Bert", caps(&["actions", "body", "persistence"]));
+        assert_eq!(full.summary, "Bert fragt nach einem Lebenszeichen");
+        assert_eq!(
+            full.body,
+            "Klicken oder Schließen sendet dein Lebenszeichen."
+        );
+        assert_eq!(full.actions.len(), 4);
+
+        let no_actions = content("Bert", caps(&["body"]));
+        assert_eq!(no_actions.body, "Schließen sendet dein Lebenszeichen.");
+        assert!(no_actions.actions.is_empty());
+
+        // Also what a server without an answer to GetCapabilities gets.
+        let bare = content("Bert", Capabilities::default());
+        assert_eq!(bare.summary, "Bert fragt nach einem Lebenszeichen");
+        assert_eq!(bare.body, "");
+        assert!(bare.actions.is_empty());
+    }
 
     fn key(name: &str, since: u64) -> Key {
         (name.to_owned(), since)
