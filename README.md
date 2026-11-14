@@ -23,7 +23,9 @@ Programm `lz-relay`) wird über Umgebungsvariablen eingestellt und lässt sich
 als Docker-Image bauen: `docker build -f crates/relay/Dockerfile .`
 
 Meilenstein M3 (Linux-Desktop) ist bis auf zwei Prüfungen auf anderen
-Systemen fertig, M4 (Android-App) hat begonnen; Stand in
+Systemen fertig. In M4 (Android-App) ist das Fertig-Kriterium erfüllt: Handy
+und Desktop fragen sich gegenseitig an, über ein eigenes Relay mit
+Wecksignalen; offen ist noch die signierte APK. Stand in
 [docs/fahrplan.md](docs/fahrplan.md).
 
 | Meilenstein | Inhalt |
