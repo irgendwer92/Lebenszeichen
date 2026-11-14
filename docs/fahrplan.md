@@ -146,7 +146,6 @@ Was jetzt schon dafür getan wird, ohne Mehraufwand:
 ## Offene Punkte
 
 - Wortlaut der App-Store-Ausnahme.
-- Technik der Oberfläche in `app/ui` (schlichtes HTML oder ein kleines Framework).
 - Schutz der Schlüssel auf dem Gerät. Das Speicherformat ist entschieden, siehe `konzept.md`.
 - Lokale Schnittstelle um "offene Anfrage vorhanden?" und "beantworten" erweitern (für Microcontroller-Satelliten).
 - Eingeschränkte Geräterolle für Geräte ohne sicheren Speicher.
