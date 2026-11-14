@@ -496,7 +496,10 @@ async fn intercepted_invitation_is_noticed_and_rejected_visibly() {
     assert!(bert.device().contacts.is_empty());
     // Anna's mailbox is gone, so Bert is not told that she sees it.
     let out = bert.out.take();
-    assert!(out.contains("abgelehnt") && !out.contains("sieht das"), "{out}");
+    assert!(
+        out.contains("abgelehnt") && !out.contains("sieht das"),
+        "{out}"
+    );
 }
 
 #[tokio::test]

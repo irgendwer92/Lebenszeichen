@@ -17,7 +17,7 @@ rand = "0.9"
 # certificates. reqwest 0.13 pulls in aws-lc-rs or webpki-root-certs, whose
 # licenses are not on the allowlist in deny.toml.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
