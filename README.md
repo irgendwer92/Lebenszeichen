@@ -96,7 +96,9 @@ docs/        Konzept, Protokoll, Fahrplan, Durchstich M1, Entwurf der Lizenz-Aus
 ```
 
 `app/` gehört nicht zum Cargo-Workspace und wird nur vom CI-Ablauf
-"Android-Prototyp" gebaut. Die fertige APK liegt dort als Artefakt.
+"Android-Prototyp" gebaut. Die fertige APK liegt dort als Artefakt. Bis M4
+läuft er nur, wenn man ihn von Hand startet:
+`gh workflow run android-prototype.yml --ref <zweig>`.
 
 ## Entwickeln
 
