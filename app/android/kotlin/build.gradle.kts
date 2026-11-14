@@ -54,7 +54,8 @@ rootProject.allprojects {
     repositories {
         maven {
             url = uri(rustlsVerifier.first)
-            metadataSources { artifact() }
+            // The .pom names the packaging (aar); without it Gradle looks for a .jar.
+            metadataSources { mavenPom() }
         }
     }
 }
