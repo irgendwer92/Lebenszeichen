@@ -495,9 +495,14 @@ async fn rate_limit_and_full_mailbox() {
 
     // Once acknowledged, there is room again, up to 20 accepted per hour.
     let mut client = relay.connect().await;
-    assert_eq!(client.subscribe(&mailbox, &reader).await, subscribed(&mailbox));
+    assert_eq!(
+        client.subscribe(&mailbox, &reader).await,
+        subscribed(&mailbox)
+    );
     for n in 1..=8u8 {
-        client.expect_message(&mailbox, n.into(), &envelope(n)).await;
+        client
+            .expect_message(&mailbox, n.into(), &envelope(n))
+            .await;
     }
     client.ack(&mailbox, 8).await;
     for n in 9..=20u8 {
@@ -505,7 +510,9 @@ async fn rate_limit_and_full_mailbox() {
             relay.post(&mailbox, envelope(n)).await.0,
             StatusCode::ACCEPTED
         );
-        client.expect_message(&mailbox, n.into(), &envelope(n)).await;
+        client
+            .expect_message(&mailbox, n.into(), &envelope(n))
+            .await;
         client.ack(&mailbox, n.into()).await;
     }
     assert_eq!(

@@ -376,7 +376,8 @@ impl<R: Relay> Ctx<R> {
         };
         self.say(&format!("Einladung angenommen. Prüfcode: {code}"));
         self.say(&format!(
-            "Vergleiche ihn mit dem Prüfcode bei {name}. Gekoppelt seid ihr, sobald {name} bestätigt hat (lz sync)."
+            "Vergleiche ihn mit dem Prüfcode bei {name}. Gekoppelt seid ihr, sobald {name} bestätigt hat (lz sync).\n\
+             Stimmt er nicht überein: lz reject {name}"
         ));
         Ok(code)
     }
@@ -520,7 +521,42 @@ impl<R: Relay> Ctx<R> {
             self.say(&format!("Einladung für {name} zurückgezogen."));
             return Ok(());
         }
+        self.end_contact(name).await?;
+        self.say(&format!("{name} entfernt."));
+        Ok(())
+    }
 
+    /// Rejects a contact whose pairing is not complete, typically because the
+    /// verification codes did not match. The other side sees the rejection.
+    pub async fn reject(&mut self, name: &str) -> Result<()> {
+        let device = self.load()?;
+        let contact = device
+            .contacts
+            .iter()
+            .find(|c| c.name == name)
+            .ok_or_else(|| fail!("Keinen Kontakt namens {name} gefunden."))?;
+        let hint = match contact.state.contact.state {
+            PairingState::Paired => {
+                return Err(fail!(
+                    "{name} ist schon gekoppelt. Entfernen mit: lz remove {name}"
+                ));
+            }
+            PairingState::AwaitingConfirmation => format!("Neu einladen mit: lz invite {name}"),
+            PairingState::AwaitingHelloOk => format!("Bitte {name} um eine neue Einladung."),
+        };
+        let seen = if self.end_contact(name).await? {
+            "; die Gegenseite sieht das"
+        } else {
+            ""
+        };
+        self.say(&format!("{name} abgelehnt{seen}. {hint}"));
+        Ok(())
+    }
+
+    /// Sends `end` unless the contact has already ended, deletes the own
+    /// mailbox and drops the contact. Returns whether `end` was delivered.
+    async fn end_contact(&mut self, name: &str) -> Result<bool> {
+        let device = self.load()?;
         let contact = device
             .contacts
             .iter()
@@ -531,7 +567,8 @@ impl<R: Relay> Ctx<R> {
             contact.state.contact.own_mailbox,
             contact.read_token,
         );
-        if !contact.state.ended && contact.state.is_paired() {
+        let mut delivered = false;
+        if !contact.state.ended {
             let now = self.now();
             let (envelope, peer) = self.store.update(|device| {
                 let contact = contact_mut(device, name)?;
@@ -543,7 +580,8 @@ impl<R: Relay> Ctx<R> {
                 .deliver(&peer.relay, &peer.mailbox, &peer.send_token, &envelope)
                 .await
             {
-                Ok(()) | Err(RelayError::UnknownMailbox) => {}
+                Ok(()) => delivered = true,
+                Err(RelayError::UnknownMailbox) => {}
                 Err(error) => self.say(&format!(
                     "Warnung: {name} hat die Nachricht über das Ende nicht bekommen ({error}). \
                      Das Entfernen bemerkt {name} trotzdem bei der nächsten Anfrage."
@@ -561,8 +599,7 @@ impl<R: Relay> Ctx<R> {
             device.contacts.retain(|c| c.name != name);
             Ok::<_, Fail>(())
         })?;
-        self.say(&format!("{name} entfernt."));
-        Ok(())
+        Ok(delivered)
     }
 
     fn warn_unless_gone(&mut self, error: &RelayError) {
@@ -585,11 +622,14 @@ impl<R: Relay> Ctx<R> {
                 "beendet; entfernen mit: lz remove".to_owned()
             } else {
                 match state.contact.state {
-                    PairingState::AwaitingHelloOk => {
-                        format!("wartet auf die Bestätigung durch {name}")
-                    }
+                    PairingState::AwaitingHelloOk => format!(
+                        "wartet auf die Bestätigung durch {name}, Prüfcode {}; \
+                         stimmt er nicht: lz reject {name}",
+                        state.contact.verification_code()
+                    ),
                     PairingState::AwaitingConfirmation => format!(
-                        "hat angenommen, Prüfcode {}; bestätigen mit: lz confirm {name}",
+                        "hat angenommen, Prüfcode {}; bestätigen mit: lz confirm {name}, \
+                         ablehnen mit: lz reject {name}",
                         state.contact.verification_code()
                     ),
                     PairingState::Paired => "gekoppelt".to_owned(),

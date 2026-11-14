@@ -461,3 +461,48 @@ fn init_checks_its_input() {
     let error = app::init(&store, None, None, &mut out).unwrap_err();
     assert!(error.0.contains("gibt es schon"));
 }
+
+#[tokio::test]
+async fn intercepted_invitation_is_noticed_and_rejected_visibly() {
+    let world = World::new();
+    let mut anna = world.person(Some((RELAY_A, Some(TOKEN_A))));
+    let mut bert = world.person(Some((RELAY_B, Some(TOKEN_B))));
+    let mut mallory = world.person(Some((RELAY_B, Some(TOKEN_B))));
+
+    // Mallory intercepted the code and accepts before Bert does.
+    let code = anna.ctx.invite("Bert", false).await.unwrap();
+    let mallory_code = mallory.ctx.accept("Anna", &code).await.unwrap();
+    let bert_code = bert.ctx.accept("Anna", &code).await.unwrap();
+    assert_ne!(mallory_code, bert_code);
+
+    anna.sync().await;
+    let out = anna.out.take();
+    assert!(out.contains(&mallory_code), "{out}");
+    assert!(out.contains("ein weiteres Mal angenommen"), "{out}");
+    assert!(out.contains("lz reject Bert"), "{out}");
+
+    // Anna compares with Bert, the codes differ, she rejects.
+    anna.ctx.reject("Bert").await.unwrap();
+    assert!(anna.device().contacts.is_empty());
+    assert!(anna.out.take().contains("abgelehnt"));
+
+    mallory.sync().await;
+    assert!(mallory.out.take().contains("hat die Kopplung abgelehnt"));
+    assert!(mallory.contact("Anna").state.ended);
+
+    // Bert never gets `hello_ok`; he rejects on his side as well.
+    bert.sync().await;
+    bert.ctx.reject("Anna").await.unwrap();
+    assert!(bert.device().contacts.is_empty());
+    // Anna's mailbox is gone, so Bert is not told that she sees it.
+    let out = bert.out.take();
+    assert!(out.contains("abgelehnt") && !out.contains("sieht das"), "{out}");
+}
+
+#[tokio::test]
+async fn reject_only_before_pairing_is_complete() {
+    let world = World::new();
+    let (mut anna, _bert) = paired(&world).await;
+    let error = anna.ctx.reject("Bert").await.unwrap_err();
+    assert!(error.0.contains("lz remove Bert"), "{error:?}");
+}

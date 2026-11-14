@@ -97,6 +97,15 @@ pub enum Notice {
     Ended {
         name: String,
     },
+    /// The other side rejected the pairing.
+    Rejected {
+        name: String,
+    },
+    /// A further acceptance of an invitation arrived.
+    SecondAcceptance {
+        name: String,
+        paired: bool,
+    },
     /// A message was dropped. Shown only with `--verbose`.
     Dropped {
         name: Option<String>,
@@ -116,7 +125,8 @@ impl Notice {
         match self {
             Self::Accepted { name, code } => format!(
                 "{name} hat die Einladung angenommen. Prüfcode: {code}\n\
-                 Stimmt er mit dem Prüfcode der Gegenseite überein, bestätigen mit: lz confirm {name}"
+                 Stimmt er mit dem Prüfcode der Gegenseite überein, bestätigen mit: lz confirm {name}\n\
+                 Stimmt er nicht, ablehnen mit: lz reject {name}"
             ),
             Self::Paired { name } => format!("{name} hat die Kopplung bestätigt."),
             Self::Rules { name, rules: r } => {
@@ -129,6 +139,27 @@ impl Notice {
                 format!("{name}: {}", response(kind, *at, now))
             }
             Self::Ended { name } => format!("{name} hat die Verbindung beendet."),
+            Self::Rejected { name } => format!(
+                "{name} hat die Kopplung abgelehnt, vermutlich weil der Prüfcode nicht übereinstimmte. \
+                 Für einen neuen Versuch braucht es eine neue Einladung."
+            ),
+            Self::SecondAcceptance { name, paired } => {
+                let what = if *paired {
+                    format!(
+                        "Prüfe mit {name}, ob der Prüfcode wirklich übereinstimmte. \
+                         Wenn nicht: lz remove {name} und neu einladen."
+                    )
+                } else {
+                    format!(
+                        "Vergleiche den Prüfcode mit {name} besonders sorgfältig, bevor du bestätigst. \
+                         Stimmt er nicht: lz reject {name} und neu einladen."
+                    )
+                };
+                format!(
+                    "Achtung: Die Einladung an {name} wurde ein weiteres Mal angenommen, \
+                     der Code ist also noch jemand anderem bekannt. {what}"
+                )
+            }
             Self::Dropped { name, why } => match name {
                 Some(name) => format!("(verworfen, {name}: {why})"),
                 None => format!("(verworfen: {why})"),

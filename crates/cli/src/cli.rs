@@ -82,6 +82,11 @@ enum Command {
         /// Name des Kontakts
         name: String,
     },
+    /// Lehnt einen Kontakt ab, dessen Prüfcode nicht übereinstimmt (für die Gegenseite sichtbar)
+    Reject {
+        /// Name des Kontakts
+        name: String,
+    },
     /// Holt alle wartenden Nachrichten ab und endet dann
     Sync,
     /// Bleibt verbunden und zeigt Nachrichten, sobald sie eintreffen
@@ -174,6 +179,7 @@ pub async fn run() -> Result<()> {
         Command::Invite { name, voucher } => ctx.invite(&name, voucher).await.map(drop),
         Command::Accept { name, code } => ctx.accept(&name, &code).await.map(drop),
         Command::Confirm { name } => ctx.confirm(&name).await,
+        Command::Reject { name } => ctx.reject(&name).await,
         Command::Sync => ctx.sync().await.map(drop),
         Command::Listen => ctx.listen().await,
         Command::Contacts => ctx.contacts(),

@@ -45,7 +45,9 @@ Byte 25 bis 296 sind genau die Ausgabe von `crypto_box_easy(klartext, nonce, pk_
 
 Byte 1 bis 296 sind genau die Ausgabe von `crypto_box_seal(klartext, pk_empfänger)`.
 
-Form B ist nötig, weil der Empfänger von `hello` den Schlüssel des Absenders noch nicht kennt. Der Empfänger wählt die Form nach seinem eigenen Zustand: Solange zu einem Postfach eine offene Einladung gehört und noch kein Kontakt, erwartet er Form B, danach nur noch Form A. Was sich nicht entschlüsseln lässt, wird still verworfen.
+Form B ist nötig, weil der Empfänger von `hello` den Schlüssel des Absenders noch nicht kennt. Der Empfänger wählt die Form nach seinem eigenen Zustand: Solange zu einem Postfach eine offene Einladung gehört und noch kein Kontakt, erwartet er Form B, danach Form A. Lässt sich eine Nachricht an einen Kontakt nicht in Form A öffnen, versucht der Einladende Form B: Ein weiteres `hello` mit einem anderen Schlüssel als dem des Kontakts heißt, dass die Einladung ein zweites Mal angenommen wurde, und wird als Warnung angezeigt. Was sich auch so nicht entschlüsseln lässt, wird still verworfen.
+
+`end` gilt auch vor dem Abschluss der Kopplung, in beide Richtungen. So lehnt eine Seite eine Kopplung sichtbar ab, deren Prüfcode nicht stimmt.
 
 ## Klartext
 

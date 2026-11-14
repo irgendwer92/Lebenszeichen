@@ -245,7 +245,7 @@ pub(crate) fn new_message(body: Body, now: u64, rng: &mut impl CryptoRngCore) ->
 }
 
 /// Rejects messages outside the window against replay.
-fn check_time(message: &Message, now: u64) -> Result<(), Error> {
+pub(crate) fn check_time(message: &Message, now: u64) -> Result<(), Error> {
     let too_old = message.sent_at.saturating_add(MAX_MESSAGE_AGE_SECS) < now;
     let too_new = message.sent_at > now.saturating_add(MAX_CLOCK_AHEAD_SECS);
     if too_old || too_new {

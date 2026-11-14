@@ -36,6 +36,8 @@ B lädt A ein. Danach sind beide gleichberechtigt und können sich gegenseitig a
 3. **Beide sehen einen Prüfcode.** Sechs Ziffern, abgeleitet aus beiden öffentlichen Schlüsseln. Wurde der QR-Code direkt vom Bildschirm gescannt, ist der Vergleich überflüssig. Wurde die Einladung verschickt, schützt er vor einem Angreifer, der sie unterwegs ausgetauscht hat.
 4. **B bestätigt** und schickt `hallo-ok`. Beide vergeben lokal einen Namen für den Kontakt und tauschen ihre `regeln` aus.
 
+Stimmt der Prüfcode nicht, lehnt die Seite, die das bemerkt, die Kopplung ab: Sie schickt `ende` und löscht ihr Postfach, die Gegenseite sieht "Kopplung abgelehnt" (entschieden am 14.11.2026). Geht bei B nach der ersten Annahme ein weiteres `hallo` für dieselbe Einladung ein, warnt Bs App deutlich: Der Code ist dann noch jemandem bekannt, und der Prüfcode muss besonders sorgfältig verglichen werden.
+
 Namen werden nie übertragen. Jede Seite benennt ihre Kontakte selbst.
 
 ## Kontakt entfernen

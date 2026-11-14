@@ -9,7 +9,8 @@ use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::Error;
-use crate::pairing::{Contact, PairingState, new_message};
+use crate::crypto;
+use crate::pairing::{Contact, PairingState, check_time, new_message};
 use crate::rules::Ledger;
 use crate::wire::{
     Body, ENVELOPE_LEN, MessageId, REPLAY_MEMORY_SECS, Reason, Response, ResponseKind, Rules,
@@ -60,6 +61,13 @@ pub enum Event {
     },
     /// The other side ended the contact.
     Ended,
+    /// The other side rejected the pairing before it was complete, usually
+    /// because the verification codes did not match. The contact has ended.
+    Rejected,
+    /// Another `hello` with a different key arrived for the invitation this
+    /// contact came from. Someone else knows the invitation code; whoever
+    /// confirmed or confirms must be sure the verification code matched.
+    SecondAcceptance,
     /// The message was dropped silently.
     Ignored(Ignored),
 }
@@ -111,6 +119,9 @@ impl ContactState {
         now: u64,
         rng: &mut impl CryptoRngCore,
     ) -> Result<[[u8; ENVELOPE_LEN]; 2], Error> {
+        if self.ended {
+            return Err(Error::Ended);
+        }
         let hello_ok = self.contact.confirm(now, rng)?;
         Ok([hello_ok, self.announce_rules(now, rng)?])
     }
@@ -222,13 +233,17 @@ impl ContactState {
 
     /// Ends the contact and returns `end` for the other side.
     ///
-    /// The caller then deletes the own mailbox of this contact.
+    /// Also works before pairing is complete; that is how a pairing with a
+    /// wrong verification code is rejected visibly. The caller then deletes
+    /// the own mailbox of this contact.
     pub fn end(
         &mut self,
         now: u64,
         rng: &mut impl CryptoRngCore,
     ) -> Result<[u8; ENVELOPE_LEN], Error> {
-        self.check_active()?;
+        if self.ended {
+            return Err(Error::Ended);
+        }
         let envelope = self.contact.seal(Body::End, now, rng)?;
         self.ended = true;
         Ok(envelope)
@@ -242,19 +257,20 @@ impl ContactState {
         if self.ended {
             return Ok(Event::Ignored(Ignored::Ended));
         }
-        let message = self.contact.open(envelope, now)?;
-
-        self.seen
-            .retain(|seen| now < seen.at.saturating_add(REPLAY_MEMORY_SECS));
-        if self.seen.iter().any(|seen| seen.id == message.id) {
+        let message = match self.contact.open(envelope, now) {
+            Ok(message) => message,
+            Err(Error::Decrypt) => return self.receive_sealed(envelope, now),
+            Err(error) => return Err(error),
+        };
+        if self.remember(&message.id, message.sent_at, now) {
             return Ok(Event::Ignored(Ignored::Duplicate));
         }
-        self.seen.push(Seen {
-            id: message.id,
-            at: message.sent_at,
-        });
 
         if !self.is_paired() {
+            if message.body == Body::End {
+                self.ended = true;
+                return Ok(Event::Rejected);
+            }
             return Ok(match self.contact.receive_hello_ok(&message) {
                 Ok(()) => Event::Paired,
                 Err(_) => Event::Ignored(Ignored::NotExpected),
@@ -277,6 +293,39 @@ impl ContactState {
             }
             Body::Unknown(_) => Event::Ignored(Ignored::UnknownType),
         })
+    }
+
+    /// Handles an envelope that is not in the ordinary form for this contact.
+    ///
+    /// The only sealed message that makes sense here is a further `hello` for
+    /// the invitation this contact came from.
+    fn receive_sealed(&mut self, envelope: &[u8], now: u64) -> Result<Event, Error> {
+        let message = crypto::open_anonymous(envelope, &self.contact.key)?;
+        check_time(&message, now)?;
+        let Body::Hello(hello) = &message.body else {
+            return Err(Error::Decrypt);
+        };
+        if self.remember(&message.id, message.sent_at, now)
+            || hello.public_key == self.contact.peer_key
+        {
+            // Seen before, or the `hello` this contact was made from.
+            return Ok(Event::Ignored(Ignored::Duplicate));
+        }
+        Ok(Event::SecondAcceptance)
+    }
+
+    /// Remembers a received message; returns `true` if it was seen before.
+    fn remember(&mut self, id: &MessageId, sent_at: u64, now: u64) -> bool {
+        self.seen
+            .retain(|seen| now < seen.at.saturating_add(REPLAY_MEMORY_SECS));
+        if self.seen.iter().any(|seen| &seen.id == id) {
+            return true;
+        }
+        self.seen.push(Seen {
+            id: *id,
+            at: sent_at,
+        });
+        false
     }
 
     fn accept_request(&mut self, id: MessageId, at: u64, now: u64) -> Event {
@@ -586,6 +635,49 @@ mod tests {
             Event::Ignored(Ignored::Ended)
         );
         assert_eq!(b.end(T, &mut OsRng).unwrap_err(), Error::Ended);
+    }
+
+    #[test]
+    fn rejected_pairing_is_visible_on_both_sides() {
+        // The inviting side rejects after comparing the code.
+        let (pending, invitation) = PendingInvitation::create(address(1), None, T, &mut OsRng);
+        let (a, hello) = accept(&invitation, address(3), T, &mut OsRng).unwrap();
+        let mut a = ContactState::new(a);
+        let mut b = ContactState::new(pending.receive_hello(&hello, T).unwrap());
+        let end = b.end(T, &mut OsRng).unwrap();
+        assert_eq!(a.receive(&end, T).unwrap(), Event::Rejected);
+        assert!(a.ended);
+
+        // The accepting side rejects before `hello_ok` arrived.
+        let (pending, invitation) = PendingInvitation::create(address(1), None, T, &mut OsRng);
+        let (a, hello) = accept(&invitation, address(3), T, &mut OsRng).unwrap();
+        let mut a = ContactState::new(a);
+        let mut b = ContactState::new(pending.receive_hello(&hello, T).unwrap());
+        let end = a.end(T, &mut OsRng).unwrap();
+        assert_eq!(b.receive(&end, T).unwrap(), Event::Rejected);
+        assert_eq!(b.confirm(T, &mut OsRng).unwrap_err(), Error::Ended);
+    }
+
+    #[test]
+    fn second_acceptance_of_an_invitation_is_reported() {
+        let (pending, invitation) = PendingInvitation::create(address(1), None, T, &mut OsRng);
+        let (_, first) = accept(&invitation, address(3), T, &mut OsRng).unwrap();
+        let (_, second) = accept(&invitation, address(5), T + 60, &mut OsRng).unwrap();
+        let mut b = ContactState::new(pending.receive_hello(&first, T).unwrap());
+
+        assert_eq!(
+            b.receive(&first, T + 1).unwrap(),
+            Event::Ignored(Ignored::Duplicate)
+        );
+        assert_eq!(b.receive(&second, T + 61).unwrap(), Event::SecondAcceptance);
+        assert_eq!(
+            b.receive(&second, T + 62).unwrap(),
+            Event::Ignored(Ignored::Duplicate)
+        );
+        // Also after confirming, a further acceptance is reported.
+        b.confirm(T + 70, &mut OsRng).unwrap();
+        let (_, third) = accept(&invitation, address(7), T + 80, &mut OsRng).unwrap();
+        assert_eq!(b.receive(&third, T + 81).unwrap(), Event::SecondAcceptance);
     }
 
     #[test]

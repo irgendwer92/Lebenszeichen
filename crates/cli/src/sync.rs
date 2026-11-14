@@ -399,6 +399,21 @@ fn receive_for_contact(contact: &mut StoredContact, data: &[u8], now: u64) -> (N
                 token: contact.read_token,
             },
         ),
+        Event::Rejected => (
+            Notice::Rejected { name },
+            FollowUp::DeleteOwn {
+                relay: contact.own_relay,
+                mailbox: contact.state.contact.own_mailbox,
+                token: contact.read_token,
+            },
+        ),
+        Event::SecondAcceptance => (
+            Notice::SecondAcceptance {
+                name,
+                paired: contact.state.is_paired(),
+            },
+            FollowUp::None,
+        ),
         Event::Ignored(why) => (
             Notice::Dropped {
                 name: Some(name),

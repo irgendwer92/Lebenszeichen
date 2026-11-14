@@ -51,7 +51,7 @@ lz invite Bert              # mit --voucher darf Bert ein Postfach auf Annas Rel
 lz accept Anna LZ1-…
 # Anna holt die Annahme ab, vergleicht den Prüfcode und bestätigt.
 lz sync
-lz confirm Bert
+lz confirm Bert             # stimmt der Prüfcode nicht: lz reject Bert
 # Bert holt die Bestätigung und Annas Regeln ab.
 lz sync
 
