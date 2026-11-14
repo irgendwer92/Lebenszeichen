@@ -15,7 +15,9 @@ use lz_client::relay::Http;
 use lz_client::show::{no_hints, reported, when};
 use lz_core::store::JsonFile;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
 /// How long a one-off fetch waits for further messages.
 const SYNC_IDLE: Duration = Duration::from_millis(1500);
@@ -26,6 +28,9 @@ const LISTEN_RETRY: Duration = Duration::from_secs(5);
 
 /// Event with one line of text from the background fetch.
 const LINE_EVENT: &str = "lz-line";
+
+/// Label of the only window.
+const MAIN_WINDOW: &str = "main";
 
 /// Where the state of this device lives.
 pub struct Desktop {
@@ -42,8 +47,77 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         None => app.path().app_data_dir()?.join("device.json"),
     };
     spawn_listener(app.handle().clone(), path.clone());
+    build_tray(app, path.clone())?;
+    keep_running_when_closed(app);
     app.manage(Desktop { path });
     Ok(())
+}
+
+/// Brings the window back, for the tray and for a second start of the app.
+pub fn show_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// Puts the app into the tray. Tray icons on Linux get no clicks, so
+/// everything goes through the menu.
+fn build_tray(app: &tauri::App, path: PathBuf) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Fenster zeigen", true, None::<&str>)?;
+    let sync = MenuItem::with_id(app, "sync", "Jetzt abrufen", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &sync, &quit])?;
+    let mut tray = TrayIconBuilder::with_id("main")
+        .tooltip("Lebenszeichen")
+        .menu(&menu)
+        .on_menu_event(move |app, event| match event.id().as_ref() {
+            "show" => show_window(app),
+            "sync" => spawn_sync(app.clone(), path.clone()),
+            "quit" => app.exit(0),
+            _ => {}
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
+/// Closing the window only hides it, so that fetching goes on. The app ends
+/// through "Beenden" in the tray.
+fn keep_running_when_closed(app: &tauri::App) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let hide = window.clone();
+        window.on_window_event(move |event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = hide.hide();
+            }
+        });
+    }
+}
+
+/// Fetches once for the tray; the lines go to the window like those of the
+/// background fetch.
+fn spawn_sync(app: AppHandle, path: PathBuf) {
+    std::thread::spawn(move || {
+        let sink = EventSink {
+            app: app.clone(),
+            pending: Vec::new(),
+        };
+        let outcome = runtime().and_then(|runtime| {
+            let mut ctx = new_ctx(path, Box::new(sink))?;
+            runtime
+                .block_on(ctx.sync())
+                .map(drop)
+                .map_err(|error| error.to_string())
+        });
+        if let Err(error) = outcome {
+            let _ = app.emit(LINE_EVENT, error);
+        }
+    });
 }
 
 /// Collects the text a command writes, line by line.

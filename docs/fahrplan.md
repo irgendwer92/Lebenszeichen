@@ -86,7 +86,9 @@ Stand:
 - Erledigt: gemeinsame Client-Schicht `crates/client` (`lz-client`): Relay-Zugang, alle Befehle, Abruf mit `sync` und `listen`, deutsche Texte und eine strukturierte Übersicht der Kontakte. `lz` ist nur noch die Kommandozeile darüber; die Desktop-App nutzt dieselbe Schicht.
 - Erledigt: Desktop-Hülle für Linux in `app/` (`ui/desktop.html`, `src-tauri/src/desktop.rs`): Gerät einrichten, Kontaktliste mit Anfrage-Knopf und „wieder möglich ab“, Einladen (Code als Text), Annehmen, Prüfcode bestätigen oder ablehnen, Antworten, Entfernen; Abruf im Hintergrund über `lz-client`. Die Android-Teile aus M1 sind unverändert. Am 14.11.2026 gegen ein lokales Relay und zwei `lz`-Geräte durchgeklickt; die dabei gefundenen Fehler sind behoben.
 - Erledigt: Gemeinsame Texte in `lz-client` nennen keine Befehle mehr. Wo ein nächster Schritt passt, steht ein `Hint`; `lz` macht daraus seinen Befehl, die Desktop-App zeigt nichts, weil sie Knöpfe hat.
-- Noch offen in M3: Einladung als QR-Code, Einstellungen pro Kontakt (Regeln, gemeldete Antworten), Tray, Vordergrund-Fenster ohne Tastaturfokus, Benachrichtigung als Rückfall.
+- Erledigt: Die CI baut die Desktop-App (Formatierung, Clippy, Tests) und prüft Lizenzen und Quellen ihres eigenen Lockfiles mit derselben `deny.toml`. Entschieden: Die Desktop-App ist ein eigenes Gerät mit eigenem Zustand im Datenverzeichnis der App, nicht dieselbe Datei wie `lz`.
+- Erledigt: Tray mit „Fenster zeigen“, „Jetzt abrufen“ und „Beenden“. Schließen versteckt das Fenster nur, der Abruf läuft weiter. Ein zweiter Start holt das Fenster der laufenden App zurück, statt ein zweites Mal abzurufen; so bleibt die App auch ohne Tray erreichbar. Unter Linux braucht der Tray zur Laufzeit `libayatana-appindicator` oder `libappindicator` (für das Linux-Paket in M8 vormerken).
+- Noch offen in M3: Einladung als QR-Code, Einstellungen pro Kontakt (Regeln, gemeldete Antworten), Vordergrund-Fenster ohne Tastaturfokus, Benachrichtigung als Rückfall, Gestaltung der Desktop-Oberfläche überarbeiten (bisher nur die schlichten Regeln aus M1), Content Security Policy statt `"csp": null`.
 
 Umfang:
 

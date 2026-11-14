@@ -20,9 +20,16 @@ mod jni_bridge;
 /// Panics if Tauri cannot start, for example without a WebView.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(not(desktop))]
     let builder = tauri::Builder::default().plugin(tauri_plugin_lebenszeichen::init());
+    // A second start only brings the window of the first one back; two
+    // instances would fetch for the same state file twice.
     #[cfg(desktop)]
-    let builder = builder
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            desktop::show_window(app);
+        }))
+        .plugin(tauri_plugin_lebenszeichen::init())
         .setup(desktop::setup)
         .invoke_handler(tauri::generate_handler![
             desktop::setup_state,
