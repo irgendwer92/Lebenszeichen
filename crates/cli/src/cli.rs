@@ -69,6 +69,9 @@ enum Command {
         /// Gutschein beilegen, damit die Gegenseite ein Postfach auf deinem Relay anlegen kann
         #[arg(long)]
         voucher: bool,
+        /// Den Code zusätzlich als QR-Code zeigen (für ein dunkles Terminal)
+        #[arg(long)]
+        qr: bool,
     },
     /// Nimmt eine Einladung an und zeigt den Prüfcode
     Accept {
@@ -177,7 +180,11 @@ pub async fn run() -> Result<()> {
     };
     match args.command {
         Command::Init { .. } => unreachable!("handled above"),
-        Command::Invite { name, voucher } => ctx.invite(&name, voucher).await.map(drop),
+        Command::Invite { name, voucher, qr } => ctx.invite(&name, voucher).await.map(|code| {
+            if qr {
+                println!("\n{}", lz_client::qr::terminal(&code));
+            }
+        }),
         Command::Accept { name, code } => ctx.accept(&name, &code).await.map(drop),
         Command::Confirm { name } => ctx.confirm(&name).await,
         Command::Reject { name } => ctx.reject(&name).await,

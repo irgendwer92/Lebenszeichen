@@ -7,6 +7,7 @@
 
 #[macro_use]
 pub mod ctx;
+pub mod qr;
 pub mod relay;
 pub mod show;
 pub mod sync;

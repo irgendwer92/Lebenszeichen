@@ -235,12 +235,44 @@ onSubmit("setup-form", async (data) => {
   });
 });
 
+/// Modules of light margin around a QR code, as in `lz_client::qr`.
+const QR_QUIET_ZONE = 4;
+
+/// Draws a QR code as one SVG path, one unit per module. Built through the
+/// DOM, so the Content Security Policy needs no exception for images.
+function qrSvg(qr) {
+  const ns = "http://www.w3.org/2000/svg";
+  const side = qr.width + 2 * QR_QUIET_ZONE;
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${side} ${side}`);
+  svg.setAttribute("shape-rendering", "crispEdges");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "QR-Code der Einladung");
+  const background = document.createElementNS(ns, "rect");
+  background.setAttribute("width", side);
+  background.setAttribute("height", side);
+  background.setAttribute("fill", "#fff");
+  let d = "";
+  qr.dark.forEach((dark, i) => {
+    if (!dark) return;
+    const x = (i % qr.width) + QR_QUIET_ZONE;
+    const y = Math.floor(i / qr.width) + QR_QUIET_ZONE;
+    d += `M${x} ${y}h1v1h-1z`;
+  });
+  const modules = document.createElementNS(ns, "path");
+  modules.setAttribute("d", d);
+  modules.setAttribute("fill", "#000");
+  svg.append(background, modules);
+  return svg;
+}
+
 onSubmit("invite-form", async (data, form) => {
-  const code = await call("invite", {
+  const invitation = await call("invite", {
     name: data.get("name"),
     voucher: data.get("voucher") === "on",
   });
-  $("invite-code").value = code;
+  $("invite-qr").replaceChildren(qrSvg(invitation.qr));
+  $("invite-code").value = invitation.code;
   $("invite-result").hidden = false;
   form.reset();
 });

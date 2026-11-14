@@ -73,6 +73,15 @@ button.quiet {
   opacity: 0.7;
 }
 
+/* Always black on white with its own margin: many scanners cannot read an
+   inverted code. */
+.qr svg {
+  display: block;
+  width: min(100%, 18rem);
+  height: auto;
+  margin: 0.5rem 0;
+}
+
 .error {
   border-color: #c33;
 }

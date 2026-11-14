@@ -14,6 +14,7 @@ use std::time::Duration;
 mod notify;
 
 use lz_client::ctx::{self, Clock, ContactView, Ctx, LastResponse, Overview, Status};
+use lz_client::qr::{self, Qr};
 use lz_client::relay::Http;
 use lz_client::show::{no_hints, reported, when};
 use lz_core::store::JsonFile;
@@ -421,14 +422,23 @@ pub async fn sync(state: tauri::State<'_, Desktop>) -> Result<Reply<()>, String>
     run(path(&state), async |ctx| ctx.sync().await.map(drop)).await
 }
 
+/// A new invitation: the code as text and as QR code.
+#[derive(Serialize)]
+pub struct Invitation {
+    code: String,
+    qr: Qr,
+}
+
 #[tauri::command]
 pub async fn invite(
     state: tauri::State<'_, Desktop>,
     name: String,
     voucher: bool,
-) -> Result<Reply<String>, String> {
+) -> Result<Reply<Invitation>, String> {
     run(path(&state), async move |ctx| {
-        ctx.invite(name.trim(), voucher).await
+        let code = ctx.invite(name.trim(), voucher).await?;
+        let qr = qr::modules(&code);
+        Ok(Invitation { code, qr })
     })
     .await
 }
