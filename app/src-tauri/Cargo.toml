@@ -30,6 +30,11 @@ tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt", "sync"] }
 
+# Notifications over D-Bus (desktop/notify.rs); already in the build through
+# tauri-plugin-single-instance.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
+
 [target.'cfg(target_os = "android")'.dependencies]
 # Same major line as Tauri itself uses, so only one copy ends up in the build.
 jni = "0.21"

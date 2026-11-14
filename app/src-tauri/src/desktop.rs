@@ -10,6 +10,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
+mod notify;
+
 use lz_client::ctx::{self, Clock, ContactView, Ctx, LastResponse, Overview, Status};
 use lz_client::relay::Http;
 use lz_client::show::{no_hints, reported, when};
@@ -35,6 +38,18 @@ const MAIN_WINDOW: &str = "main";
 /// Where the state of this device lives.
 pub struct Desktop {
     path: PathBuf,
+    #[cfg(target_os = "linux")]
+    notifier: Option<notify::Notifier>,
+}
+
+impl Desktop {
+    /// Requests may have come or gone; the notifications follow.
+    fn poke(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some(notifier) = &self.notifier {
+            notifier.poke();
+        }
+    }
 }
 
 /// Picks the state file: `LZ_STATE` if set, else `device.json` in the data
@@ -46,10 +61,14 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         Some(path) => PathBuf::from(path),
         None => app.path().app_data_dir()?.join("device.json"),
     };
-    spawn_listener(app.handle().clone(), path.clone());
     build_tray(app, path.clone())?;
     keep_running_when_closed(app);
-    app.manage(Desktop { path });
+    app.manage(Desktop {
+        #[cfg(target_os = "linux")]
+        notifier: notify::start(app.handle().clone(), path.clone()),
+        path: path.clone(),
+    });
+    spawn_listener(app.handle().clone(), path);
     Ok(())
 }
 
@@ -161,6 +180,9 @@ impl Write for EventSink {
             if !line.is_empty() {
                 // Without a window nobody is listening; that is fine.
                 let _ = self.app.emit(LINE_EVENT, line);
+                if let Some(desktop) = self.app.try_state::<Desktop>() {
+                    desktop.poke();
+                }
             }
         }
         Ok(buf.len())
@@ -432,7 +454,9 @@ macro_rules! name_command {
             state: tauri::State<'_, Desktop>,
             name: String,
         ) -> Result<Reply<()>, String> {
-            run(path(&state), async move |ctx| ctx.$method(&name).await).await
+            let reply = run(path(&state), async move |ctx| ctx.$method(&name).await).await;
+            state.poke();
+            reply
         }
     )*};
 }

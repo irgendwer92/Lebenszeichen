@@ -70,7 +70,10 @@ Das Wecksignal vom Relay ans Gerät ist unsichtbar. Sichtbar ist nur, was die Ap
 | iOS (später) | Nicht möglich | Nur Benachrichtigung. |
 
 Regeln für die Vordergrund-Anzeige:
-- "Nicht stören" des Systems wird respektiert.
+- "Nicht stören" des Systems wird respektiert. Ausnahme: Unter Linux kommt die
+  Benachrichtigung mit Dringlichkeit "kritisch", und KDE Plasma zeigt solche
+  Benachrichtigungen standardmäßig auch bei "Nicht stören". Wer das nicht will,
+  schaltet es in den Systemeinstellungen ab.
 - Auf dem Desktop nimmt das Fenster keinen Tastaturfokus. Nur Klick oder Tippen auf das Fenster oder das Schließen zählt als Antwort; ein Tastendruck mitten im Tippen darf nie als Lebenszeichen gelten.
 
 ### Ton und Vibration
@@ -78,7 +81,8 @@ Regeln für die Vordergrund-Anzeige:
 - Standardmäßig aus, bei Vordergrund-Anzeige und Benachrichtigung gleichermaßen.
 - Der Angefragte kann beides pro Gerät einschalten. So bleibt etwa das Handy am Bett still, während der Rechner im Arbeitszimmer einen Ton gibt.
 - Die Einstellung gilt nur lokal und wird nicht übertragen.
-- "Nicht stören" des Systems hat auch bei eingeschaltetem Ton Vorrang.
+- "Nicht stören" des Systems hat auch bei eingeschaltetem Ton Vorrang (zur
+  Anzeige unter Linux siehe die Ausnahme oben).
 - Auf Android steuert das System Ton und Vibration über den Benachrichtigungskanal. Die App legt den Kanal still an und verweist für Änderungen auf die Systemeinstellungen.
 
 ### Benachrichtigung (Rückfall und wählbare Alternative)

@@ -2077,6 +2077,7 @@ dependencies = [
  "tauri-plugin-lebenszeichen",
  "tauri-plugin-single-instance",
  "tokio",
+ "zbus",
 ]
 
 [[package]]
