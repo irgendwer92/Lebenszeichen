@@ -100,7 +100,7 @@ app/
 ├── src-tauri/   Tauri-Hülle für Linux-Desktop und Android
 ├── ui/          Oberfläche für beide (schlichtes HTML ohne Build-Schritt)
 └── android/     Kotlin-Schicht: UnifiedPush, Vollbild-Anzeige, Benachrichtigungen
-docs/        Konzept, Protokoll, Fahrplan, Durchstich M1, Entwurf der Lizenz-Ausnahme
+docs/        Konzept, Protokoll, Fahrplan, Durchstich M1, Android-Release, Entwurf der Lizenz-Ausnahme
 ```
 
 `app/` gehört nicht zum Cargo-Workspace. Die Desktop-App für Linux baut und
@@ -119,7 +119,9 @@ Desktop-App ist damit ein eigenes Gerät neben `lz`.
 Die Android-APK baut der CI-Ablauf "Android-Prototyp" bei Pull Requests, die
 `app/` oder `crates/` berühren, oder von Hand:
 `gh workflow run android-prototype.yml --ref <zweig>`. Die fertige APK liegt
-dort als Artefakt.
+dort als Artefakt. Die signierte APK baut der Ablauf "Android-Release" bei
+einem Tag `v*`; Einrichtung und Prüfung in
+[docs/android-release.md](docs/android-release.md).
 
 ## Entwickeln
 
