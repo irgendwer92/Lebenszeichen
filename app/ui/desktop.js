@@ -21,6 +21,8 @@ function el(tag, className, text) {
   return node;
 }
 
+// ---------------------------------------------------------------- Log
+
 /// Lines that arrive this close together belong to one message.
 const GROUP_MS = 300;
 
@@ -53,11 +55,14 @@ function logReply(lines) {
   lastEntry = null;
 }
 
+// ---------------------------------------------------------------- Commands
+
 function showError(text) {
-  const box = $("error");
-  box.textContent = text;
-  box.hidden = !text;
+  $("error-text").textContent = text;
+  $("error").hidden = !text;
 }
+
+$("error-close").addEventListener("click", () => showError(""));
 
 /// Runs a command, logs its text and reports failures.
 async function call(command, args = {}) {
@@ -97,14 +102,16 @@ const ARM_MS = 5000;
 const armed = new Map();
 
 /// A button that asks once more before it acts, without a dialog.
-function confirmButton(key, text, question, onClick) {
+function confirmButton(key, text, question, onClick, className = "danger") {
   const isArmed = () => Date.now() - (armed.get(key) ?? 0) < ARM_MS;
-  const node = el("button", "quiet", isArmed() ? question : text);
+  const node = el("button", className, isArmed() ? question : text);
   node.type = "button";
+  node.classList.toggle("armed", isArmed());
   node.addEventListener("click", async () => {
     if (!isArmed()) {
       armed.set(key, Date.now());
       node.textContent = question;
+      node.classList.add("armed");
       setTimeout(() => {
         armed.delete(key);
         refresh();
@@ -124,6 +131,37 @@ function confirmButton(key, text, question, onClick) {
   return node;
 }
 
+// ---------------------------------------------------------------- Panels
+
+const PANELS = ["invite", "accept"];
+
+/// Opens one of the panels in the header, or closes all with `null`.
+function openPanel(name) {
+  for (const panel of PANELS) {
+    const open = panel === name;
+    $(`panel-${panel}`).hidden = !open;
+    for (const toggle of document.querySelectorAll(`[data-panel="${panel}"]`)) {
+      toggle.setAttribute("aria-expanded", String(open));
+    }
+  }
+  if (name) {
+    $(`panel-${name}`).querySelector("input")?.focus();
+  }
+}
+
+for (const toggle of document.querySelectorAll("[data-panel]")) {
+  toggle.addEventListener("click", () => {
+    const panel = toggle.dataset.panel;
+    openPanel($(`panel-${panel}`).hidden ? panel : null);
+  });
+}
+
+for (const close of document.querySelectorAll("[data-close]")) {
+  close.addEventListener("click", () => openPanel(null));
+}
+
+// ---------------------------------------------------------------- Settings
+
 /// Names of contacts whose settings are unfolded, and values typed there but
 /// not saved yet. Kept outside the cards because the list is redrawn often.
 const openSettings = new Set();
@@ -137,22 +175,18 @@ const RULE_FIELDS = [
   ["weekly", "Höchstens pro Woche (0: gar nicht)", "weeklyLimit", "weekly_limit", 0, 999, 1],
 ];
 
-/// "Einstellungen" of a paired contact: how often the contact may ask, and
-/// how often the own side may ask the contact.
+/// Settings of a paired contact: how often the contact may ask, how often
+/// the own side may ask the contact, and ending the connection.
 function settings(contact) {
   const name = contact.name;
   const rules = contact.rules;
   const draft = drafts.get(name) ?? {};
-  const details = el("details", "settings");
-  details.open = openSettings.has(name);
-  details.addEventListener("toggle", () => {
-    if (details.open) openSettings.add(name);
-    else openSettings.delete(name);
-  });
-  details.append(el("summary", "", "Einstellungen"));
+  const box = el("div", "settings");
+  box.id = `settings-${name}`;
+  box.hidden = !openSettings.has(name);
 
   const form = el("form", "rules");
-  form.append(el("p", "", `${name} darf dich fragen:`));
+  form.append(el("h3", "wide-field", `${name} darf dich fragen`));
   for (const [key, text, , rule, min, max, step] of RULE_FIELDS) {
     const input = el("input");
     input.type = "number";
@@ -169,7 +203,7 @@ function settings(contact) {
     label.append(input);
     form.append(label);
   }
-  const save = el("button", "", "Speichern");
+  const save = el("button", "wide-field", "Speichern");
   save.type = "submit";
   form.append(save);
   form.addEventListener("submit", async (event) => {
@@ -194,72 +228,150 @@ function settings(contact) {
     }
   });
 
-  details.append(form, el("p", "note", `Du darfst ${name} fragen: ${rules.peer}`));
-  return details;
+  const danger = el("div", "danger-zone");
+  danger.append(
+    confirmButton(`remove:${name}`, "Verbindung beenden", "Wirklich? Nochmal klicken", () =>
+      call("remove", { name }),
+    ),
+  );
+
+  box.append(form, el("p", "note", `Du darfst ${name} fragen: ${rules.peer}`), danger);
+  return box;
+}
+
+/// The ⚙ button that folds the settings of a contact in and out.
+function settingsToggle(name) {
+  const toggle = el("button", "icon", "⚙");
+  toggle.type = "button";
+  toggle.setAttribute("aria-label", `Einstellungen für ${name}`);
+  toggle.setAttribute("aria-controls", `settings-${name}`);
+  toggle.setAttribute("aria-expanded", String(openSettings.has(name)));
+  toggle.addEventListener("click", () => {
+    const box = document.getElementById(`settings-${name}`);
+    const open = box.hidden;
+    box.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    if (open) openSettings.add(name);
+    else openSettings.delete(name);
+  });
+  return toggle;
+}
+
+// ---------------------------------------------------------------- Cards
+
+/// "123456" as "123 456", easier to compare.
+function grouped(code) {
+  return code.replace(/^(\d{3})(\d{3})$/, "$1 $2");
+}
+
+function row(...children) {
+  const node = el("div", "row");
+  node.append(...children);
+  return node;
+}
+
+function spacer() {
+  return el("span", "spacer");
 }
 
 function contactCard(contact) {
-  const item = el("li", `card ${contact.status}`);
-  item.append(el("h3", "", contact.name));
   const name = contact.name;
+  const item = el("li", "card");
 
   switch (contact.status) {
     case "awaiting_confirmation":
+      item.classList.add("pairing");
       item.append(
-        el("p", "", `hat die Einladung angenommen. Prüfcode: ${contact.code}`),
-        el("p", "note", "Vergleiche den Prüfcode mit dem bei " + name + "."),
-        button("Prüfcode stimmt: bestätigen", () => call("confirm", { name })),
-        button("Stimmt nicht: ablehnen", () => call("reject", { name }), "quiet"),
+        el("h3", "", name),
+        el("p", "", `${name} hat deine Einladung angenommen. Vergleicht den Prüfcode:`),
+        el("p", "verification", grouped(contact.code)),
+        row(
+          button("Prüfcode stimmt: bestätigen", () => call("confirm", { name }), "primary"),
+          button("Stimmt nicht: ablehnen", () => call("reject", { name }), "quiet"),
+        ),
       );
-      break;
+      return item;
+
     case "awaiting_hello_ok":
+      item.classList.add("pairing");
       item.append(
-        el("p", "", `wartet auf die Bestätigung durch ${name}. Prüfcode: ${contact.code}`),
-        button("Stimmt nicht: ablehnen", () => call("reject", { name }), "quiet"),
+        el("h3", "", name),
+        el("p", "", `Wartet auf die Bestätigung durch ${name}. Vergleicht den Prüfcode:`),
+        el("p", "verification", grouped(contact.code)),
+        row(button("Stimmt nicht: ablehnen", () => call("reject", { name }), "quiet")),
       );
-      break;
+      return item;
+
     case "ended":
-      item.append(el("p", "", "Die Verbindung ist beendet."));
-      break;
-    default: {
-      if (contact.incoming) {
-        item.append(
-          el("p", "incoming", `${name} ${contact.incoming}`),
-          button("Lebenszeichen senden ✓", () => call("respond", { name }), "primary"),
-        );
-      }
-      const ask = button("Lebenszeichen?", () => call("request", { name }));
-      ask.disabled = !contact.can_request;
-      item.append(ask);
-      if (contact.next_request) item.append(el("p", "note", contact.next_request));
-      if (contact.outgoing) item.append(el("p", "note", contact.outgoing));
-      if (contact.last_response) {
-        item.append(el("p", "", `letzte Antwort: ${contact.last_response}`));
-      }
-      if (contact.rules) item.append(settings(contact));
-    }
+      item.classList.add("ended");
+      item.append(
+        el("h3", "", name),
+        el("p", "status", "Die Verbindung ist beendet."),
+        row(
+          confirmButton(`remove:${name}`, "Entfernen", "Wirklich? Nochmal klicken", () =>
+            call("remove", { name }),
+          ),
+        ),
+      );
+      return item;
   }
-  const removeText = contact.status === "ended" ? "Entfernen" : "Verbindung beenden";
+
+  if (contact.incoming) {
+    item.classList.add("request");
+    item.append(
+      el("h3", "", name),
+      el("p", "", `${name} ${contact.incoming}`),
+      button("Lebenszeichen senden ✓", () => call("respond", { name }), "primary wide"),
+    );
+  } else {
+    item.append(el("h3", "", name));
+  }
+
+  if (contact.last_response) {
+    const last = el("p", "status", "letzte Antwort: ");
+    last.append(el("span", contact.last_response.startsWith("✓") ? "ok" : "", contact.last_response));
+    item.append(last);
+  }
+  if (contact.outgoing) item.append(el("p", "status", contact.outgoing));
+
+  const ask = button("Lebenszeichen?", () => call("request", { name }));
+  ask.disabled = !contact.can_request;
+  const parts = [ask];
+  if (contact.next_request) parts.push(el("span", "note", contact.next_request));
+  parts.push(spacer(), settingsToggle(name));
+  item.append(row(...parts), settings(contact));
+  return item;
+}
+
+/// Open requests first, then pairings, then the others; ended ones last.
+function rank(contact) {
+  if (contact.status === "paired" && contact.incoming) return 0;
+  if (contact.status.startsWith("awaiting")) return 1;
+  if (contact.status === "ended") return 3;
+  return 2;
+}
+
+function invitationCard(invitation) {
+  const name = invitation.name;
+  const item = el("li", "card invitation");
   item.append(
-    confirmButton(`remove:${name}`, removeText, "Wirklich? Nochmal klicken", () =>
-      call("remove", { name }),
+    row(
+      el("h3", "", name),
+      spacer(),
+      confirmButton(
+        `withdraw:${name}`,
+        "Zurückziehen",
+        "Wirklich? Nochmal klicken",
+        () => call("remove", { name }),
+        "quiet",
+      ),
     ),
+    el("p", "note", invitation.text),
   );
   return item;
 }
 
-function invitationCard(invitation) {
-  const item = el("li", "card invitation");
-  const name = invitation.name;
-  item.append(
-    el("h3", "", name),
-    el("p", "note", invitation.text),
-    confirmButton(`withdraw:${name}`, "Zurückziehen", "Wirklich? Nochmal klicken", () =>
-      call("remove", { name }),
-    ),
-  );
-  return item;
-}
+// ---------------------------------------------------------------- Refresh
 
 /// Counts calls of `refresh`, so that a slow, older one cannot overwrite the
 /// result of a newer one.
@@ -271,6 +383,7 @@ async function refresh() {
   if (ticket !== refreshes) return;
   $("setup").hidden = setup.ready;
   $("app").hidden = !setup.ready;
+  $("actions").hidden = !setup.ready;
   $("state-path").textContent = `Zustand: ${setup.path}`;
   if (!setup.ready) return;
   let cards;
@@ -287,8 +400,10 @@ async function refresh() {
     redrawLater = true;
     return;
   }
-  $("contacts").replaceChildren(...cards.contacts.map(contactCard));
+  const contacts = [...cards.contacts].sort((a, b) => rank(a) - rank(b));
+  $("contacts").replaceChildren(...contacts.map(contactCard));
   $("invitations").replaceChildren(...cards.invitations.map(invitationCard));
+  $("invitations-section").hidden = cards.invitations.length === 0;
   $("no-contacts").hidden = cards.contacts.length + cards.invitations.length > 0;
 }
 
@@ -308,6 +423,8 @@ $("contacts").addEventListener("focusout", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------- Forms
 
 function onSubmit(id, handler) {
   const form = $(id);
@@ -375,14 +492,17 @@ onSubmit("invite-form", async (data, form) => {
   form.reset();
 });
 
+// A click selects the whole code, ready to copy.
+$("invite-code").addEventListener("focus", (event) => event.target.select());
+
 onSubmit("accept-form", async (data, form) => {
   const name = data.get("name").trim();
   const result = $("accept-result");
   result.hidden = true;
   const code = await call("accept", { name, code: data.get("code") });
   result.textContent =
-    `Angenommen. Prüfcode: ${code}. Vergleiche ihn mit dem Prüfcode bei ${name}; ` +
-    `gekoppelt seid ihr, sobald ${name} bestätigt hat.`;
+    `Angenommen. Prüfcode: ${grouped(code)}. Vergleiche ihn mit dem Prüfcode bei ` +
+    `${name}; gekoppelt seid ihr, sobald ${name} bestätigt hat.`;
   result.hidden = false;
   form.reset();
 });

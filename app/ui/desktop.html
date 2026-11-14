@@ -4,23 +4,35 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lebenszeichen</title>
-    <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="desktop.css" />
     <script src="desktop.js" defer></script>
   </head>
   <body>
-    <main>
+    <header class="top">
       <h1>Lebenszeichen</h1>
+      <nav id="actions" class="actions" hidden>
+        <button type="button" class="primary" data-panel="invite" aria-expanded="false">
+          + Einladen
+        </button>
+        <button type="button" data-panel="accept" aria-expanded="false">Annehmen</button>
+      </nav>
+    </header>
 
-      <p id="error" class="message error" role="alert" hidden></p>
+    <main>
+      <div id="error" class="banner error" role="alert" hidden>
+        <p id="error-text"></p>
+        <button id="error-close" type="button" class="icon" aria-label="Meldung schließen">
+          ×
+        </button>
+      </div>
 
-      <section id="setup" hidden>
+      <section id="setup" class="card setup" hidden>
         <h2>Gerät einrichten</h2>
         <p class="note">
           Mit einem Zugangstoken für dein Relay kannst du selbst einladen. Ohne ihn kannst
           du nur Einladungen mit Gutschein annehmen.
         </p>
-        <form id="setup-form">
+        <form id="setup-form" class="stack">
           <label>
             Relay-Adresse
             <input name="relay" type="url" placeholder="https://relay.example.org" />
@@ -29,63 +41,87 @@
             Zugangstoken (optional)
             <input name="access_token" type="password" autocomplete="off" />
           </label>
-          <button type="submit">Gerät anlegen</button>
+          <button type="submit" class="primary">Gerät anlegen</button>
         </form>
       </section>
 
       <div id="app" hidden>
-        <section>
-          <h2>Kontakte</h2>
-          <ul id="contacts" class="cards"></ul>
-          <p id="no-contacts" class="note" hidden>Noch keine Kontakte.</p>
-          <ul id="invitations" class="cards"></ul>
-        </section>
-
-        <section>
-          <h2>Einladen</h2>
-          <form id="invite-form">
+        <section id="panel-invite" class="card panel" hidden>
+          <div class="panel-head">
+            <h2>Einladen</h2>
+            <button type="button" class="icon" data-close="invite" aria-label="Schließen">
+              ×
+            </button>
+          </div>
+          <form id="invite-form" class="stack">
             <label>
               Name des Kontakts (nur für dich sichtbar)
               <input name="name" required />
             </label>
-            <label class="inline">
+            <label class="check">
               <input name="voucher" type="checkbox" />
               Mit Gutschein: der Kontakt darf ein Postfach auf deinem Relay anlegen
             </label>
-            <button type="submit">Einladung erzeugen</button>
+            <button type="submit" class="primary">Einladung erzeugen</button>
           </form>
-          <div id="invite-result" hidden>
+          <div id="invite-result" class="result" hidden>
             <p class="note">
               Den QR-Code scannen lassen oder den Code darunter weitergeben. Er gilt
               10 Minuten und nur einmal.
             </p>
             <div id="invite-qr" class="qr"></div>
-            <textarea id="invite-code" readonly rows="4"></textarea>
+            <textarea id="invite-code" class="code" readonly rows="4"></textarea>
           </div>
         </section>
 
-        <section>
-          <h2>Einladung annehmen</h2>
-          <form id="accept-form">
+        <section id="panel-accept" class="card panel" hidden>
+          <div class="panel-head">
+            <h2>Einladung annehmen</h2>
+            <button type="button" class="icon" data-close="accept" aria-label="Schließen">
+              ×
+            </button>
+          </div>
+          <form id="accept-form" class="stack">
             <label>
               Name des Kontakts (nur für dich sichtbar)
               <input name="name" required />
             </label>
             <label>
               Einladungscode
-              <textarea name="code" rows="4" required placeholder="LZ1-…"></textarea>
+              <textarea
+                name="code"
+                class="code"
+                rows="4"
+                required
+                placeholder="LZ1-…"
+              ></textarea>
             </label>
-            <button type="submit">Annehmen</button>
+            <button type="submit" class="primary">Annehmen</button>
           </form>
-          <p id="accept-result" class="message" hidden></p>
+          <p id="accept-result" class="banner success" hidden></p>
         </section>
 
-        <section>
-          <h2>Meldungen</h2>
+        <section class="contacts">
+          <h2 class="visually-hidden">Kontakte</h2>
+          <ul id="contacts" class="cards"></ul>
+          <div id="no-contacts" class="empty" hidden>
+            <p>Noch keine Kontakte.</p>
+            <p class="note">Lade jemanden ein oder nimm eine Einladung an.</p>
+            <button type="button" class="primary" data-panel="invite">+ Einladen</button>
+          </div>
+        </section>
+
+        <section id="invitations-section" class="invitations" hidden>
+          <h2>Offene Einladungen</h2>
+          <ul id="invitations" class="cards"></ul>
+        </section>
+
+        <details class="history">
+          <summary>Verlauf</summary>
           <button id="sync" type="button">Jetzt abrufen</button>
           <ol id="log" class="log"></ol>
           <p id="state-path" class="note"></p>
-        </section>
+        </details>
       </div>
     </main>
   </body>
