@@ -540,6 +540,24 @@ async fn overview_shows_rules_and_requests() {
         Some(LastResponse::Manual { at: overview.now })
     );
     assert!(anna_seen.outgoing_since.is_none());
+
+    // Own rules on one side are the rules of the contact on the other.
+    let changed = Rules {
+        min_interval_minutes: 30,
+        expiry_minutes: 90,
+        weekly_limit: 3,
+    };
+    anna.ctx
+        .rules("Bert", Some(30), Some(90), Some(3))
+        .await
+        .unwrap();
+    bert.sync().await;
+    let bert_seen = &anna.ctx.overview().unwrap().contacts[0];
+    assert_eq!(bert_seen.own_rules, changed);
+    assert_eq!(bert_seen.peer_rules, Rules::DEFAULT);
+    let anna_seen = &bert.ctx.overview().unwrap().contacts[0];
+    assert_eq!(anna_seen.own_rules, Rules::DEFAULT);
+    assert_eq!(anna_seen.peer_rules, changed);
 }
 
 #[tokio::test]

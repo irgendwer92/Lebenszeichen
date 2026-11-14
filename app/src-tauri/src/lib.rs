@@ -43,6 +43,7 @@ pub fn run() {
             desktop::request,
             desktop::respond,
             desktop::remove,
+            desktop::set_rules,
         ]);
     builder
         .run(tauri::generate_context!())

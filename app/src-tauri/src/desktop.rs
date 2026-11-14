@@ -16,8 +16,9 @@ mod notify;
 use lz_client::ctx::{self, Clock, ContactView, Ctx, LastResponse, Overview, Status};
 use lz_client::qr::{self, Qr};
 use lz_client::relay::Http;
-use lz_client::show::{no_hints, reported, when};
+use lz_client::show::{self, no_hints, reported, when};
 use lz_core::store::JsonFile;
+use lz_core::wire::Rules;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -335,6 +336,55 @@ pub struct Card {
     /// "wieder möglich ab …" while the button is locked.
     next_request: Option<String>,
     last_response: Option<String>,
+    /// Settings, only for paired contacts.
+    rules: Option<RulesCard>,
+}
+
+/// Rules of a contact in the units of the window.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct RulesCard {
+    /// How often the contact may ask: set by the own side.
+    interval_hours: f64,
+    expiry_hours: f64,
+    weekly_limit: u16,
+    /// How often the own side may ask the contact, as text.
+    peer: String,
+}
+
+fn rules_card(own: &Rules, peer: &Rules) -> RulesCard {
+    RulesCard {
+        interval_hours: f64::from(own.min_interval_minutes) / 60.0,
+        expiry_hours: f64::from(own.expiry_minutes) / 60.0,
+        weekly_limit: own.weekly_limit,
+        peer: show::rules(peer),
+    }
+}
+
+/// Longest minimum interval and expiry the window offers: one week.
+const MAX_HOURS: f64 = 7.0 * 24.0;
+
+/// Highest weekly limit the window offers.
+const MAX_WEEKLY: u16 = 999;
+
+/// Turns hours from the window into minutes for the protocol. The window
+/// offers half hours; `lz rules` can set any minute.
+fn minutes(hours: f64, least: f64, what: &str) -> Result<u32, String> {
+    if !(least..=MAX_HOURS).contains(&hours) {
+        return Err(format!(
+            "{what} muss zwischen {} und {MAX_HOURS} Stunden liegen.",
+            show_hours(least)
+        ));
+    }
+    let halves = hours * 2.0;
+    if (halves - halves.round()).abs() > 1e-9 {
+        return Err(format!("{what} geht in halben Stunden, etwa 1,5."));
+    }
+    // At most 336 halves, so the cast is exact.
+    Ok(halves.round() as u32 * 30)
+}
+
+fn show_hours(hours: f64) -> String {
+    format!("{hours}").replace('.', ",")
 }
 
 #[derive(Serialize)]
@@ -385,6 +435,7 @@ fn card(view: ContactView, now: u64) -> Card {
             LastResponse::Manual { at } => format!("✓ {}", when(at, now)),
             LastResponse::Reported { reason } => reported(reason),
         }),
+        rules: paired.then(|| rules_card(&view.own_rules, &view.peer_rules)),
     }
 }
 
@@ -455,6 +506,31 @@ pub async fn accept(
     .await
 }
 
+/// Changes how often a contact may ask. Only the values that changed are
+/// given; the others stay as they are.
+#[tauri::command]
+pub async fn set_rules(
+    state: tauri::State<'_, Desktop>,
+    name: String,
+    interval_hours: Option<f64>,
+    expiry_hours: Option<f64>,
+    weekly_limit: Option<u16>,
+) -> Result<Reply<()>, String> {
+    let interval = interval_hours
+        .map(|h| minutes(h, 0.0, "Der Mindestabstand"))
+        .transpose()?;
+    let expiry = expiry_hours
+        .map(|h| minutes(h, 0.5, "Die Ablaufzeit"))
+        .transpose()?;
+    if weekly_limit.is_some_and(|n| n > MAX_WEEKLY) {
+        return Err(format!("Höchstens {MAX_WEEKLY} Anfragen pro Woche."));
+    }
+    run(path(&state), async move |ctx| {
+        ctx.rules(&name, interval, expiry, weekly_limit).await
+    })
+    .await
+}
+
 /// Generates a command that takes the name of a contact.
 macro_rules! name_command {
     ($($(#[$doc:meta])* $command:ident => $method:ident;)*) => {$(
@@ -488,7 +564,9 @@ name_command! {
 mod tests {
     use lz_client::ctx::{ContactView, IncomingView, LastResponse, Status};
 
-    use super::card;
+    use lz_core::wire::Rules;
+
+    use super::{card, minutes, rules_card};
 
     const NOW: u64 = 1_794_600_000;
     const HOUR: u64 = 3600;
@@ -501,7 +579,54 @@ mod tests {
             outgoing_since: None,
             next_request_at: NOW,
             last_response: None,
+            own_rules: Rules::DEFAULT,
+            peer_rules: Rules::DEFAULT,
         }
+    }
+
+    #[test]
+    fn rules_in_hours() {
+        let card = rules_card(
+            &Rules::DEFAULT,
+            &Rules {
+                min_interval_minutes: 90,
+                expiry_minutes: 60,
+                weekly_limit: 2,
+            },
+        );
+        assert_eq!(card.interval_hours, 6.0);
+        assert_eq!(card.expiry_hours, 24.0);
+        assert_eq!(card.weekly_limit, 7);
+        assert!(card.peer.contains("höchstens 2 pro Woche"), "{}", card.peer);
+    }
+
+    #[test]
+    fn hours_become_minutes() {
+        assert_eq!(minutes(0.0, 0.0, "x"), Ok(0));
+        assert_eq!(minutes(1.5, 0.0, "x"), Ok(90));
+        assert_eq!(minutes(168.0, 0.5, "x"), Ok(10_080));
+        let error = minutes(0.0, 0.5, "Die Ablaufzeit").unwrap_err();
+        assert_eq!(
+            error,
+            "Die Ablaufzeit muss zwischen 0,5 und 168 Stunden liegen."
+        );
+        assert!(
+            minutes(1.25, 0.0, "x")
+                .unwrap_err()
+                .contains("halben Stunden")
+        );
+        assert!(minutes(169.0, 0.0, "x").is_err());
+        assert!(minutes(f64::NAN, 0.0, "x").is_err());
+    }
+
+    #[test]
+    fn settings_only_when_paired() {
+        assert!(card(paired(), NOW).rules.is_some());
+        let ended = ContactView {
+            status: Status::Ended,
+            ..paired()
+        };
+        assert!(card(ended, NOW).rules.is_none());
     }
 
     #[test]

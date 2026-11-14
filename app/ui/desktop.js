@@ -124,6 +124,80 @@ function confirmButton(key, text, question, onClick) {
   return node;
 }
 
+/// Names of contacts whose settings are unfolded, and values typed there but
+/// not saved yet. Kept outside the cards because the list is redrawn often.
+const openSettings = new Set();
+const drafts = new Map();
+
+/// The fields of the settings: key in `drafts`, label, argument of
+/// `set_rules`, key in `contact.rules`, and the limits of the input.
+const RULE_FIELDS = [
+  ["interval", "Mindestabstand nach einer Antwort (Stunden)", "intervalHours", "interval_hours", 0, 168, 0.5],
+  ["expiry", "Unbeantwortet abgelaufen nach (Stunden)", "expiryHours", "expiry_hours", 0.5, 168, 0.5],
+  ["weekly", "Höchstens pro Woche (0: gar nicht)", "weeklyLimit", "weekly_limit", 0, 999, 1],
+];
+
+/// "Einstellungen" of a paired contact: how often the contact may ask, and
+/// how often the own side may ask the contact.
+function settings(contact) {
+  const name = contact.name;
+  const rules = contact.rules;
+  const draft = drafts.get(name) ?? {};
+  const details = el("details", "settings");
+  details.open = openSettings.has(name);
+  details.addEventListener("toggle", () => {
+    if (details.open) openSettings.add(name);
+    else openSettings.delete(name);
+  });
+  details.append(el("summary", "", "Einstellungen"));
+
+  const form = el("form", "rules");
+  form.append(el("p", "", `${name} darf dich fragen:`));
+  for (const [key, text, , rule, min, max, step] of RULE_FIELDS) {
+    const input = el("input");
+    input.type = "number";
+    input.name = key;
+    input.min = min;
+    input.max = max;
+    input.step = step;
+    input.required = true;
+    input.value = draft[key] ?? rules[rule];
+    input.addEventListener("input", () => {
+      drafts.set(name, { ...(drafts.get(name) ?? {}), [key]: input.value });
+    });
+    const label = el("label", "", text);
+    label.append(input);
+    form.append(label);
+  }
+  const save = el("button", "", "Speichern");
+  save.type = "submit";
+  form.append(save);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    // Only what changed goes out; the other values stay as they are.
+    const args = { name };
+    for (const [key, , arg, rule] of RULE_FIELDS) {
+      const value = Number(form.elements[key].value);
+      args[arg] = value === rules[rule] ? null : value;
+    }
+    save.disabled = true;
+    try {
+      if (RULE_FIELDS.some(([, , arg]) => args[arg] !== null)) {
+        await call("set_rules", args);
+      }
+      drafts.delete(name);
+    } catch {
+      // Already shown by `call`.
+    } finally {
+      save.disabled = false;
+      await refresh();
+    }
+  });
+
+  details.append(form, el("p", "note", `Du darfst ${name} fragen: ${rules.peer}`));
+  return details;
+}
+
 function contactCard(contact) {
   const item = el("li", `card ${contact.status}`);
   item.append(el("h3", "", contact.name));
@@ -162,6 +236,7 @@ function contactCard(contact) {
       if (contact.last_response) {
         item.append(el("p", "", `letzte Antwort: ${contact.last_response}`));
       }
+      if (contact.rules) item.append(settings(contact));
     }
   }
   const removeText = contact.status === "ended" ? "Entfernen" : "Verbindung beenden";
@@ -206,10 +281,33 @@ async function refresh() {
     return;
   }
   if (ticket !== refreshes) return;
+  // Redrawing would take the cursor out of a field being typed in; wait
+  // until it is left.
+  if (editing()) {
+    redrawLater = true;
+    return;
+  }
   $("contacts").replaceChildren(...cards.contacts.map(contactCard));
   $("invitations").replaceChildren(...cards.invitations.map(invitationCard));
   $("no-contacts").hidden = cards.contacts.length + cards.invitations.length > 0;
 }
+
+let redrawLater = false;
+
+function editing() {
+  const active = document.activeElement;
+  return active?.tagName === "INPUT" && $("contacts").contains(active);
+}
+
+$("contacts").addEventListener("focusout", () => {
+  // `activeElement` changes only after this event.
+  setTimeout(() => {
+    if (redrawLater && !editing()) {
+      redrawLater = false;
+      refresh();
+    }
+  });
+});
 
 function onSubmit(id, handler) {
   const form = $(id);

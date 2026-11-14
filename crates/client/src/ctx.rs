@@ -858,6 +858,10 @@ pub struct ContactView {
     pub next_request_at: u64,
     /// The latest response to an own request.
     pub last_response: Option<LastResponse>,
+    /// How often this contact may ask; set by the own side.
+    pub own_rules: Rules,
+    /// How often the own side may ask this contact; set by the contact.
+    pub peer_rules: Rules,
 }
 
 /// Where a contact stands.
@@ -940,6 +944,8 @@ fn contact_view(contact: &StoredContact, now: u64) -> ContactView {
         outgoing_since: state.outgoing.open(&state.peer_rules, now).map(|e| e.at),
         next_request_at: state.next_request_at(now),
         last_response,
+        own_rules: state.own_rules,
+        peer_rules: state.peer_rules,
     }
 }
 
