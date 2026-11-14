@@ -64,20 +64,38 @@ function button(text, onClick, className = "") {
   return node;
 }
 
+/// How long a button waits for its second click.
+const ARM_MS = 5000;
+
+/// Buttons waiting for their second click, by key, with the time of the
+/// first click. Kept outside the buttons because the list is redrawn often.
+const armed = new Map();
+
 /// A button that asks once more before it acts, without a dialog.
-function confirmButton(text, question, onClick) {
-  const node = button(text, async () => {
-    if (node.dataset.armed !== "yes") {
-      node.dataset.armed = "yes";
+function confirmButton(key, text, question, onClick) {
+  const isArmed = () => Date.now() - (armed.get(key) ?? 0) < ARM_MS;
+  const node = el("button", "quiet", isArmed() ? question : text);
+  node.type = "button";
+  node.addEventListener("click", async () => {
+    if (!isArmed()) {
+      armed.set(key, Date.now());
       node.textContent = question;
       setTimeout(() => {
-        node.dataset.armed = "";
-        node.textContent = text;
-      }, 5000);
+        armed.delete(key);
+        refresh();
+      }, ARM_MS);
       return;
     }
-    await onClick();
-  }, "quiet");
+    armed.delete(key);
+    node.disabled = true;
+    try {
+      await onClick();
+    } catch {
+      // Already shown by `call`.
+    } finally {
+      await refresh();
+    }
+  });
   return node;
 }
 
@@ -123,7 +141,9 @@ function contactCard(contact) {
   }
   const removeText = contact.status === "ended" ? "Entfernen" : "Verbindung beenden";
   item.append(
-    confirmButton(removeText, "Wirklich? Nochmal klicken", () => call("remove", { name })),
+    confirmButton(`remove:${name}`, removeText, "Wirklich? Nochmal klicken", () =>
+      call("remove", { name }),
+    ),
   );
   return item;
 }
@@ -134,15 +154,21 @@ function invitationCard(invitation) {
   item.append(
     el("h3", "", name),
     el("p", "note", invitation.text),
-    confirmButton("Zurückziehen", "Wirklich? Nochmal klicken", () =>
+    confirmButton(`withdraw:${name}`, "Zurückziehen", "Wirklich? Nochmal klicken", () =>
       call("remove", { name }),
     ),
   );
   return item;
 }
 
+/// Counts calls of `refresh`, so that a slow, older one cannot overwrite the
+/// result of a newer one.
+let refreshes = 0;
+
 async function refresh() {
+  const ticket = ++refreshes;
   const setup = await tauri.core.invoke("setup_state");
+  if (ticket !== refreshes) return;
   $("setup").hidden = setup.ready;
   $("app").hidden = !setup.ready;
   $("state-path").textContent = `Zustand: ${setup.path}`;
@@ -154,6 +180,7 @@ async function refresh() {
     showError(String(error));
     return;
   }
+  if (ticket !== refreshes) return;
   $("contacts").replaceChildren(...cards.contacts.map(contactCard));
   $("invitations").replaceChildren(...cards.invitations.map(invitationCard));
   $("no-contacts").hidden = cards.contacts.length + cards.invitations.length > 0;
