@@ -644,7 +644,7 @@ impl<R: Relay> Ctx<R> {
         for invitation in &device.invitations {
             let expires = invitation.pending.expires_at;
             let status = if expires < now {
-                "Einladung abgelaufen".to_owned()
+                "Einladung abgelaufen; eine rechtzeitige Annahme wird noch abgeholt".to_owned()
             } else {
                 format!("Einladung offen bis {}", when(expires, now))
             };

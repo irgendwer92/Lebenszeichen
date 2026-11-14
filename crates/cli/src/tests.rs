@@ -398,10 +398,31 @@ async fn expired_invitation_is_refused_and_cleaned_up() {
     let error = bert.ctx.accept("Anna", &code).await.unwrap_err();
     assert!(error.0.contains("abgelaufen"), "{error:?}");
 
+    // A `hello` sent in time may still arrive, so the invitation is kept
+    // until the replay window has passed.
+    anna.sync().await;
+    assert_eq!(anna.device().invitations.len(), 1);
+    world.advance(25 * HOUR);
     anna.sync().await;
     assert!(anna.device().invitations.is_empty());
     assert!(!world.relay.has_mailbox(RELAY_A, &mailbox));
     assert!(anna.out.take().contains("abgelaufen"));
+}
+
+#[tokio::test]
+async fn acceptance_in_time_can_be_fetched_later() {
+    let world = World::new();
+    let mut anna = world.person(Some((RELAY_A, Some(TOKEN_A))));
+    let mut bert = world.person(Some((RELAY_B, Some(TOKEN_B))));
+
+    let code = anna.ctx.invite("Bert", false).await.unwrap();
+    world.advance(9 * MINUTE);
+    bert.ctx.accept("Anna", &code).await.unwrap();
+    world.advance(5 * HOUR);
+    anna.sync().await;
+    assert!(anna.device().invitations.is_empty());
+    assert_eq!(anna.device().contacts.len(), 1);
+    assert!(anna.out.take().contains("Prüfcode"));
 }
 
 #[tokio::test]

@@ -69,8 +69,8 @@ lz remove Bert              # Kontakt entfernen; Bert sieht das beim nächsten A
 kann nur Einladungen mit Gutschein annehmen. Für lokale Tests sind
 `http://`-Adressen erlaubt; im Betrieb steht das Relay hinter TLS.
 
-Wichtig: Wer einlädt, muss die Annahme innerhalb der 10 Minuten mit `lz sync`
-oder `lz listen` abholen, sonst verfällt die Einladung.
+Die Einladung muss innerhalb von 10 Minuten angenommen werden. Abholen kann
+die einladende Seite die Annahme auch später, bis zu 24 Stunden danach.
 
 ## Grundsätze
 

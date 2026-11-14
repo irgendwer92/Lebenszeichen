@@ -147,6 +147,18 @@ impl<R: Relay> Ctx<R> {
                         l.awaiting.remove(&mailbox);
                     }
                     let device = self.store.load()?;
+                    // The own mailbox of an ended contact was deleted on purpose.
+                    let deleted_on_purpose = code == "unknown_mailbox"
+                        && mailbox.is_some_and(|m| {
+                            device.contacts.iter().any(|c| {
+                                c.state.ended
+                                    && c.own_relay == relay
+                                    && c.state.contact.own_mailbox == m
+                            })
+                        });
+                    if deleted_on_purpose {
+                        continue;
+                    }
                     let whose = mailbox
                         .and_then(|m| name_of(&device, &relay, &m))
                         .map_or_else(String::new, |name| format!(" (Postfach für {name})"));
@@ -330,7 +342,7 @@ impl<R: Relay> Ctx<R> {
         let expired = self.store.update(|device| {
             let (expired, open) = std::mem::take(&mut device.invitations)
                 .into_iter()
-                .partition::<Vec<_>, _>(|i| i.pending.expires_at < now);
+                .partition::<Vec<_>, _>(|i| i.pending.keep_until() < now);
             device.invitations = open;
             Ok::<_, Fail>(expired)
         })?;

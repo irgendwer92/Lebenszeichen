@@ -100,7 +100,7 @@ Die Einladung wird als QR-Code oder als Text weitergegeben: die Zeichen `LZ1-`, 
 
 Base32 in Großbuchstaben passt in den alphanumerischen Modus von QR-Codes und bleibt als Text abtippbar. Beim Einlesen sind Kleinbuchstaben, Leerzeichen und Zeilenumbrüche zu dulden.
 
-Der Einladende nimmt je Einladung genau ein `hello` an, und nur vor der Ablaufzeit (Vorgabe: 10 Minuten nach dem Erzeugen).
+Der Einladende nimmt je Einladung genau ein `hello` an, und nur, wenn es vor der Ablaufzeit abgeschickt wurde (Vorgabe: 10 Minuten nach dem Erzeugen). Maßgeblich ist die Absendezeit im `hello`, nicht der Zeitpunkt des Abholens; abholen kann der Einladende, solange das Zeitfenster gegen Wiedereinspielen es erlaubt, also bis gut 24 Stunden nach der Ablaufzeit. Erst danach löscht er Einladung und Postfach.
 
 ### Prüfcode
 
@@ -213,6 +213,7 @@ Diese Punkte gehen über `protokoll.md` hinaus und sind neu:
 - **Einladung als Base32 mit Vorsatz `LZ1-`**; damit ist die offene Frage zum Format aus `protokoll.md` beantwortet.
 - **Prüfcode über SHA-256.**
 - **Mindestabstand zählt ab der manuellen Antwort**; eine gemeldete Antwort schließt die Anfrage nicht.
+- **Annahme einer Einladung zählt nach der Absendezeit des `hello`**, damit der Einladende nicht innerhalb von 10 Minuten abholen muss. Preis: Die Absendezeit setzt der Absender selbst. Wer einen Code abfängt, kann ein zurückdatiertes `hello` schicken; ein abgefangener Code bleibt so bis zu gut 24 Stunden statt 10 Minuten nutzbar. Er gilt weiterhin nur einmal, und der Prüfcode zeigt, dass der falsche Kontakt angenommen hat.
 - **Zeitpunkt einer Anfrage ist ihre Absendezeit**, begrenzt durch die Uhr des Empfängers; verspätet angekommene Anfragen und rechtzeitig abgeschickte Antworten werden danach beurteilt.
 - **Zeitfenster gegen Wiedereinspielen** von 24 Stunden plus 10 Minuten Toleranz. Ein Gerät mit stark falscher Uhr kann deshalb nicht teilnehmen.
 - **Relay: JSON für Steuerung, rohe Bytes für Nachrichten, kumulative Quittungen.**

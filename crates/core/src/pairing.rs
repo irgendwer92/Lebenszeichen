@@ -97,18 +97,27 @@ impl PendingInvitation {
         (pending, invitation)
     }
 
+    /// After this time no valid `hello` can arrive anymore; the invitation and
+    /// its mailbox can be dropped.
+    pub fn keep_until(&self) -> u64 {
+        self.expires_at.saturating_add(MAX_MESSAGE_AGE_SECS)
+    }
+
     /// Reads an envelope that arrived in the mailbox of this invitation.
     ///
     /// Returns the new contact, waiting for confirmation. The caller must
     /// then drop the pending invitation, so that only one `hello` is accepted.
-    /// Anything else, including a late `hello`, fails and should be dropped
-    /// silently.
+    /// Anything else, including a `hello` sent after the expiry, fails and
+    /// should be dropped silently.
+    ///
+    /// What counts is when `hello` was sent, not when it is read, so the
+    /// inviting side may fetch it until [`Self::keep_until`].
     pub fn receive_hello(&self, envelope: &[u8], now: u64) -> Result<Contact, Error> {
-        if now > self.expires_at {
-            return Err(Error::Expired);
-        }
         let message = crypto::open_anonymous(envelope, &self.key)?;
         check_time(&message, now)?;
+        if message.sent_at > self.expires_at {
+            return Err(Error::Expired);
+        }
         let Body::Hello(hello) = message.body else {
             return Err(Error::Unexpected);
         };
@@ -311,9 +320,34 @@ mod tests {
             accept(&invitation, own.clone(), late, &mut OsRng).unwrap_err(),
             Error::Expired
         );
-        let (_, hello) = accept(&invitation, own, NOW, &mut OsRng).unwrap();
+        // A modified client could still send a late `hello`.
+        let mut late_invitation = invitation.clone();
+        late_invitation.expires_at = late;
+        let (_, hello) = accept(&late_invitation, own, late, &mut OsRng).unwrap();
         assert_eq!(
             pending.receive_hello(&hello, late).unwrap_err(),
+            Error::Expired
+        );
+    }
+
+    #[test]
+    fn hello_sent_in_time_may_be_read_later() {
+        let (pending, invitation) =
+            PendingInvitation::create(address("https://b.example", 1), None, NOW, &mut OsRng);
+        let sent = NOW + INVITATION_TTL_SECS;
+        let (_, hello) = accept(
+            &invitation,
+            address("https://a.example", 3),
+            sent,
+            &mut OsRng,
+        )
+        .unwrap();
+        assert!(pending.receive_hello(&hello, NOW + 5 * 3600).is_ok());
+        assert_eq!(pending.keep_until(), sent + MAX_MESSAGE_AGE_SECS);
+        assert_eq!(
+            pending
+                .receive_hello(&hello, pending.keep_until() + 1)
+                .unwrap_err(),
             Error::Expired
         );
     }
