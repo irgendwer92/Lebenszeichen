@@ -3,6 +3,14 @@
 
 [graph]
 all-features = true
+# Nur die Zielsysteme, für die gebaut wird. Sonst zählen Abhängigkeiten
+# anderer Systeme mit, etwa webpki-root-certs (CDLA-Permissive-2.0), das
+# rustls-platform-verifier nur für WebAssembly braucht.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-linux-android",
+    "x86_64-pc-windows-msvc",
+]
 
 [advisories]
 version = 2

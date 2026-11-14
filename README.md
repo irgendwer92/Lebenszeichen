@@ -66,12 +66,15 @@ lz rules Bert --interval-min 360 --expiry-min 1440 --weekly 7
 lz contacts                 # Kontakte, offene Anfragen, „wieder möglich ab …“
 lz listen                   # verbunden bleiben und Nachrichten sofort zeigen
 lz remove Bert              # Kontakt entfernen; Bert sieht das beim nächsten Abruf
+lz push https://ntfy.example.org/upXYZ  # Push-Adresse eintragen, über die das Relay weckt
+lz push --remove            # Push-Adresse entfernen
 ```
 
 `lz sync` holt alles Wartende ab und endet, `lz listen` bleibt verbunden.
 `--verbose` zeigt auch verworfene Nachrichten. Ein Gerät ohne Zugangstoken
 kann nur Einladungen mit Gutschein annehmen. Für lokale Tests sind
-`http://`-Adressen erlaubt; im Betrieb steht das Relay hinter TLS.
+`http://`-Adressen erlaubt; im Betrieb steht das Relay hinter TLS. Die
+Zertifikate prüft das Betriebssystem.
 
 Die Einladung muss innerhalb von 10 Minuten angenommen werden. Abholen kann
 die einladende Seite die Annahme auch später, bis zu 24 Stunden danach.

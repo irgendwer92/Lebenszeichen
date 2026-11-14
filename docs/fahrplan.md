@@ -110,7 +110,10 @@ Umfang:
 ### M4 – Android-App
 - Der Prototyp aus M1 wird durch die richtige Anbindung an den Kern ersetzt.
 - QR-Code scannen, Vollbild-Anzeige, Benachrichtigung als Rückfall.
-- Signierte APK aus der CI. Dafür den Ablauf "Android-Prototyp" wieder automatisch bei Pull Requests starten lassen; seit dem 14.11.2026 läuft er nur von Hand. Mit den Abhängigkeiten aus M2 (`crypto_box`, `serde`, `rust-version` 1.89) wurde er noch nicht gebaut; der erste Lauf zeigt, ob der Android-Build damit durchläuft.
+- Signierte APK aus der CI.
+- Erledigt: Der Ablauf „Android-Prototyp“ läuft wieder automatisch bei Pull Requests auf `app/**`, `crates/**` und `Cargo.lock`. Der erste Lauf am 14.11.2026 mit den Abhängigkeiten aus M2 ging durch. Er enthält bisher nur `lz-core`; `lz-client` kommt mit der gemeinsamen Anbindung in den Android-Build.
+- Erledigt: Push-Adresse beim Relay. Das Gerät speichert sie (`push_url`) und trägt sie bei jedem eigenen Postfach ein, auch bei neuen aus Einladen und Annehmen. Schlägt das fehl, bleibt sie vorgemerkt (`push_pending`), und der nächste Abruf trägt sie nach. Eine unveränderte Adresse kostet keinen Aufruf, weil UnifiedPush sie bei jedem Start erneut meldet. `lz push` setzt und entfernt sie von Hand.
+- Erledigt: TLS-Zertifikate prüft das Betriebssystem (`rustls-platform-verifier` 0.6, weil 0.7 `jni` 0.22 bräuchte und Tauri noch 0.21 nutzt), für HTTP und WebSocket gleich. Unter Linux ändert sich damit nichts, unter Android nutzt der Client die Prüfung des Systems mit selbst installierten Zertifikaten. Dort braucht sie einen einmaligen Aufruf mit dem App-Kontext und die Kotlin-Bibliothek des Crates; beides kommt mit dem Abruf beim Wecksignal. Fehlermeldungen nennen jetzt den Grund, etwa ein unbekanntes Zertifikat.
 - **Fertig, wenn:** Handy und Desktop zweier Personen sich gegenseitig anfragen können. Ab hier ist die App im Alltag nutzbar, mit einem Gerät pro Person.
 
 ### M5 – Mehrere Geräte

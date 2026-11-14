@@ -1,7 +1,7 @@
 //! Relays in memory, following the documented semantics, for tests.
 //!
 //! Not covered: expiry of vouchers and messages, the rate limit per hour and
-//! wake signals.
+//! wake signals. Push addresses are only stored and roughly checked.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,6 +32,8 @@ struct Server {
     vouchers: HashSet<String>,
     mailboxes: HashMap<MailboxId, Mailbox>,
     subscriptions: Vec<Subscription>,
+    /// Successful `put_reader` calls, for tests that expect none.
+    reader_puts: u64,
 }
 
 struct Mailbox {
@@ -39,6 +41,8 @@ struct Mailbox {
     send_hash: String,
     /// Registered readers with their last acknowledged sequence number.
     readers: HashMap<ReaderId, u64>,
+    /// Push address of each reader that has one.
+    push_urls: HashMap<ReaderId, String>,
     messages: Vec<(u64, Vec<u8>)>,
     last_seq: u64,
 }
@@ -87,6 +91,19 @@ impl FakeRelay {
         self.servers.lock().unwrap()[url].mailboxes[mailbox]
             .messages
             .len()
+    }
+
+    /// The push address the reader has for the mailbox.
+    pub fn push_url(&self, url: &str, mailbox: &MailboxId, reader: &ReaderId) -> Option<String> {
+        self.servers.lock().unwrap()[url].mailboxes[mailbox]
+            .push_urls
+            .get(reader)
+            .cloned()
+    }
+
+    /// How often `put_reader` succeeded on the relay.
+    pub fn reader_puts(&self, url: &str) -> u64 {
+        self.servers.lock().unwrap()[url].reader_puts
     }
 
     fn with<R>(
@@ -173,6 +190,7 @@ impl Relay for FakeRelay {
                     read_hash: token_hash(read_token),
                     send_hash: token_hash(send_token),
                     readers: HashMap::new(),
+                    push_urls: HashMap::new(),
                     messages: Vec::new(),
                     last_seq: 0,
                 },
@@ -201,11 +219,23 @@ impl Relay for FakeRelay {
         mailbox: &MailboxId,
         read_token: &Token,
         reader: &ReaderId,
+        push_url: Option<&str>,
     ) -> Result<(), RelayError> {
         self.with(relay, |server| {
+            // The real relay also refuses internal addresses.
+            if push_url.is_some_and(|url| {
+                !url.starts_with("https://") || url.starts_with("https://localhost")
+            }) {
+                return Err(refused(400, "bad_request"));
+            }
             let mailbox = server.mailbox(mailbox, read_token, true)?;
             let last = mailbox.last_seq;
             mailbox.readers.entry(*reader).or_insert(last);
+            match push_url {
+                Some(url) => mailbox.push_urls.insert(*reader, url.to_owned()),
+                None => mailbox.push_urls.remove(reader),
+            };
+            server.reader_puts += 1;
             Ok(())
         })
     }

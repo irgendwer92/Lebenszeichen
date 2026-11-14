@@ -271,7 +271,13 @@ impl<R: Relay> Ctx<R> {
 
         let prepared = async {
             self.relay
-                .put_reader(&url, &mailbox, &read_token, &device.reader_id)
+                .put_reader(
+                    &url,
+                    &mailbox,
+                    &read_token,
+                    &device.reader_id,
+                    device.push_url.as_deref(),
+                )
                 .await?;
             let voucher = match voucher {
                 true => Some(self.relay.create_voucher(&url, &access).await?),
@@ -363,7 +369,13 @@ impl<R: Relay> Ctx<R> {
         };
         let result = async {
             self.relay
-                .put_reader(&own_relay, &mailbox, &read_token, &device.reader_id)
+                .put_reader(
+                    &own_relay,
+                    &mailbox,
+                    &read_token,
+                    &device.reader_id,
+                    device.push_url.as_deref(),
+                )
                 .await?;
             let (contact, hello) =
                 accept(&invitation, own, self.now(), &mut OsRng).map_err(core)?;

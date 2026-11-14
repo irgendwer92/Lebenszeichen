@@ -132,6 +132,15 @@ enum Command {
         /// Name des Kontakts
         name: String,
     },
+    /// Trägt die Push-Adresse (UnifiedPush) ein, über die das Relay dieses Gerät weckt
+    Push {
+        /// Push-Adresse https://…
+        #[arg(required_unless_present = "remove", value_name = "URL")]
+        url: Option<String>,
+        /// Push-Adresse entfernen; das Relay weckt das Gerät dann nicht mehr
+        #[arg(long, conflicts_with = "url")]
+        remove: bool,
+    },
 }
 
 /// Parses the arguments, with German headings in the help of subcommands.
@@ -201,5 +210,6 @@ pub async fn run() -> Result<()> {
             weekly,
         } => ctx.rules(&name, interval_min, expiry_min, weekly).await,
         Command::Remove { name } => ctx.remove(&name).await,
+        Command::Push { url, .. } => ctx.set_push_url(url.as_deref()).await,
     }
 }

@@ -3,13 +3,17 @@
 //! Plain `http://` is allowed for local tests; in production the relay sits
 //! behind a reverse proxy with TLS.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use lz_core::wire::{MailboxId, RelayUrl, Token};
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
+use rustls::ClientConfig;
+use rustls_platform_verifier::BuilderVerifierExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tokio_tungstenite::Connector;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::{
@@ -27,16 +31,36 @@ const PING_INTERVAL: Duration = Duration::from_secs(30);
 #[derive(Clone)]
 pub struct Http {
     client: reqwest::Client,
+    /// The same TLS settings for the stream connection.
+    tls: Arc<ClientConfig>,
+}
+
+/// TLS with `ring`, certificates checked by the operating system: on Linux
+/// against its certificate files, on Android by the system's own check,
+/// including certificates a person installed. On Android this needs the
+/// setup call of `rustls-platform-verifier` first; without it every
+/// connection fails with an error.
+fn tls() -> Result<ClientConfig, RelayError> {
+    ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .and_then(|builder| builder.with_platform_verifier())
+        .map(|builder| builder.with_no_client_auth())
+        .map_err(transport)
 }
 
 impl Http {
     pub fn new() -> Result<Self, RelayError> {
+        let tls = tls()?;
         let client = reqwest::Client::builder()
             .timeout(TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
+            .use_preconfigured_tls(tls.clone())
             .build()
             .map_err(transport)?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            tls: Arc::new(tls),
+        })
     }
 
     fn call(&self, method: Method, relay: &RelayUrl, path: &str) -> RequestBuilder {
@@ -53,6 +77,19 @@ fn transport(error: impl std::fmt::Display) -> RelayError {
     RelayError::Transport(error.to_string())
 }
 
+/// Like [`transport`], with the causes: reqwest names only the step that
+/// failed, the reason (such as an unknown certificate) is in the source.
+fn with_causes(error: &(dyn std::error::Error + 'static)) -> RelayError {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    RelayError::Transport(text)
+}
+
 #[derive(Deserialize)]
 struct ErrorBody {
     error: String,
@@ -61,7 +98,7 @@ struct ErrorBody {
 /// Sends the request and turns every status other than `expected` into an
 /// error.
 async fn send(request: RequestBuilder, expected: StatusCode) -> Result<Response, RelayError> {
-    let response = request.send().await.map_err(transport)?;
+    let response = request.send().await.map_err(|e| with_causes(&e))?;
     let status = response.status();
     if status == expected {
         return Ok(response);
@@ -97,8 +134,8 @@ struct MailboxBody {
 }
 
 #[derive(Serialize)]
-struct ReaderBody {
-    push_url: Option<String>,
+struct ReaderBody<'a> {
+    push_url: Option<&'a str>,
 }
 
 impl Relay for Http {
@@ -162,12 +199,13 @@ impl Relay for Http {
         mailbox: &MailboxId,
         read_token: &Token,
         reader: &ReaderId,
+        push_url: Option<&str>,
     ) -> Result<(), RelayError> {
         let path = format!("mailboxes/{}/readers/{}", b64(mailbox), b64(reader));
         let request = self
             .call(Method::PUT, relay, &path)
             .bearer_auth(b64(read_token))
-            .json(&ReaderBody { push_url: None });
+            .json(&ReaderBody { push_url });
         send(request, StatusCode::NO_CONTENT).await.map(drop)
     }
 
@@ -203,7 +241,10 @@ impl Relay for Http {
         } else {
             return Err(transport("Adresse beginnt nicht mit http:// oder https://"));
         };
-        let (socket, _) = tokio::time::timeout(TIMEOUT, tokio_tungstenite::connect_async(url))
+        let connector = Connector::Rustls(self.tls.clone());
+        let connect =
+            tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector));
+        let (socket, _) = tokio::time::timeout(TIMEOUT, connect)
             .await
             .map_err(|_| transport("Zeitüberschreitung"))?
             .map_err(transport)?;
