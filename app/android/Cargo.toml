@@ -5,7 +5,7 @@ version = "0.1.0"
 license = "GPL-3.0-or-later"
 edition = "2024"
 rust-version = "1.90"
-repository = "https://github.com/irgendwer92/Are-You-Alive-"
+repository = "https://github.com/irgendwer92/Lebenszeichen"
 publish = false
 # Required by tauri-plugin: carries the path of the Android module and the
 # permissions to the build script of the app.

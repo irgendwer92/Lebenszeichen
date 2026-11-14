@@ -5,7 +5,7 @@ version = "0.1.0"
 license = "GPL-3.0-or-later"
 edition = "2024"
 rust-version = "1.90"
-repository = "https://github.com/irgendwer92/Are-You-Alive-"
+repository = "https://github.com/irgendwer92/Lebenszeichen"
 publish = false
 
 # The Kotlin layer loads this library by name (CoreBridge.kt), so the name

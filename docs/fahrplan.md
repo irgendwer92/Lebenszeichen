@@ -82,6 +82,7 @@ Umfang:
 ### M3 – Linux-Desktop
 - Oberfläche: Kontaktliste, Anfrage-Knopf, Einladung als QR- und Textcode, Einstellungen pro Kontakt.
 - Tray, dauerhafte Verbindung, Vordergrund-Fenster ohne Tastaturfokus, Benachrichtigung als Rückfall.
+- Offen aus einer Dependabot-Meldung vom 14.11.2026: Tauri 2 braucht auf Linux die GTK-3-Bindungen und damit `glib` 0.18; behoben ist der Fehler in `VariantStrIter` erst ab 0.20, das es nur für GTK 4 gibt. Die betroffene Funktion ruft weder Tauri noch GTK, WebKit, `wry` oder `tao` auf, und der Android-Build enthält `glib` gar nicht. Mit dem Linux-Build erneut prüfen, ob Tauri inzwischen auf neuere Bindungen umgestiegen ist.
 - **Fertig, wenn:** Desktop-App und `cli` sich gegenseitig anfragen können.
 
 ### M4 – Android-App

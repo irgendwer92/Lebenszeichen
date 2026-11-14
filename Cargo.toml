@@ -11,7 +11,7 @@ version = "0.0.0"
 edition = "2024"
 # 1.89 for file locks in std (lz-core store).
 rust-version = "1.89"
-repository = "https://github.com/irgendwer92/Are-You-Alive-"
+repository = "https://github.com/irgendwer92/Lebenszeichen"
 publish = false
 
 [workspace.dependencies]
