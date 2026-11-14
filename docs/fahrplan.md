@@ -88,7 +88,7 @@ Umfang:
 ### M4 – Android-App
 - Der Prototyp aus M1 wird durch die richtige Anbindung an den Kern ersetzt.
 - QR-Code scannen, Vollbild-Anzeige, Benachrichtigung als Rückfall.
-- Signierte APK aus der CI. Dafür den Ablauf "Android-Prototyp" wieder automatisch bei Pull Requests starten lassen; seit dem 14.11.2026 läuft er nur von Hand.
+- Signierte APK aus der CI. Dafür den Ablauf "Android-Prototyp" wieder automatisch bei Pull Requests starten lassen; seit dem 14.11.2026 läuft er nur von Hand. Mit den Abhängigkeiten aus M2 (`crypto_box`, `serde`, `rust-version` 1.89) wurde er noch nicht gebaut; der erste Lauf zeigt, ob der Android-Build damit durchläuft.
 - **Fertig, wenn:** Handy und Desktop zweier Personen sich gegenseitig anfragen können. Ab hier ist die App im Alltag nutzbar, mit einem Gerät pro Person.
 
 ### M5 – Mehrere Geräte
