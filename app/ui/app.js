@@ -240,6 +240,39 @@ async function showDevice() {
   );
 }
 
+/// Shows the event log of the Kotlin layer, newest line first: what wake
+/// signals, fetches and answers did while the app was closed.
+async function showDeviceLog() {
+  let lines = [];
+  try {
+    lines = (await tauri.core.invoke(PLUGIN + "read_log")).lines ?? [];
+  } catch (error) {
+    showError(String(error));
+  }
+  $("device-log").replaceChildren(
+    ...[...lines].reverse().map((line) => el("li", "", line.replaceAll("\t", "  "))),
+  );
+}
+
+$("device-log").closest("details").addEventListener("toggle", (event) => {
+  if (event.target.open) showDeviceLog();
+});
+
+$("device-log-clear").addEventListener("click", async () => {
+  try {
+    await tauri.core.invoke(PLUGIN + "clear_log");
+  } catch (error) {
+    showError(String(error));
+  }
+  await showDeviceLog();
+});
+
+/// On Android the notifications follow what the window just did.
+function refreshNotifications() {
+  if (document.documentElement.dataset.platform !== "android") return;
+  tauri.core.invoke(PLUGIN + "refresh_requests").catch(() => {});
+}
+
 // Back from the system settings: show what changed.
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && !$("panel-device").hidden) showDevice();
@@ -490,6 +523,7 @@ async function refresh() {
     redrawLater = true;
     return;
   }
+  refreshNotifications();
   const contacts = [...cards.contacts].sort((a, b) => rank(a) - rank(b));
   $("contacts").replaceChildren(...contacts.map(contactCard));
   $("invitations").replaceChildren(...cards.invitations.map(invitationCard));

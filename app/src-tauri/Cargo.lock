@@ -2046,6 +2046,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-lebenszeichen",
  "tauri-plugin-single-instance",
+ "tempfile",
  "tokio",
  "zbus",
 ]

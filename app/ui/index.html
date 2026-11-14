@@ -126,9 +126,13 @@
           <ul id="device-checks" class="checks"></ul>
           <p class="note">
             Auch die Verteiler-App (ntfy) muss von der Akku-Optimierung ausgenommen sein,
-            sonst kommen Wecksignale im Ruhezustand verspätet an. Noch weckt das Relay die
-            App nicht; das kommt mit dem nächsten Schritt.
+            sonst kommen Wecksignale im Ruhezustand verspätet an.
           </p>
+          <details class="history">
+            <summary>Protokoll</summary>
+            <button id="device-log-clear" type="button" class="quiet">Leeren</button>
+            <ol id="device-log" class="log"></ol>
+          </details>
         </section>
 
         <section class="contacts">

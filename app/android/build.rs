@@ -6,11 +6,9 @@ const COMMANDS: &[&str] = &[
     "status",
     "register",
     "unregister",
-    "set_answer_url",
-    "trigger_local",
+    "refresh_requests",
     "request_notification_permission",
     "open_settings",
-    "copy_text",
     "read_log",
     "clear_log",
 ];

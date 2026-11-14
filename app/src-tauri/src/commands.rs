@@ -37,19 +37,37 @@ pub struct AppState {
 
 /// Picks the state file and starts fetching in the background.
 ///
-/// On the desktop `LZ_STATE` may name the file; the app is a device of its
-/// own and does not share the state file of `lz`. Otherwise, and always on
-/// Android, it is `device.json` in the data directory of the app.
+/// On the desktop `LZ_STATE` may name the file, else it is `device.json` in
+/// the data directory of the app; the app is a device of its own and does
+/// not share the state file of `lz`. On Android it is `device.json` in the
+/// files directory, shared with the background path.
 pub fn setup(app: &mut tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let path = match std::env::var_os("LZ_STATE").filter(|v| !v.is_empty() && cfg!(desktop)) {
-        Some(path) => PathBuf::from(path),
-        None => app.path().app_data_dir()?.join("device.json"),
-    };
-    // Before the first connection; the app cannot work without it.
-    #[cfg(target_os = "android")]
-    crate::jni_bridge::init_tls()?;
+    let path = state_path(app)?;
     app.manage(AppState { path: path.clone() });
     spawn_listener(app.handle().clone(), path.clone());
+    Ok(path)
+}
+
+#[cfg(desktop)]
+fn state_path(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(
+        match std::env::var_os("LZ_STATE").filter(|v| !v.is_empty()) {
+            Some(path) => PathBuf::from(path),
+            None => app.path().app_data_dir()?.join("device.json"),
+        },
+    )
+}
+
+/// The same file as the background path uses (`jni_bridge`). Also sets up
+/// the certificate check, before the first connection. A device created by
+/// a build before 4d lies in the data directory of Tauri; it moves once.
+#[cfg(not(desktop))]
+fn state_path(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let path = crate::jni_bridge::tauri_setup()?;
+    let earlier = app.path().app_data_dir()?.join("device.json");
+    if earlier != path && earlier.exists() && !path.exists() {
+        std::fs::rename(&earlier, &path)?;
+    }
     Ok(path)
 }
 

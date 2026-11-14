@@ -1,7 +1,7 @@
 name: Android-Prototyp
 
-# Baut die Debug-APK des Durchstichs aus M1. Der Ablauf ist die einzige
-# Stelle, an der der Android-Teil übersetzt wird; siehe docs/m1-durchstich.md.
+# Baut die Debug-APK der Android-App. Der Ablauf ist die einzige
+# Stelle, an der der Android-Teil übersetzt wird.
 #
 # Läuft bei Pull Requests, die App, Kern oder Abhängigkeiten berühren, und
 # weiter von Hand (Actions → Android-Prototyp → Run workflow, oder:
@@ -83,8 +83,8 @@ jobs:
           set -euo pipefail
           apk="$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -print -quit)"
           test -n "$apk"
-          cp "$apk" "$RUNNER_TEMP/lebenszeichen-m1-arm64-debug.apk"
-          apk="$RUNNER_TEMP/lebenszeichen-m1-arm64-debug.apk"
+          cp "$apk" "$RUNNER_TEMP/lebenszeichen-arm64-debug.apk"
+          apk="$RUNNER_TEMP/lebenszeichen-arm64-debug.apk"
           build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
           unpacked="$RUNNER_TEMP/apk"
           mkdir -p "$unpacked"
@@ -94,7 +94,10 @@ jobs:
           library="$unpacked/lib/arm64-v8a/liblebenszeichen_lib.so"
           ls -l "$unpacked"/lib/*/
           "$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D --defined-only "$library" > "$RUNNER_TEMP/symbols.txt"
-          grep -F "Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge_marker" "$RUNNER_TEMP/symbols.txt"
+          for symbol in nativeFetch nativeOpenRequests nativeRespond nativeSetPushUrl; do
+            grep -F "Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge_$symbol" "$RUNNER_TEMP/symbols.txt" \
+              || { echo "fehlt in der Bibliothek: $symbol"; exit 1; }
+          done
           echo "::endgroup::"
 
           echo "::group::Manifest"
@@ -115,7 +118,7 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Klassen der Kotlin-Schicht"
-          for class in CoreBridge PushServiceImpl ReactionReceiver RequestActivity AnswerWorker LebenszeichenPlugin; do
+          for class in CoreBridge PushServiceImpl ReactionReceiver RequestActivity AnswerWorker FetchWorker ExpiryWorker PushUrlWorker LebenszeichenPlugin; do
             grep -a -l -F "Lio/github/irgendwer92/lebenszeichen/droid/$class;" "$unpacked"/classes*.dex \
               || { echo "fehlt im Bytecode: $class"; exit 1; }
           done
@@ -129,8 +132,8 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: lebenszeichen-m1-arm64-debug-apk
-          path: ${{ runner.temp }}/lebenszeichen-m1-arm64-debug.apk
+          name: lebenszeichen-arm64-debug-apk
+          path: ${{ runner.temp }}/lebenszeichen-arm64-debug.apk
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

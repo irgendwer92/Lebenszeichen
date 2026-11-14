@@ -18,7 +18,9 @@ import androidx.activity.OnBackPressedCallback
  * still be answered.
  */
 class RequestActivity : ComponentActivity() {
-    private var requestId: String = ""
+    private var name: String = ""
+    private var since: Long = -1
+    private val key: String get() = "$name@$since"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,8 +35,10 @@ class RequestActivity : ComponentActivity() {
             )
         }
 
-        requestId = intent.getStringExtra(RequestPresenter.EXTRA_REQUEST_ID) ?: ""
-        if (requestId.isEmpty() || Store.isAnswered(this, requestId)) {
+        name = intent.getStringExtra(RequestPresenter.EXTRA_NAME) ?: ""
+        since = intent.getLongExtra(RequestPresenter.EXTRA_SINCE, -1)
+        val titleText = intent.getStringExtra(RequestPresenter.EXTRA_TITLE) ?: "Lebenszeichen?"
+        if (name.isEmpty() || since < 0 || Store.isAnswered(this, key)) {
             finish()
             return
         }
@@ -42,13 +46,13 @@ class RequestActivity : ComponentActivity() {
         val padding = (32 * resources.displayMetrics.density).toInt()
         val title =
             TextView(this).apply {
-                text = "Lebenszeichen?"
-                textSize = 36f
+                text = titleText
+                textSize = 32f
                 gravity = Gravity.CENTER
             }
         val hint =
             TextView(this).apply {
-                text = "Antippen oder schließen genügt."
+                text = "Antippen oder Schließen sendet dein Lebenszeichen."
                 textSize = 18f
                 gravity = Gravity.CENTER
                 setPadding(0, padding / 2, 0, 0)
@@ -73,13 +77,13 @@ class RequestActivity : ComponentActivity() {
                 }
             },
         )
-        EventLog.add(this, requestId, "fullscreen-shown", "")
+        EventLog.add(this, key, "fullscreen-shown", "")
     }
 
     /** Closes the display if the request was answered through the notification meanwhile. */
     override fun onResume() {
         super.onResume()
-        if (requestId.isNotEmpty() && Store.isAnswered(this, requestId)) {
+        if (name.isNotEmpty() && Store.isAnswered(this, key)) {
             finish()
         }
     }
@@ -90,13 +94,14 @@ class RequestActivity : ComponentActivity() {
      */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (requestId.isNotEmpty() && !isFinishing) {
+        if (name.isNotEmpty() && !isFinishing) {
             react(Requests.REACTION_FULLSCREEN_LEAVE)
         }
     }
 
     private fun react(reaction: String) {
-        Requests.react(this, requestId, reaction)
+        // Only stores the mark and queues the answer; the network is WorkManager's.
+        Requests.react(this, name, since, reaction)
         finish()
     }
 }
