@@ -6,3 +6,8 @@
 # JNI by name; its library ships no rules of its own. Without this, R8
 # renames or removes it in the release build and every TLS connection fails.
 -keep class org.rustls.platformverifier.** { *; }
+
+# WorkManager (FetchWorker, AnswerWorker …) builds its Room database by
+# name; R8 removed the generated constructor in the release build, and the
+# app crashed at start (NoSuchMethodException WorkDatabase_Impl.<init>).
+-keep class * extends androidx.room.RoomDatabase { <init>(); }
