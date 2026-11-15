@@ -1,6 +1,6 @@
 # Lebenszeichen – Signierte Android-App
 
-Stand: 14.11.2026. Gehört zu `fahrplan.md` (M4).
+Stand: 15.11.2026. Gehört zu `fahrplan.md` (M4).
 
 Die signierte APK baut der Ablauf `.github/workflows/android-release.yml`, bei einem Tag `v*` oder von Hand. Pull Requests bauen weiter nur die Debug-APK. Den Schlüssel dazu legst du einmal selbst an; er verlässt deinen Rechner nur als Secret bei GitHub.
 
@@ -71,3 +71,13 @@ Es sollten die drei Namen erscheinen. Die Werte zeigt GitHub nie wieder an.
 
 - Im Lauf unter „APK prüfen“ steht „Zertifikat“ mit dem SHA-256-Fingerabdruck. Er muss mit dem aus Schritt 2 übereinstimmen.
 - Die Release-App und die Debug-App aus den Pull Requests haben denselben Paketnamen, aber verschiedene Schlüssel. Android installiert die eine nicht über die andere: Vor dem Wechsel die Debug-App deinstallieren. Dabei gehen Gerät und Kontakte auf dem Handy verloren; danach neu koppeln.
+
+## Fingerabdruck
+
+Zertifikat der Release-APK, SHA-256 (seit 15.11.2026):
+
+```
+61:EE:59:A2:68:54:C5:F2:CD:A0:11:2D:3E:02:D7:6D:F0:6E:06:5E:6A:2C:C0:52:0D:5C:C3:A3:44:3C:F2:AF
+```
+
+Eine APK mit einem anderen Fingerabdruck stammt nicht aus diesem Projekt.

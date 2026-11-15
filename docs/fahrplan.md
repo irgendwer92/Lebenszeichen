@@ -107,7 +107,7 @@ Umfang:
   die Benachrichtigung unter KDE Plasma und GNOME geprüft ist und die
   Desktop-Oberfläche überarbeitet ist.
 
-### M4 – Android-App (Fertig-Kriterium erfüllt am 14.11.2026; offen: signierte APK)
+### M4 – Android-App (abgeschlossen am 15.11.2026)
 - Der Prototyp aus M1 wird durch die richtige Anbindung an den Kern ersetzt.
 - QR-Code scannen, Vollbild-Anzeige, Benachrichtigung als Rückfall.
 - Signierte APK aus der CI. Ablauf `android-release.yml` gebaut (Tag `v*` oder von Hand, nie bei Pull Requests; Umgebung `release`; Signieren mit `apksigner` außerhalb von Gradle; R8-Regel für `rustls-platform-verifier`; Release-Entwurf bei Tags). Offen: Schlüssel anlegen und hinterlegen, siehe `android-release.md`, danach der erste Lauf.
@@ -121,7 +121,7 @@ Umfang:
 - Erledigt: Einladung per QR-Code scannen (nur Android). „QR-Code scannen“ im Feld „Einladung annehmen“ öffnet die Kamera (CameraX); jedes Bild wird nur im Speicher untersucht, `lz_client::qr::decode_invitation` (`rqrr`) sucht darin einen Code mit `LZ1-` und übergeht andere QR-Codes. Der erkannte Code steht danach im Feld. `rqrr` läuft auch im Debug-Build optimiert. Ohne Kameraerlaubnis bleibt das Einfügen.
 - Erledigt am 14.11.2026: Relay und ntfy laufen auf dem eigenen Server hinter dem Traefik von NetBird, unter `relay.chaos4all.de` und `ntfy.chaos4all.de`, beide ohne Zugriffsprotokoll. ntfy lässt alle nur auf `up*` schreiben und nur das Konto des Handys lesen. Kopplung, Anfrage, Antwort und Wecksignal von außen geprüft. Das Relay weckt jeden öffentlichen Verteiler; `LZ_PUSH_ALLOWED_HOSTS` bleibt vorerst aus.
 - Fertig-Kriterium erfüllt am 14.11.2026, auf einem Fairphone 4 mit der Debug-APK gegen `relay.chaos4all.de` und ntfy auf dem eigenen Server: Einladung per QR-Code gescannt, gekoppelt, dann in beide Richtungen angefragt und geantwortet, mit `lz` und mit der Desktop-App. Geprüft: Wecksignal bei geschlossener App, Vollbild-Anzeige bei gesperrtem Bildschirm (Entsperren gilt als Antwort), Banner bei eingeschaltetem Bildschirm und Wegwischen als Antwort, Antwort in der App, Häkchen auf dem Handy nach der Antwort der Gegenseite. Dabei gefunden und behoben: Die Live-Verbindung des eingefrorenen Prozesses verhinderte das Wecksignal.
-- Noch offen in M4: signierte APK. Der Ablauf steht; es fehlen Schlüssel und Secrets (siehe `android-release.md`) und der erste Lauf.
+- Erledigt am 15.11.2026: erste signierte Release-APK aus der CI (Version 0.1.0, 18,5 MB statt 46 MB als Debug-Build; Signaturschema v2 und v3). Der Fingerabdruck des Zertifikats stimmt mit dem Schlüssel überein, alle Prüfungen der APK bestehen auch nach R8. Die Secrets liegen nur in der Umgebung `release`, die nur `main` und Tags `v*` nutzen dürfen.
 - **Fertig, wenn:** Handy und Desktop zweier Personen sich gegenseitig anfragen können. Ab hier ist die App im Alltag nutzbar, mit einem Gerät pro Person.
 
 ### M5 – Mehrere Geräte
