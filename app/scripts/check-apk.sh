@@ -28,9 +28,12 @@ for needle in \
   droid.PushServiceImpl droid.ReactionReceiver droid.RequestActivity droid.ScanActivity android.permission.CAMERA \
   android.permission.USE_FULL_SCREEN_INTENT android.permission.POST_NOTIFICATIONS \
   org.unifiedpush.android.connector.MESSAGE org.unifiedpush.android.connector.PUSH_EVENT \
-  androidx.work.impl.background.systemjob.SystemJobService; do
+  androidx.work.impl.background.systemjob.SystemJobService \
+  android:networkSecurityConfig android:dataExtractionRules; do
   grep -m 1 -F "$needle" "$work/manifest.txt" || { echo "fehlt im Manifest: $needle"; exit 1; }
 done
+# allowBackup must be false (0x0); the private keys must not leave the device.
+grep -E "android:allowBackup.*=(false|0x0)" "$work/manifest.txt" || { echo "allowBackup ist nicht false"; exit 1; }
 "$build_tools/aapt2" dump badging "$apk" | grep -E "^(package|sdkVersion|targetSdkVersion|native-code)" || true
 echo "::endgroup::"
 

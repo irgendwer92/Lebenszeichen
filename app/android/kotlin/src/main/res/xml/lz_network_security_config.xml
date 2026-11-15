@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Plain http for the Java side of the app. It is needed for revocation
+  lists: the certificate check (rustls-platform-verifier) asks Android, and
+  Android fetches CRLs such as http://yr2.c.lencr.org/… over http; they are
+  signed, so http is how CAs serve them. Without this the release build
+  reported every Let's Encrypt certificate as revoked.
+
+  Nothing else is affected: the relay connection runs in Rust and does not
+  use Android's HTTP stack, the interface only loads local files, and the
+  Kotlin layer makes no HTTP requests.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

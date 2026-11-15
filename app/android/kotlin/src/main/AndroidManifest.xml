@@ -10,7 +10,15 @@
     <!-- The camera only scans invitations; pasting the code works without it. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
-    <application>
+    <!--
+      No backup and no transfer to a new device: the state file holds private
+      keys. Plain http only for revocation lists, see the config file.
+    -->
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/lz_data_extraction_rules"
+        android:fullBackupContent="false"
+        android:networkSecurityConfig="@xml/lz_network_security_config">
         <!-- Receives the UnifiedPush events from the receiver of the connector library. -->
         <service
             android:name="io.github.irgendwer92.lebenszeichen.droid.PushServiceImpl"
