@@ -1,0 +1,159 @@
+name: Android-Release
+
+# Baut die signierte Release-APK. Nur bei einem Tag v* und von Hand, nie bei
+# Pull Requests: der Schlüssel liegt in der Umgebung "release", deren Läufe
+# eine Freigabe brauchen. Einrichtung in docs/android-release.md.
+#
+# Tag: versionCode nach der Formel von Tauri (0.1.0 → 1000), die Version im
+# Tag muss zu tauri.conf.json passen, die APK kommt in einen Release-Entwurf.
+# Von Hand: versionCode = Laufnummer, nur zum Testen, nur als Artefakt.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  apk:
+    name: Signierte APK (arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      # Für den Release-Entwurf bei einem Tag.
+      contents: write
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Schlüssel vorhanden?
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "::error::Schlüssel fehlt in der Umgebung release; siehe docs/android-release.md"
+            exit 1
+          fi
+
+      - name: Version bestimmen
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version src-tauri/tauri.conf.json)"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME passt nicht zu Version $version in tauri.conf.json"
+              exit 1
+            fi
+          else
+            echo "CONFIG={\"bundle\":{\"android\":{\"versionCode\":$GITHUB_RUN_NUMBER}}}" >> "$GITHUB_ENV"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Java und NDK des Runners wählen
+        run: |
+          echo "JAVA_HOME=${JAVA_HOME_21_X64:-$JAVA_HOME}" >> "$GITHUB_ENV"
+          echo "NDK_HOME=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          key: release
+
+      - name: Gradle-Cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('app/package-lock.json', 'app/android/kotlin/build.gradle.kts') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Tauri-CLI installieren
+        run: npm ci
+
+      - name: Android-Projekt erzeugen
+        run: npm run tauri android init -- --ci --skip-targets-install
+
+      # Ohne --debug: Rust optimiert, R8 verkleinert den Java-Teil. Gradle
+      # signiert nicht; das geschieht im nächsten Schritt.
+      - name: APK bauen
+        run: |
+          set -euo pipefail
+          if [ -n "${CONFIG:-}" ]; then set -- --config "$CONFIG"; fi
+          npm run tauri android build -- --ci --apk --target aarch64 "$@"
+
+      - name: Signieren
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          unsigned="$(find src-tauri/gen/android/app/build/outputs/apk -name '*release*.apk' -print -quit)"
+          test -n "$unsigned"
+          build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
+          keystore="$RUNNER_TEMP/release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$keystore"
+          # 16 KB für die Seiten der nativen Bibliothek (Android 15 und neuer).
+          "$build_tools/zipalign" -P 16 -f 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
+          apk="$RUNNER_TEMP/lebenszeichen-$VERSION-arm64.apk"
+          # Passwörter nur über die Umgebung, nie auf der Kommandozeile.
+          "$build_tools/apksigner" sign \
+            --ks "$keystore" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEYSTORE_PASSWORD \
+            --out "$apk" "$RUNNER_TEMP/aligned.apk"
+          rm -f "$keystore" "$RUNNER_TEMP/aligned.apk"
+          echo "APK=$apk" >> "$GITHUB_ENV"
+
+      - name: Schlüssel entfernen
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: APK prüfen
+        run: |
+          set -euo pipefail
+          scripts/check-apk.sh "$APK"
+          build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
+          echo "::group::Zertifikat (mit keytool -list -v vergleichen)"
+          "$build_tools/apksigner" verify --verbose --print-certs "$APK" | grep -E "Verified using|SHA-256"
+          echo "::endgroup::"
+          (cd "$(dirname "$APK")" && sha256sum "$(basename "$APK")" > "$(basename "$APK").sha256")
+          cat "$APK.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lebenszeichen-release-apk
+          path: |
+            ${{ env.APK }}
+            ${{ env.APK }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Release-Entwurf
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "Lebenszeichen $VERSION" \
+            --notes "Signierte APK für Android (arm64). Prüfsumme in der .sha256-Datei, Zertifikat im Lauf unter „APK prüfen“." \
+            "$APK" "$APK.sha256"

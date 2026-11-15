@@ -53,7 +53,7 @@ enum FollowUp {
 }
 
 /// Own mailboxes grouped by relay, with their read tokens.
-fn own_mailboxes(device: &Device) -> HashMap<RelayUrl, Vec<(MailboxId, Token)>> {
+pub(crate) fn own_mailboxes(device: &Device) -> HashMap<RelayUrl, Vec<(MailboxId, Token)>> {
     let mut map: HashMap<RelayUrl, Vec<(MailboxId, Token)>> = HashMap::new();
     for contact in device.contacts.iter().filter(|c| !c.state.ended) {
         map.entry(contact.own_relay)
@@ -100,6 +100,7 @@ impl<R: Relay> Ctx<R> {
         let (deliveries, mut incoming) = mpsc::unbounded_channel();
         let mut live: HashMap<RelayUrl, Live> = HashMap::new();
         let mut notices = Vec::new();
+        self.retry_push_url().await?;
         self.reconcile(&mut live, &deliveries, &mut notices).await?;
         if live.is_empty() && !listen {
             self.clean_invitations().await?;

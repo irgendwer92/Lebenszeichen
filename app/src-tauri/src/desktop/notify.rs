@@ -24,7 +24,7 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::Value;
 
 use super::alert;
-use super::{EventSink, LINE_EVENT, new_ctx, runtime};
+use crate::commands::{EventSink, LINE_EVENT, new_ctx, runtime};
 
 /// Longest pause between two comparisons, so that expired requests vanish.
 const TICK: Duration = Duration::from_secs(30);
@@ -352,10 +352,7 @@ impl Shared {
     /// Sends the sign of life; its text goes to the window like that of the
     /// background fetch.
     fn answer(&self, key: Key) {
-        let sink = EventSink {
-            app: self.app.clone(),
-            pending: Vec::new(),
-        };
+        let sink = EventSink::new(self.app.clone());
         let name = key.0.clone();
         let outcome = runtime().and_then(|runtime| {
             let mut ctx = new_ctx(self.path.clone(), Box::new(sink))?;

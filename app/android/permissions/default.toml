@@ -4,11 +4,10 @@ permissions = [
   "allow-status",
   "allow-register",
   "allow-unregister",
-  "allow-set-answer-url",
-  "allow-trigger-local",
+  "allow-refresh-requests",
   "allow-request-notification-permission",
   "allow-open-settings",
-  "allow-copy-text",
   "allow-read-log",
   "allow-clear-log",
+  "allow-scan-invitation",
 ]

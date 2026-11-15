@@ -440,7 +440,7 @@ async fn acknowledged_messages_do_not_come_again() {
     // A second reader of the same mailbox, as with a second device.
     world
         .relay
-        .put_reader(&url(RELAY_A), &mailbox, &stored.read_token, &[9; 16])
+        .put_reader(&url(RELAY_A), &mailbox, &stored.read_token, &[9; 16], None)
         .await
         .unwrap();
     bert.ctx.request("Anna").await.unwrap();
@@ -577,4 +577,134 @@ async fn the_same_invitation_is_not_accepted_twice() {
     // No second `hello` went out, so Anna sees exactly one acceptance.
     anna.sync().await;
     assert!(!anna.out.take().contains("weiteres Mal"));
+}
+
+const PUSH: &str = "https://push.example/up/anna";
+
+/// The push address Anna's reader entry has for the mailbox.
+fn push_at(
+    world: &World,
+    relay: &str,
+    mailbox: &lz_core::wire::MailboxId,
+    anna: &Person,
+) -> Option<String> {
+    world
+        .relay
+        .push_url(relay, mailbox, &anna.device().reader_id)
+}
+
+#[tokio::test]
+async fn push_url_reaches_every_mailbox() {
+    let world = World::new();
+    let (mut anna, mut bert) = paired(&world).await;
+    anna.ctx.invite("Carla", false).await.unwrap();
+    anna.ctx.set_push_url(Some(PUSH)).await.unwrap();
+    assert!(anna.out.take().contains("Push-Adresse eingetragen."));
+
+    let device = anna.device();
+    assert!(!device.push_pending);
+    let contact = anna.contact("Bert").state.contact.own_mailbox;
+    let invitation = device.invitations[0].pending.own.mailbox;
+    assert_eq!(
+        push_at(&world, RELAY_A, &contact, &anna).as_deref(),
+        Some(PUSH)
+    );
+    assert_eq!(
+        push_at(&world, RELAY_A, &invitation, &anna).as_deref(),
+        Some(PUSH)
+    );
+
+    // New mailboxes get it from the start, by inviting and by accepting.
+    anna.ctx.invite("Dora", false).await.unwrap();
+    let dora = anna.device().invitations[1].pending.own.mailbox;
+    assert_eq!(
+        push_at(&world, RELAY_A, &dora, &anna).as_deref(),
+        Some(PUSH)
+    );
+    let code = bert.ctx.invite("Anna 2", false).await.unwrap();
+    anna.ctx.accept("Bert 2", &code).await.unwrap();
+    let accepted = anna.contact("Bert 2").state.contact.own_mailbox;
+    assert_eq!(
+        push_at(&world, RELAY_A, &accepted, &anna).as_deref(),
+        Some(PUSH)
+    );
+    // Bert never set one.
+    let bert_mailbox = bert.contact("Anna").state.contact.own_mailbox;
+    assert_eq!(
+        world
+            .relay
+            .push_url(RELAY_B, &bert_mailbox, &bert.device().reader_id),
+        None
+    );
+}
+
+#[tokio::test]
+async fn unchanged_push_url_costs_no_call() {
+    let world = World::new();
+    let (mut anna, _bert) = paired(&world).await;
+    anna.ctx.set_push_url(Some(PUSH)).await.unwrap();
+    let calls = world.relay.reader_puts(RELAY_A);
+    anna.ctx.set_push_url(Some(PUSH)).await.unwrap();
+    assert_eq!(world.relay.reader_puts(RELAY_A), calls);
+}
+
+#[tokio::test]
+async fn failed_push_url_is_sent_by_the_next_fetch() {
+    let world = World::new();
+    let (mut anna, _bert) = paired(&world).await;
+    world.relay.set_down(RELAY_A, true);
+    expect_err(anna.ctx.set_push_url(Some(PUSH)).await, "nicht erreichbar");
+    let device = anna.device();
+    assert_eq!(device.push_url.as_deref(), Some(PUSH));
+    assert!(device.push_pending);
+
+    // Still down: fetching goes on, the address stays pending.
+    anna.ctx.sync().await.unwrap();
+    assert!(
+        anna.out
+            .take()
+            .contains("Push-Adresse noch nicht überall eingetragen")
+    );
+    assert!(anna.device().push_pending);
+
+    world.relay.set_down(RELAY_A, false);
+    anna.sync().await;
+    assert!(!anna.device().push_pending);
+    let mailbox = anna.contact("Bert").state.contact.own_mailbox;
+    assert_eq!(
+        push_at(&world, RELAY_A, &mailbox, &anna).as_deref(),
+        Some(PUSH)
+    );
+}
+
+#[tokio::test]
+async fn push_url_can_be_removed() {
+    let world = World::new();
+    let (mut anna, _bert) = paired(&world).await;
+    anna.ctx.set_push_url(Some(PUSH)).await.unwrap();
+    anna.ctx.set_push_url(None).await.unwrap();
+    assert!(anna.out.take().contains("Push-Adresse entfernt."));
+    assert_eq!(anna.device().push_url, None);
+    let mailbox = anna.contact("Bert").state.contact.own_mailbox;
+    assert_eq!(push_at(&world, RELAY_A, &mailbox, &anna), None);
+}
+
+#[tokio::test]
+async fn invalid_push_urls_are_refused() {
+    let world = World::new();
+    let (mut anna, _bert) = paired(&world).await;
+    expect_err(
+        anna.ctx.set_push_url(Some("http://push.example/up")).await,
+        "muss mit https:// beginnen",
+    );
+    let long = format!("https://push.example/{}", "a".repeat(1024));
+    expect_err(anna.ctx.set_push_url(Some(&long)).await, "zu lang");
+    assert_eq!(anna.device().push_url, None);
+
+    // Refused by the relay: kept, so the next fetch tries again.
+    expect_err(
+        anna.ctx.set_push_url(Some("https://localhost/up")).await,
+        "lehnt die Push-Adresse ab",
+    );
+    assert!(anna.device().push_pending);
 }

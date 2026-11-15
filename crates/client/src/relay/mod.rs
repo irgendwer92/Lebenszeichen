@@ -120,13 +120,15 @@ pub trait Relay {
         read_token: &Token,
     ) -> Result<(), RelayError>;
 
-    /// Registers this device as reader of the mailbox, without push address.
+    /// Registers this device as reader of the mailbox, or changes its push
+    /// address. Without one, the relay does not wake the device.
     async fn put_reader(
         &self,
         relay: &RelayUrl,
         mailbox: &MailboxId,
         read_token: &Token,
         reader: &ReaderId,
+        push_url: Option<&str>,
     ) -> Result<(), RelayError>;
 
     /// Delivers an envelope. Fails with [`RelayError::UnknownMailbox`] if

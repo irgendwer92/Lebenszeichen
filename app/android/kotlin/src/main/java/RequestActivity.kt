@@ -1,5 +1,10 @@
 package io.github.irgendwer92.lebenszeichen.droid
 
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -8,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.core.content.ContextCompat
 
 /**
  * Full-screen display of a request over the lock screen.
@@ -18,7 +24,19 @@ import androidx.activity.OnBackPressedCallback
  * still be answered.
  */
 class RequestActivity : ComponentActivity() {
-    private var requestId: String = ""
+    private var name: String = ""
+    private var titleText: String = RequestPresenter.NEUTRAL_TITLE
+    private var titleView: TextView? = null
+
+    /** Unlocking while the display is open: now the name may show. */
+    private val unlocked =
+        object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                showTitle()
+            }
+        }
+    private var since: Long = -1
+    private val key: String get() = "$name@$since"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,8 +51,10 @@ class RequestActivity : ComponentActivity() {
             )
         }
 
-        requestId = intent.getStringExtra(RequestPresenter.EXTRA_REQUEST_ID) ?: ""
-        if (requestId.isEmpty() || Store.isAnswered(this, requestId)) {
+        name = intent.getStringExtra(RequestPresenter.EXTRA_NAME) ?: ""
+        since = intent.getLongExtra(RequestPresenter.EXTRA_SINCE, -1)
+        titleText = intent.getStringExtra(RequestPresenter.EXTRA_TITLE) ?: RequestPresenter.NEUTRAL_TITLE
+        if (name.isEmpty() || since < 0 || Store.isAnswered(this, key)) {
             finish()
             return
         }
@@ -42,13 +62,20 @@ class RequestActivity : ComponentActivity() {
         val padding = (32 * resources.displayMetrics.density).toInt()
         val title =
             TextView(this).apply {
-                text = "Lebenszeichen?"
-                textSize = 36f
+                textSize = 32f
                 gravity = Gravity.CENTER
             }
+        titleView = title
+        showTitle()
+        ContextCompat.registerReceiver(
+            this,
+            unlocked,
+            IntentFilter(Intent.ACTION_USER_PRESENT),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         val hint =
             TextView(this).apply {
-                text = "Antippen oder schließen genügt."
+                text = "Antippen oder Schließen sendet dein Lebenszeichen."
                 textSize = 18f
                 gravity = Gravity.CENTER
                 setPadding(0, padding / 2, 0, 0)
@@ -73,13 +100,25 @@ class RequestActivity : ComponentActivity() {
                 }
             },
         )
-        EventLog.add(this, requestId, "fullscreen-shown", "")
+        EventLog.add(this, key, "fullscreen-shown", "")
+    }
+
+    /** The name of the contact only when the device is unlocked. */
+    private fun showTitle() {
+        val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        titleView?.text = if (keyguard.isKeyguardLocked) RequestPresenter.NEUTRAL_TITLE else titleText
+    }
+
+    override fun onDestroy() {
+        if (titleView != null) unregisterReceiver(unlocked)
+        super.onDestroy()
     }
 
     /** Closes the display if the request was answered through the notification meanwhile. */
     override fun onResume() {
         super.onResume()
-        if (requestId.isNotEmpty() && Store.isAnswered(this, requestId)) {
+        showTitle()
+        if (name.isNotEmpty() && Store.isAnswered(this, key)) {
             finish()
         }
     }
@@ -90,13 +129,14 @@ class RequestActivity : ComponentActivity() {
      */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (requestId.isNotEmpty() && !isFinishing) {
+        if (name.isNotEmpty() && !isFinishing) {
             react(Requests.REACTION_FULLSCREEN_LEAVE)
         }
     }
 
     private fun react(reaction: String) {
-        Requests.react(this, requestId, reaction)
+        // Only stores the mark and queues the answer; the network is WorkManager's.
+        Requests.react(this, name, since, reaction)
         finish()
     }
 }

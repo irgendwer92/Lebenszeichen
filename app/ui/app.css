@@ -1,6 +1,6 @@
-/* Desktop interface. Self-contained: style.css belongs to the Android
-   prototype from M1. Only system fonts, because the Content Security Policy
-   allows nothing from outside. Light and dark follow the system. */
+/* Interface of the app, on the desktop and on Android. Only system fonts,
+   because the Content Security Policy allows nothing from outside. Light
+   and dark follow the system. */
 
 :root {
   color-scheme: light dark;
@@ -98,23 +98,28 @@ h3 {
   top: 0;
   z-index: 1;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.75rem 1rem;
+  /* On phones the header sits below the status bar and beside a notch. */
+  padding: calc(0.75rem + env(safe-area-inset-top)) calc(1rem + env(safe-area-inset-right))
+    0.75rem calc(1rem + env(safe-area-inset-left));
   background: var(--bg);
   border-bottom: 1px solid var(--line);
 }
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
 main {
   max-width: 40rem;
   margin: 0 auto;
-  padding: 1rem;
+  padding: 1rem calc(1rem + env(safe-area-inset-right))
+    calc(1rem + env(safe-area-inset-bottom)) calc(1rem + env(safe-area-inset-left));
   display: grid;
   gap: 1rem;
 }
@@ -490,6 +495,66 @@ label.check {
   padding: 0.4rem 0;
   border-bottom: 1px solid var(--line);
   overflow-wrap: anywhere;
+}
+
+/* Checklist of this device (Android) */
+
+.checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.checks li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.checks li > span:nth-child(2) {
+  flex: 1 1 12rem;
+}
+
+.checks .state {
+  width: 1.25rem;
+  text-align: center;
+  font-weight: 700;
+}
+
+.checks .done .state {
+  color: var(--accent);
+}
+
+.checks .missing .state {
+  color: var(--danger);
+}
+
+/* Touch screens: larger targets, and 16px in fields so that Android does
+   not zoom in when one is tapped. */
+
+@media (pointer: coarse) {
+  button {
+    min-height: 2.75rem;
+  }
+
+  button.icon {
+    min-height: 2.75rem;
+    width: 2.75rem;
+  }
+
+  input:not([type="checkbox"]),
+  textarea,
+  textarea.code {
+    font-size: 16px;
+  }
+
+  input[type="checkbox"] {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
 }
 
 /* Setup */

@@ -4,31 +4,31 @@ import android.Manifest
 import android.app.Activity
 import android.app.NotificationManager
 import android.content.ActivityNotFoundException
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.webkit.WebView
+import androidx.activity.result.ActivityResult
 import androidx.core.app.NotificationManagerCompat
+import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import org.json.JSONObject
 import org.unifiedpush.android.connector.UnifiedPush
 
 /**
- * Commands for the interface of the prototype. Nothing here is needed to
- * receive and answer a request; that works without this class and without
- * the WebView.
+ * Commands of the interface that only Android has: wake signals,
+ * permissions, the notifications and the event log. Nothing here is needed
+ * to receive and answer a request; that works without this class and
+ * without the WebView.
  */
 @TauriPlugin
 class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
@@ -43,8 +43,35 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
                 UnifiedPush.register(activity, messageForDistributor = MESSAGE_FOR_DISTRIBUTOR)
             }
         } catch (e: Exception) {
-            EventLog.add(activity, PushServiceImpl.NO_REQUEST, "error", "Registrierung nicht erneuert: $e")
+            EventLog.add(activity, Requests.NO_REQUEST, "error", "Registrierung nicht erneuert: $e")
         }
+    }
+
+    /**
+     * In the background Android freezes the process but keeps its sockets;
+     * the relay would then see the device as connected and not wake it.
+     * So the live connection ends here and starts again on return.
+     */
+    override fun onPause() {
+        CoreBridge.setForeground(false)
+    }
+
+    override fun onResume() {
+        CoreBridge.setForeground(true)
+    }
+
+    /**
+     * Makes the notifications follow the state file, after the interface
+     * fetched, answered or changed something. Off the main thread, because
+     * the core reads the file.
+     */
+    @Command
+    fun refreshRequests(invoke: Invoke) {
+        val app = activity.applicationContext
+        Thread {
+            Requests.refresh(app, "app")
+            invoke.resolve()
+        }.start()
     }
 
     @Command
@@ -64,12 +91,10 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
         result.put("distributor", UnifiedPush.getSavedDistributor(activity) ?: "")
         result.put("distributorAcknowledged", UnifiedPush.getAckDistributor(activity) != null)
         result.put("endpoint", Store.endpoint(activity))
-        result.put("answerUrl", Store.answerUrl(activity))
         result.put("notificationsEnabled", NotificationManagerCompat.from(activity).areNotificationsEnabled())
         result.put("channelImportance", channelImportance)
         result.put("fullScreenIntentAllowed", RequestPresenter.canUseFullScreenIntent(activity))
         result.put("batteryUnrestricted", power.isIgnoringBatteryOptimizations(activity.packageName))
-        result.put("core", CoreBridge.describe("status", "ui"))
         invoke.resolve(result)
     }
 
@@ -86,17 +111,17 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
                 else -> distributors.firstOrNull()
             }
         if (chosen == null) {
-            EventLog.add(activity, PushServiceImpl.NO_REQUEST, "registration-failed", "kein Verteiler installiert")
+            EventLog.add(activity, Requests.NO_REQUEST, "registration-failed", "kein Verteiler installiert")
             invoke.reject("Kein UnifiedPush-Verteiler gefunden. Bitte die ntfy-App installieren und einmal öffnen.")
             return
         }
         try {
             UnifiedPush.saveDistributor(activity, chosen)
             UnifiedPush.register(activity, messageForDistributor = MESSAGE_FOR_DISTRIBUTOR)
-            EventLog.add(activity, PushServiceImpl.NO_REQUEST, "register", "Verteiler $chosen")
+            EventLog.add(activity, Requests.NO_REQUEST, "register", "Verteiler $chosen")
             invoke.resolve()
         } catch (e: Exception) {
-            EventLog.add(activity, PushServiceImpl.NO_REQUEST, "registration-failed", e.toString())
+            EventLog.add(activity, Requests.NO_REQUEST, "registration-failed", e.toString())
             invoke.reject("Registrierung fehlgeschlagen: $e")
         }
     }
@@ -106,37 +131,11 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
         try {
             UnifiedPush.unregister(activity)
             Store.setEndpoint(activity, "")
-            EventLog.add(activity, PushServiceImpl.NO_REQUEST, "unregister", "von der App abgemeldet")
+            EventLog.add(activity, Requests.NO_REQUEST, "unregister", "von der App abgemeldet")
             invoke.resolve()
         } catch (e: Exception) {
             invoke.reject("Abmelden fehlgeschlagen: $e")
         }
-    }
-
-    @Command
-    fun setAnswerUrl(invoke: Invoke) {
-        val url = (invoke.getArgs().getString("url", "") ?: "").trim()
-        if (url.isNotEmpty() && !url.startsWith("https://") && !url.startsWith("http://")) {
-            invoke.reject("Die Adresse muss mit https:// oder http:// beginnen.")
-            return
-        }
-        Store.setAnswerUrl(activity, url)
-        EventLog.add(activity, PushServiceImpl.NO_REQUEST, "answer-url", if (url.isEmpty()) "gelöscht" else url)
-        invoke.resolve()
-    }
-
-    /** Runs the display path without a wake signal, optionally after a delay to lock the screen. */
-    @Command
-    fun triggerLocal(invoke: Invoke) {
-        val delaySeconds = invoke.getArgs().getInteger("delaySeconds", 0).coerceIn(0, 120)
-        val app = activity.applicationContext
-        val requestId = Requests.newId()
-        EventLog.add(app, requestId, "local-trigger", "Verzögerung $delaySeconds s")
-        Handler(Looper.getMainLooper()).postDelayed(
-            { Requests.open(app, requestId, "lokal") },
-            delaySeconds * 1000L,
-        )
-        invoke.resolve()
     }
 
     /** The result is not awaited; the interface reads the state again afterwards. */
@@ -187,14 +186,6 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @Command
-    fun copyText(invoke: Invoke) {
-        val text = invoke.getArgs().getString("text", "") ?: ""
-        val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Lebenszeichen", text))
-        invoke.resolve()
-    }
-
-    @Command
     fun readLog(invoke: Invoke) {
         val result = JSObject()
         result.put("lines", JSArray(EventLog.read(activity, MAX_LOG_LINES)))
@@ -205,6 +196,26 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
     fun clearLog(invoke: Invoke) {
         EventLog.clear(activity)
         invoke.resolve()
+    }
+
+    /** Opens the camera to scan an invitation; the answer comes in [scanResult]. */
+    @Command
+    fun scanInvitation(invoke: Invoke) {
+        startActivityForResult(invoke, Intent(activity, ScanActivity::class.java), "scanResult")
+    }
+
+    @ActivityCallback
+    private fun scanResult(invoke: Invoke, result: ActivityResult) {
+        val data = result.data
+        val error = data?.getStringExtra(ScanActivity.EXTRA_ERROR)
+        if (error != null) {
+            invoke.reject(error)
+            return
+        }
+        val answer = JSObject()
+        val code = if (result.resultCode == Activity.RESULT_OK) data?.getStringExtra(ScanActivity.EXTRA_CODE) else null
+        answer.put("code", code ?: JSONObject.NULL)
+        invoke.resolve(answer)
     }
 
     companion object {

@@ -3,6 +3,7 @@
 /// `capabilities/` grants: the main window everything, a foreground window
 /// only what concerns its own request.
 const COMMANDS: &[&str] = &[
+    "platform",
     "setup_state",
     "init_device",
     "overview",

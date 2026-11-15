@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- The camera only scans invitations; pasting the code works without it. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application>
         <!-- Receives the UnifiedPush events from the receiver of the connector library. -->
@@ -31,5 +34,11 @@
             android:taskAffinity=""
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
             android:turnScreenOn="true" />
+
+        <!-- Camera view for scanning an invitation QR code; frames are never stored. -->
+        <activity
+            android:name="io.github.irgendwer92.lebenszeichen.droid.ScanActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
     </application>
 </manifest>

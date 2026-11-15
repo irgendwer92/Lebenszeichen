@@ -3,7 +3,6 @@ package io.github.irgendwer92.lebenszeichen.droid
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import java.util.concurrent.TimeUnit
 
 /**
  * Receives the tap on a request notification and its dismissal.
@@ -14,15 +13,16 @@ import java.util.concurrent.TimeUnit
  */
 class ReactionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val requestId = intent.getStringExtra(RequestPresenter.EXTRA_REQUEST_ID) ?: return
+        val name = intent.getStringExtra(RequestPresenter.EXTRA_NAME) ?: return
+        val since = intent.getLongExtra(RequestPresenter.EXTRA_SINCE, -1).takeIf { it >= 0 } ?: return
         val reaction = intent.getStringExtra(RequestPresenter.EXTRA_REACTION) ?: return
         val app = context.applicationContext
         val pending = goAsync()
         Thread {
             try {
-                Requests.react(app, requestId, reaction)?.result?.get(8, TimeUnit.SECONDS)
+                Requests.react(app, name, since, reaction)
             } catch (e: Exception) {
-                EventLog.add(app, requestId, "error", "Reaktion nicht verarbeitet: $e")
+                EventLog.add(app, "$name@$since", "error", "Reaktion nicht verarbeitet: $e")
             } finally {
                 pending.finish()
             }

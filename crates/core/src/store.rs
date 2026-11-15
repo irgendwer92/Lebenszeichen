@@ -33,6 +33,13 @@ pub struct Device {
     pub relay: Option<RelayAccount>,
     pub contacts: Vec<StoredContact>,
     pub invitations: Vec<StoredInvitation>,
+    /// UnifiedPush endpoint of this device. The relay sends wake signals
+    /// there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push_url: Option<String>,
+    /// Set while some mailbox may still have an older push address.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub push_pending: bool,
 }
 
 /// Access to a relay.
@@ -81,6 +88,8 @@ impl Device {
             relay: None,
             contacts: Vec::new(),
             invitations: Vec::new(),
+            push_url: None,
+            push_pending: false,
         }
     }
 }
@@ -306,6 +315,23 @@ mod tests {
         let text = std::fs::read_to_string(file.path()).unwrap();
         std::fs::write(file.path(), text.replace("\"format\": 1", "\"format\": 2")).unwrap();
         assert_eq!(file.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn push_fields_are_optional() {
+        let (_dir, file) = store();
+        // Written without them as long as they are unset, as before.
+        let text = std::fs::read_to_string(file.path()).unwrap();
+        assert!(!text.contains("push"));
+        file.update(|device| {
+            device.push_url = Some("https://push.example/up".into());
+            device.push_pending = true;
+            Ok::<_, io::Error>(())
+        })
+        .unwrap();
+        let device = file.load().unwrap();
+        assert_eq!(device.push_url.as_deref(), Some("https://push.example/up"));
+        assert!(device.push_pending);
     }
 
     #[cfg(unix)]

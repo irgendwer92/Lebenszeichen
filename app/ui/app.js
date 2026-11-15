@@ -1,5 +1,7 @@
-// Desktop interface (M3). Talks to the commands in src-tauri/src/desktop.rs.
-// Tauri provides `window.__TAURI__` because `withGlobalTauri` is switched on.
+// Interface of the app on the desktop (M3) and on Android (M4). Talks to the
+// commands in src-tauri/src/commands.rs and, on Android only, to the Kotlin
+// layer (`plugin:lebenszeichen|…`). Tauri provides `window.__TAURI__` because
+// `withGlobalTauri` is switched on.
 //
 // Every text from outside (names, codes, messages) goes in through
 // `textContent`, never as HTML.
@@ -133,7 +135,7 @@ function confirmButton(key, text, question, onClick, className = "danger") {
 
 // ---------------------------------------------------------------- Panels
 
-const PANELS = ["invite", "accept"];
+const PANELS = ["invite", "accept", "device"];
 
 /// Opens one of the panels in the header, or closes all with `null`.
 function openPanel(name) {
@@ -144,7 +146,9 @@ function openPanel(name) {
       toggle.setAttribute("aria-expanded", String(open));
     }
   }
-  if (name) {
+  if (name === "device") {
+    showDevice();
+  } else if (name) {
     $(`panel-${name}`).querySelector("input")?.focus();
   }
 }
@@ -159,6 +163,143 @@ for (const toggle of document.querySelectorAll("[data-panel]")) {
 for (const close of document.querySelectorAll("[data-close]")) {
   close.addEventListener("click", () => openPanel(null));
 }
+
+// ---------------------------------------------------------------- Device (Android)
+
+const PLUGIN = "plugin:lebenszeichen|";
+
+/// Android's importance of a channel that may show banners and full screen.
+const IMPORTANCE_HIGH = 4;
+
+/// A line of the checklist: state, text, and buttons to fix it.
+function check(ok, text, ...buttons) {
+  const item = el("li", ok ? "done" : "missing");
+  item.append(el("span", "state", ok ? "✓" : "✗"), el("span", "", text));
+  if (!ok) item.append(...buttons);
+  return item;
+}
+
+/// A button for a command of the Kotlin layer, which reports no lines.
+function pluginButton(text, command, args = {}, className = "") {
+  return button(
+    text,
+    async () => {
+      try {
+        await tauri.core.invoke(PLUGIN + command, args);
+      } catch (error) {
+        showError(String(error));
+      }
+      await showDevice();
+    },
+    className,
+  );
+}
+
+/// Reads what Android allows and fills the checklist.
+async function showDevice() {
+  let status;
+  try {
+    status = await tauri.core.invoke(PLUGIN + "status");
+  } catch (error) {
+    showError(String(error));
+    return;
+  }
+  const distributors = status.distributors ?? [];
+  let push;
+  if (status.distributorAcknowledged && status.endpoint) {
+    push = check(true, `Wecksignal: angemeldet bei ${status.distributor}`);
+  } else if (distributors.length === 0) {
+    push = check(false, "Wecksignal: keine UnifiedPush-App gefunden. Installiere ntfy und öffne sie einmal.");
+  } else {
+    push = check(false, "Wecksignal: nicht angemeldet", pluginButton("Anmelden", "register"));
+  }
+  const channelOk = status.channelImportance < 0 || status.channelImportance >= IMPORTANCE_HIGH;
+  $("device-checks").replaceChildren(
+    push,
+    check(
+      status.notificationsEnabled,
+      "Benachrichtigungen erlaubt",
+      pluginButton("Erlauben", "request_notification_permission"),
+      pluginButton("Einstellungen", "open_settings", { target: "notifications" }, "quiet"),
+    ),
+    check(
+      channelOk,
+      "Kanal „Anfragen“ mit hoher Wichtigkeit",
+      pluginButton("Einstellungen", "open_settings", { target: "notifications" }),
+    ),
+    check(
+      status.fullScreenIntentAllowed,
+      "Vollbild-Anzeige erlaubt",
+      pluginButton("Einstellungen", "open_settings", { target: "fullscreen" }),
+    ),
+    check(
+      status.batteryUnrestricted,
+      "Von der Akku-Optimierung ausgenommen",
+      pluginButton("Ausnehmen", "open_settings", { target: "battery" }),
+    ),
+  );
+}
+
+/// Shows the event log of the Kotlin layer, newest line first: what wake
+/// signals, fetches and answers did while the app was closed.
+async function showDeviceLog() {
+  let lines = [];
+  try {
+    lines = (await tauri.core.invoke(PLUGIN + "read_log")).lines ?? [];
+  } catch (error) {
+    showError(String(error));
+  }
+  $("device-log").replaceChildren(
+    ...[...lines].reverse().map((line) => el("li", "", line.replaceAll("\t", "  "))),
+  );
+}
+
+$("device-log").closest("details").addEventListener("toggle", (event) => {
+  if (event.target.open) showDeviceLog();
+});
+
+$("device-log-clear").addEventListener("click", async () => {
+  try {
+    await tauri.core.invoke(PLUGIN + "clear_log");
+  } catch (error) {
+    showError(String(error));
+  }
+  await showDeviceLog();
+});
+
+/// On Android the notifications follow what the window just did.
+function refreshNotifications() {
+  if (document.documentElement.dataset.platform !== "android") return;
+  tauri.core.invoke(PLUGIN + "refresh_requests").catch(() => {});
+}
+
+// Back from the system settings: show what changed.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && !$("panel-device").hidden) showDevice();
+});
+
+tauri.core.invoke("platform").then((platform) => {
+  document.documentElement.dataset.platform = platform;
+  $("device-toggle").hidden = platform !== "android";
+  $("scan").hidden = platform !== "android";
+});
+
+/// Opens the camera; a recognized invitation lands in the code field.
+$("scan").addEventListener("click", async () => {
+  showError("");
+  let result;
+  try {
+    result = await tauri.core.invoke(PLUGIN + "scan_invitation");
+  } catch (error) {
+    showError(String(error));
+    return;
+  }
+  if (!result?.code) return;
+  const form = $("accept-form");
+  form.elements.code.value = result.code;
+  const name = form.elements.name;
+  (name.value.trim() ? form.querySelector("button[type=submit]") : name).focus();
+});
 
 // ---------------------------------------------------------------- Settings
 
@@ -400,6 +541,7 @@ async function refresh() {
     redrawLater = true;
     return;
   }
+  refreshNotifications();
   const contacts = [...cards.contacts].sort((a, b) => rank(a) - rank(b));
   $("contacts").replaceChildren(...contacts.map(contactCard));
   $("invitations").replaceChildren(...cards.invitations.map(invitationCard));

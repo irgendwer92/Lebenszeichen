@@ -14,21 +14,24 @@ base64 = "0.22.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Without its default features: no image crate, only the module matrix.
 qrcode = { version = "0.14", default-features = false }
+# Reads invitations from camera frames (Android) and generated codes (tests).
+rqrr = "0.10"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 # TLS with ring only: aws-lc-rs brings a license that is not on the list in
-# deny.toml. Root certificates come from the system.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
+# deny.toml. Certificates are checked by the system (rustls-platform-verifier),
+# so reqwest and tokio-tungstenite load no roots themselves.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots-no-provider", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# 0.6, not 0.7: 0.7 needs jni 0.22, Tauri and the app still use 0.21.
+rustls-platform-verifier = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10.9"
 tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "__rustls-tls"] }
 
 [dev-dependencies]
-# Reads generated QR codes back in the tests.
-rqrr = "0.10"
 tempfile = "3"
 tokio = { version = "1", features = ["io-util"] }
 
