@@ -1,6 +1,6 @@
 //! Lebenszeichen client without user interface. Program name: `lz`.
 //!
-//! Output and help texts are German. The commands live in `lz-client`,
+//! Output and help texts follow `LC_ALL`, `LC_MESSAGES` and `LANG`: German for `de`, English otherwise. The commands live in `lz-client`,
 //! which the desktop app shares; this crate only parses arguments.
 
 use std::process::ExitCode;

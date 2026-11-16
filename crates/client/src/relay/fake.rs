@@ -214,7 +214,7 @@ impl FakeRelay {
         let server = servers
             .get_mut(relay.as_str())
             .filter(|server| !server.down)
-            .ok_or_else(|| RelayError::Transport(format!("{relay} nicht erreichbar")))?;
+            .ok_or_else(|| RelayError::Transport(format!("{relay} is down")))?;
         server.purge_slots(now);
         for mailbox in server.mailboxes.values_mut() {
             mailbox.expire(now);

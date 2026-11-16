@@ -11,14 +11,15 @@ use std::time::Duration;
 
 use lz_core::handover::{Adding, NewDevice};
 use lz_core::pairing::Address;
-use lz_core::store::{Device, Group, RelayAccount, Store};
+use lz_core::store::{Device, Group, RelayAccount};
 use lz_core::wire::{
     DeviceCode, Hash, MAX_DEVICE_NAME_LEN, MailboxId, RelayUrl, Token, device_code,
 };
 use rand_core::OsRng;
 use serde::Serialize;
 
-use crate::ctx::{Ctx, Fail, Result, core, inline, random_token, relay_url};
+use crate::ctx::{Ctx, Fail, Localize, Result, core, inline, random_token, relay_url};
+use crate::i18n::Texts;
 use crate::relay::{ReaderId, Relay, RelayError};
 use crate::show::{Hint, Notice, when, with_hints};
 use crate::sync::{Mode, own_mailboxes};
@@ -106,14 +107,16 @@ fn unique_name<'a>(name: &str, taken: impl Iterator<Item = &'a str> + Clone) -> 
 }
 
 /// Checks the name of a device: not empty, at most 32 bytes.
-fn device_name(name: &str) -> Result<String> {
+fn device_name(t: Texts, name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
-        return Err(fail!("Der Gerätename darf nicht leer sein."));
+        return Err(fail!(t, "error-device-name-empty"));
     }
     if name.len() > MAX_DEVICE_NAME_LEN {
         return Err(fail!(
-            "Der Gerätename ist zu lang (höchstens {MAX_DEVICE_NAME_LEN} Byte)."
+            t,
+            "error-device-name-long",
+            max = &MAX_DEVICE_NAME_LEN.to_string()
         ));
     }
     Ok(name.to_owned())
@@ -170,8 +173,8 @@ fn mailboxes_for_new_device(device: &Device) -> Vec<(RelayUrl, MailboxId, Token)
 }
 
 /// "Achtung: …" for situations where someone else interferes.
-fn alarm(text: &str) -> Fail {
-    fail!("Achtung: {text}")
+fn alarm(t: Texts, text: &str) -> Fail {
+    fail!(t, "error-alarm", text = text)
 }
 
 impl<R: Relay> Ctx<R> {
@@ -189,19 +192,20 @@ impl<R: Relay> Ctx<R> {
         push_url: Option<&str>,
         dialog: &mut impl Dialog,
     ) -> Result<()> {
+        let t = self.texts();
         if self.store.path().exists() {
             return Err(fail!(
-                "Unter {} gibt es schon ein Gerät. Hinzufügen geht nur mit einem Gerät ohne \
-                 Zustandsdatei.",
-                self.store.path().display()
+                t,
+                "error-join-has-device",
+                path = &self.store.path().display().to_string()
             ));
         }
-        let name = device_name(name)?;
+        let name = device_name(t, name)?;
         if let Some(url) = push_url {
-            crate::push::check(url)?;
+            crate::push::check(t, url)?;
         }
-        let relay = relay_url(relay)?;
-        let again = inline(self.hints, Hint::JoinAgain);
+        let relay = relay_url(t, relay)?;
+        let again = inline(self.hints, t, Hint::JoinAgain);
 
         let now = self.now();
         let mut new = NewDevice::create(relay, now, &mut OsRng);
@@ -210,13 +214,19 @@ impl<R: Relay> Ctx<R> {
             .to_text(&mut [0; device_code::MAX_TEXT_LEN])
             .to_owned();
         self.say(&format!(
-            "Gerätecode für ein vorhandenes Gerät, gültig bis {}:\n\n{code}\n",
-            when(new.expires_at, now)
+            "{}\n",
+            tr!(
+                t,
+                "out-device-code",
+                until = &when(t, new.expires_at, now),
+                code = &code
+            )
         ));
         self.say(&crate::qr::terminal(&code));
         let text = with_hints(
-            "Gib ihn auf einem vorhandenen Gerät ein oder scanne ihn dort.".into(),
+            tr!(t, "out-device-code-enter"),
             self.hints,
+            t,
             &[Hint::AddDevice],
         );
         self.say(&text);
@@ -232,28 +242,20 @@ impl<R: Relay> Ctx<R> {
                 dialog,
             )
             .await
-            .map_err(|error| join_failed(error, &again))?
-            .ok_or_else(|| {
-                fail!("Der Gerätecode ist abgelaufen, ohne dass ein Gerät ihn gelesen hat.{again}")
-            })?;
+            .map_err(|error| join_failed(t, error, &again))?
+            .ok_or_else(|| fail!(t, "error-code-unread", again = &again))?;
         let reply = new
             .take_challenge(&challenge, self.now())
             .map_err(|error| match error {
-                lz_core::Error::Expired => fail!("Der Gerätecode ist abgelaufen.{again}"),
-                _ => alarm(&format!(
-                    "Auf dem Relay lag für diesen Code etwas Unlesbares. Vermutlich kennt \
-                     jemand anderes den Code.{again}"
-                )),
+                lz_core::Error::Expired => fail!(t, "error-code-expired", again = &again),
+                _ => alarm(t, &tr!(t, "alarm-unreadable-challenge", again = &again)),
             })?;
         self.relay
             .put_reveal(&relay, &new.reveal_slot(), &reply, &new.secret)
             .await
-            .map_err(|error| join_failed(error, &again))?;
+            .map_err(|error| join_failed(t, error, &again))?;
         let check = new.check_code().expect("the challenge was taken");
-        self.say(&format!(
-            "Prüfcode: {check}\nVergleiche ihn mit dem Prüfcode auf dem vorhandenen Gerät und \
-             bestätige dort, wenn beide übereinstimmen."
-        ));
+        self.say(&tr!(t, "out-join-check", check = &check));
         dialog.check_code(Check::Device, &check);
 
         // Step 6: the handover.
@@ -266,39 +268,27 @@ impl<R: Relay> Ctx<R> {
                 dialog,
             )
             .await
-            .map_err(|error| join_failed(error, &again))?
-            .ok_or_else(|| {
-                fail!(
-                    "Das vorhandene Gerät hat nichts übergeben, abgelehnt oder nicht rechtzeitig. \
-                     Dieses Gerät wurde nicht eingerichtet.{again}"
-                )
-            })?;
+            .map_err(|error| join_failed(t, error, &again))?
+            .ok_or_else(|| fail!(t, "error-nothing-handed-over", again = &again))?;
         let handover = new.open_handover(&sealed).map_err(|error| match error {
-            lz_core::Error::Mismatch => alarm(&format!(
-                "Die Übergabe stammt nicht von dem Gerät, das deinen Code gelesen hat. Sie wurde \
-                 verworfen; dieses Gerät wurde nicht eingerichtet.{again}"
-            )),
+            lz_core::Error::Mismatch => {
+                alarm(t, &tr!(t, "alarm-handover-mismatch", again = &again))
+            }
             lz_core::Error::UnknownVersion(version) => fail!(
-                "Die Übergabe hat die Version {version}, die dieses Gerät nicht kennt. Bring \
-                 beide Geräte auf den neuesten Stand.{again}"
+                t,
+                "error-handover-version",
+                version = &version.to_string(),
+                again = &again
             ),
-            _ => alarm(&format!(
-                "Die Übergabe ist nicht lesbar und wurde verworfen. Vermutlich hat jemand anderes \
-                 sie abgelegt.{again}"
-            )),
+            _ => alarm(t, &tr!(t, "alarm-handover-unreadable", again = &again)),
         })?;
         let check = new.handover_check_code(&handover);
-        self.say(&format!(
-            "Übergabe erhalten. Prüfcode der Übergabe: {check}\nBestätige nur, wenn er mit dem \
-             Prüfcode auf dem vorhandenen Gerät übereinstimmt."
-        ));
+        self.say(&tr!(t, "out-join-handover-check", check = &check));
         if !dialog.confirm(Check::Handover, &check).await {
-            return Err(fail!(
-                "Abgebrochen; dieses Gerät wurde nicht eingerichtet.{again}"
-            ));
+            return Err(fail!(t, "error-join-cancelled", again = &again));
         }
         if self.now() > new.expires_at {
-            return Err(fail!("Der Gerätecode ist abgelaufen.{again}"));
+            return Err(fail!(t, "error-code-expired", again = &again));
         }
 
         let contacts = handover.contacts.len();
@@ -317,15 +307,17 @@ impl<R: Relay> Ctx<R> {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
         {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).loc(t)?;
         }
         self.store
             .create(&device)
             .map_err(|error| match error.kind() {
-                io::ErrorKind::AlreadyExists => {
-                    fail!("{} gibt es schon.", self.store.path().display())
-                }
-                _ => error.into(),
+                io::ErrorKind::AlreadyExists => fail!(
+                    t,
+                    "error-exists",
+                    path = &self.store.path().display().to_string()
+                ),
+                _ => crate::ctx::io_fail(t, &error),
             })?;
 
         // The new reader was registered without push address; a missing one
@@ -333,12 +325,14 @@ impl<R: Relay> Ctx<R> {
         let finished = async {
             self.retry_push_url().await?;
             if self.now() > new.expires_at {
-                return Err(fail!("Der Gerätecode ist abgelaufen."));
+                return Err(fail!(t, "error-code-expired", again = ""));
             }
             match self.deliver_outbox().await? {
                 None => Ok(()),
                 Some(error) => Err(fail!(
-                    "Die Anmeldung bei den eigenen Geräten ist nicht angekommen ({error})."
+                    t,
+                    "error-announcement-not-arrived",
+                    error = &error.text(t)
                 )),
             }
         }
@@ -346,13 +340,13 @@ impl<R: Relay> Ctx<R> {
         if let Err(error) = finished {
             self.delete_state()?;
             return Err(fail!(
-                "{error} Dieses Gerät wurde nicht eingerichtet.{again}"
+                t,
+                "error-join-failed",
+                error = &error.0,
+                again = &again
             ));
         }
-        self.say(&format!(
-            "Dieses Gerät ist eingerichtet als „{name}“, mit {contacts} Kontakt{}.",
-            if contacts == 1 { "" } else { "en" }
-        ));
+        self.say(&tr!(t, "out-join-done", name = &name, contacts = contacts));
         Ok(())
     }
 
@@ -364,34 +358,32 @@ impl<R: Relay> Ctx<R> {
         name: &str,
         dialog: &mut impl Dialog,
     ) -> Result<()> {
+        let t = self.texts();
         let code =
-            DeviceCode::from_text(code).map_err(|_| fail!("Das ist kein gültiger Gerätecode."))?;
-        let name = device_name(name)?;
-        let again = inline(self.hints, Hint::JoinSomeDevice);
+            DeviceCode::from_text(code).map_err(|_| fail!(t, "error-invalid-device-code"))?;
+        let name = device_name(t, name)?;
+        let again = inline(self.hints, t, Hint::JoinSomeDevice);
         let device = self.load()?;
         if code.reader == device.reader_id || device.devices.iter().any(|d| d.reader == code.reader)
         {
-            return Err(fail!("Dieses Gerät ist schon dabei."));
+            return Err(fail!(t, "error-device-already-added"));
         }
         if device.devices.iter().any(|d| d.name == name) {
-            return Err(fail!("Ein anderes eigenes Gerät heißt schon „{name}“."));
+            return Err(fail!(t, "error-device-name-taken", name = &name));
         }
         let mut adding = Adding::start(code, self.now(), &mut OsRng)
-            .map_err(|_| fail!("Der Gerätecode ist abgelaufen.{again}"))?;
+            .map_err(|_| fail!(t, "error-code-expired", again = &again))?;
         let code = adding.code.clone();
         let relay = code.relay;
         if !device.knows_relay(&relay) {
             return Err(fail!(
-                "Auf dem Relay {relay} aus dem Gerätecode hat dieses Gerät weder sein Konto noch \
-                 ein Postfach. Gib beim neuen Gerät ein Relay an, das dieses Gerät kennt."
+                t,
+                "error-add-unknown-relay",
+                relay = &relay.to_string()
             ));
         }
-        let auth = slot_token(&device, &relay).ok_or_else(|| {
-            fail!(
-                "Auf dem Relay {relay} hat dieses Gerät weder einen Zugangstoken noch ein \
-                 eigenes Postfach."
-            )
-        })?;
+        let auth = slot_token(&device, &relay)
+            .ok_or_else(|| fail!(t, "error-add-no-token", relay = &relay.to_string()))?;
 
         // Step 2: the challenge.
         let stored = self
@@ -408,14 +400,11 @@ impl<R: Relay> Ctx<R> {
         match stored {
             Ok(()) => {}
             Err(RelayError::HandoverExists) => {
-                return Err(alarm(&format!(
-                    "Für diesen Gerätecode liegt auf dem Relay schon etwas. Vermutlich kennt \
-                     jemand anderes den Code. Nichts wurde übergeben.{again}"
-                )));
+                return Err(alarm(t, &tr!(t, "alarm-slot-taken", again = &again)));
             }
-            Err(error) => return Err(busy_or(error)),
+            Err(error) => return Err(busy_or(t, error)),
         }
-        self.say("Warte auf das neue Gerät …");
+        self.say(&tr!(t, "out-waiting-for-new-device"));
 
         // Step 4: the revealed value.
         let revealed = self
@@ -426,33 +415,31 @@ impl<R: Relay> Ctx<R> {
                 code.expires_at,
                 dialog,
             )
-            .await?
-            .ok_or_else(|| {
-                fail!("Das neue Gerät hat nicht rechtzeitig geantwortet. Nichts wurde übergeben.{again}")
-            })?;
-        let check = adding.check_reveal(&revealed).map_err(|_| {
-            alarm(&format!(
-                "Die Antwort passt nicht zum Gerätecode. Vermutlich kennt jemand anderes den \
-                 Code. Nichts wurde übergeben.{again}"
-            ))
-        })?;
-        self.say(&format!(
-            "Prüfcode: {check}\nBestätige nur, wenn das neue Gerät denselben Prüfcode zeigt."
-        ));
+            .await
+            .loc(t)?
+            .ok_or_else(|| fail!(t, "error-new-device-silent", again = &again))?;
+        let check = adding
+            .check_reveal(&revealed)
+            .map_err(|_| alarm(t, &tr!(t, "alarm-reveal-mismatch", again = &again)))?;
+        self.say(&tr!(t, "out-add-check", check = &check));
         if !dialog.confirm(Check::Device, &check).await {
-            return Err(fail!("Abgebrochen; nichts wurde übergeben."));
+            return Err(fail!(t, "error-add-cancelled"));
         }
         if self.now() > code.expires_at {
-            return Err(fail!("Der Gerätecode ist abgelaufen.{again}"));
+            return Err(fail!(t, "error-code-expired", again = &again));
         }
 
         // Step 5: group, readers, handover.
         let created = self.ensure_group(&name).await?;
         let handed_over = async {
             self.register_reader(&code.reader).await?;
-            let (sealed, check) = adding
-                .seal(&self.load()?, &mut OsRng)
-                .map_err(|error| fail!("Übergabe nicht verschlüsselt: {error}"))?;
+            let (sealed, check) = adding.seal(&self.load()?, &mut OsRng).map_err(|error| {
+                fail!(
+                    t,
+                    "error-handover-not-encrypted",
+                    error = &error.to_string()
+                )
+            })?;
             match self
                 .relay
                 .put_slot(
@@ -466,12 +453,8 @@ impl<R: Relay> Ctx<R> {
                 .await
             {
                 Ok(()) => Ok(check),
-                Err(RelayError::HandoverExists) => Err(alarm(
-                    "Jemand hat dem neuen Gerät schon eine Übergabe hingelegt; das kann nur, \
-                     wer den Gerätecode kennt. Das neue Gerät wurde wieder ausgetragen; nichts \
-                     wurde übergeben.",
-                )),
-                Err(error) => Err(busy_or(error)),
+                Err(RelayError::HandoverExists) => Err(alarm(t, &tr!(t, "alarm-handover-taken"))),
+                Err(error) => Err(busy_or(t, error)),
             }
         }
         .await;
@@ -479,23 +462,25 @@ impl<R: Relay> Ctx<R> {
             Ok(check) => check,
             Err(error) => {
                 self.undo_adding(&code.reader, created).await;
-                return Err(fail!("{error}{again}"));
+                return Err(fail!(
+                    t,
+                    "error-with-again",
+                    error = &error.0,
+                    again = &again
+                ));
             }
         };
-        self.say(&format!(
-            "Übergeben. Prüfcode der Übergabe: {check}\nBestätige ihn auf dem neuen Gerät, wenn \
-             er übereinstimmt."
-        ));
+        self.say(&tr!(t, "out-add-handed-over", check = &check));
         dialog.check_code(Check::Handover, &check);
 
         // Step 7: wait for `device` from the new reader.
         loop {
             let notices = self.fetch(Mode::Quiet).await?;
             if notices.contains(&Notice::Removed) {
-                return Err(fail!("Dieses Gerät wurde entfernt."));
+                return Err(fail!(t, "error-device-removed"));
             }
             if self.load()?.devices.iter().any(|d| d.reader == code.reader) {
-                self.say("Das neue Gerät ist eingerichtet.");
+                self.say(&tr!(t, "out-new-device-done"));
                 return Ok(());
             }
             if self.now() > code.expires_at {
@@ -504,9 +489,7 @@ impl<R: Relay> Ctx<R> {
             dialog.pause().await;
         }
         self.undo_adding(&code.reader, created).await;
-        Err(fail!(
-            "Das neue Gerät hat sich nicht rechtzeitig gemeldet und wurde wieder ausgetragen.{again}"
-        ))
+        Err(fail!(t, "error-new-device-late", again = &again))
     }
 
     /// Looks at a handover slot until it has content or `until` has passed
@@ -524,11 +507,11 @@ impl<R: Relay> Ctx<R> {
             match self.relay.get_slot(relay, slot, token).await {
                 Ok(data) => return Ok(Some(data)),
                 Err(RelayError::UnknownHandover) => {}
-                Err(RelayError::Transport(detail)) => {
+                Err(error) if error.is_transport() => {
                     if !warned {
-                        self.say(&format!(
-                            "Relay nicht erreichbar ({detail}); neuer Versuch in Kürze …"
-                        ));
+                        let detail = error.detail(self.texts());
+                        let text = tr!(self.texts(), "out-relay-unreachable", detail = &detail);
+                        self.say(&text);
                         warned = true;
                     }
                 }
@@ -545,11 +528,12 @@ impl<R: Relay> Ctx<R> {
     /// the sync mailbox, and sets the name of this device. Returns whether
     /// the group was created now.
     async fn ensure_group(&mut self, name: &str) -> Result<bool> {
+        let t = self.texts();
         let device = self.load()?;
         if device.group.is_some() {
             if device.name.as_deref() != Some(name) {
                 let now = self.now();
-                self.store.update(|device| {
+                self.update(|device| {
                     device.name = Some(name.to_owned());
                     device.announce_device(now, &mut OsRng).map_err(core)
                 })?;
@@ -574,9 +558,7 @@ impl<R: Relay> Ctx<R> {
             .await
         {
             self.delete_own(&relay, &mailbox, &read_token).await;
-            return Err(fail!(
-                "Postfach der eigenen Geräte nicht eingerichtet: {error}"
-            ));
+            return Err(fail!(t, "error-group-not-set-up", error = &error.text(t)));
         }
         let group = Group::new(
             Address {
@@ -587,11 +569,9 @@ impl<R: Relay> Ctx<R> {
             read_token,
             &mut OsRng,
         );
-        let stored = self.store.update(|device| {
+        let stored = self.update(|device| {
             if device.group.is_some() {
-                return Err(fail!(
-                    "Inzwischen gibt es schon eine Gruppe; bitte neu beginnen."
-                ));
+                return Err(fail!(t, "error-group-exists"));
             }
             device.group = Some(group);
             device.name = Some(name.to_owned());
@@ -613,6 +593,7 @@ impl<R: Relay> Ctx<R> {
         read_token: &Token,
         send_token: &Token,
     ) -> Result<(RelayUrl, MailboxId)> {
+        let t = self.texts();
         if let Some(RelayAccount {
             url,
             access_token: Some(access),
@@ -622,7 +603,7 @@ impl<R: Relay> Ctx<R> {
                 .relay
                 .create_mailbox(url, access, read_token, send_token)
                 .await
-                .map_err(|error| fail!("Postfach der eigenen Geräte nicht angelegt: {error}"))?;
+                .map_err(|error| fail!(t, "error-group-not-created", error = &error.text(t)))?;
             return Ok((*url, mailbox));
         }
         // Without an access token, the own mailboxes of contacts were
@@ -644,21 +625,18 @@ impl<R: Relay> Ctx<R> {
                     status: 401 | 429, ..
                 }) => continue,
                 Err(error) => {
-                    return Err(fail!("Postfach der eigenen Geräte nicht angelegt: {error}"));
+                    return Err(fail!(t, "error-group-not-created", error = &error.text(t)));
                 }
             }
         }
-        Err(fail!(
-            "Mehrere Geräte brauchen einen Zugangstoken für ein eigenes Relay oder ein Postfach, \
-             das mit dem Gutschein einer Einladung angelegt wurde und noch Platz hat. Lass dich \
-             mit Gutschein einladen oder richte ein Relay mit Zugangstoken ein."
-        ))
+        Err(fail!(t, "error-group-needs-access"))
     }
 
     /// Registers the reader of a new device, without push address, on the
     /// sync mailbox and all mailboxes of contacts. On failure, the ones
     /// done are undone.
     async fn register_reader(&mut self, reader: &ReaderId) -> Result<()> {
+        let t = self.texts();
         let device = self.load()?;
         let targets = mailboxes_for_new_device(&device);
         for (i, (relay, mailbox, token)) in targets.iter().enumerate() {
@@ -674,7 +652,9 @@ impl<R: Relay> Ctx<R> {
                         .await;
                 }
                 return Err(fail!(
-                    "Das neue Gerät konnte nicht eingetragen werden: {error}."
+                    t,
+                    "error-reader-not-registered",
+                    error = &error.text(t)
                 ));
             }
         }
@@ -708,16 +688,19 @@ impl<R: Relay> Ctx<R> {
     /// if it was created for it. Best effort.
     async fn undo_adding(&mut self, reader: &ReaderId, group_created: bool) {
         if let Ok(Some(error)) = self.unregister_reader(reader).await {
-            self.say(&format!(
-                "Warnung: das neue Gerät ist nicht überall ausgetragen ({error})."
-            ));
+            let text = tr!(
+                self.texts(),
+                "warn-reader-not-removed",
+                error = &error.text(self.texts())
+            );
+            self.say(&text);
         }
         if !group_created {
             return;
         }
-        let taken = self.store.update(|device| {
+        let taken = self.update(|device| {
             device.outbox.clear();
-            Ok::<_, Fail>(device.group.take())
+            Ok(device.group.take())
         });
         if let Ok(Some(group)) = taken {
             self.delete_own(&group.relay, &group.mailbox, &group.read_token)
@@ -743,11 +726,13 @@ impl<R: Relay> Ctx<R> {
 
     /// Lists the devices of the person.
     pub fn list_devices(&mut self) -> Result<()> {
+        let t = self.texts();
         let devices = self.devices()?;
         if devices.len() == 1 {
             let text = with_hints(
-                "Bisher gibt es nur dieses Gerät.".into(),
+                tr!(t, "out-only-this-device"),
                 self.hints,
+                t,
                 &[Hint::JoinSomeDevice],
             );
             self.say(&text);
@@ -755,9 +740,9 @@ impl<R: Relay> Ctx<R> {
         }
         for device in devices {
             let line = match (device.this, device.name.is_empty()) {
-                (true, false) => format!("„{}“ (dieses Gerät)", device.name),
-                (true, true) => "dieses Gerät (ohne Namen)".to_owned(),
-                (false, _) => format!("„{}“", device.name),
+                (true, false) => tr!(t, "out-device-this", name = &device.name),
+                (true, true) => tr!(t, "out-device-this-unnamed"),
+                (false, _) => tr!(t, "out-device-other", name = &device.name),
             };
             self.say(&line);
         }
@@ -767,21 +752,16 @@ impl<R: Relay> Ctx<R> {
     /// Removes another own device: unregisters it from all mailboxes and
     /// tells the remaining devices.
     pub async fn remove_device(&mut self, name: &str) -> Result<()> {
+        let t = self.texts();
         let device = self.load()?;
         let matches: Vec<_> = device.devices.iter().filter(|d| d.name == name).collect();
         let reader = match matches.as_slice() {
             [one] => one.reader,
             [] if device.name.as_deref() == Some(name) => {
-                return Err(fail!(
-                    "„{name}“ ist dieses Gerät. Entfernen geht nur von einem anderen Gerät aus."
-                ));
+                return Err(fail!(t, "error-remove-this-device-named", name = name));
             }
-            [] => return Err(fail!("Kein eigenes Gerät namens „{name}“ gefunden.")),
-            _ => {
-                return Err(fail!(
-                    "Mehrere eigene Geräte heißen „{name}“; entferne es in der App."
-                ));
-            }
+            [] => return Err(fail!(t, "error-no-device-named", name = name)),
+            _ => return Err(fail!(t, "error-several-devices-named", name = name)),
         };
         self.remove_reader(&reader, name).await
     }
@@ -789,35 +769,35 @@ impl<R: Relay> Ctx<R> {
     /// Removes the device with this reader identifier (hex), as the app
     /// does: names need not be unique.
     pub async fn remove_device_by_reader(&mut self, reader: &str) -> Result<()> {
+        let t = self.texts();
         let device = self.load()?;
-        let reader = from_hex(reader).ok_or_else(|| fail!("Unbekanntes Gerät."))?;
+        let reader = from_hex(reader).ok_or_else(|| fail!(t, "error-unknown-device"))?;
         if reader == device.reader_id {
-            return Err(fail!(
-                "Das ist dieses Gerät. Entfernen geht nur von einem anderen Gerät aus."
-            ));
+            return Err(fail!(t, "error-remove-this-device"));
         }
         let name = device
             .devices
             .iter()
             .find(|d| d.reader == reader)
             .map(|d| d.name.clone())
-            .ok_or_else(|| fail!("Unbekanntes Gerät."))?;
+            .ok_or_else(|| fail!(t, "error-unknown-device"))?;
         self.remove_reader(&reader, &name).await
     }
 
     async fn remove_reader(&mut self, reader: &ReaderId, name: &str) -> Result<()> {
+        let t = self.texts();
         let reader = *reader;
         if let Some(error) = self.unregister_reader(&reader).await? {
             return Err(fail!(
-                "„{name}“ ist nicht überall ausgetragen ({error}); versuche es noch einmal."
+                t,
+                "error-device-not-removed-everywhere",
+                name = name,
+                error = &error.text(t)
             ));
         }
         self.tell_devices(|device, now| device.sync_device_removed(&reader, now, &mut OsRng))
             .await?;
-        self.say(&format!(
-            "„{name}“ entfernt. Es kennt aber weiterhin alle Schlüssel: Ist es verloren gegangen \
-             oder gestohlen, kopple deine Kontakte neu."
-        ));
+        self.say(&tr!(t, "out-device-removed", name = name));
         Ok(())
     }
 
@@ -831,8 +811,7 @@ impl<R: Relay> Ctx<R> {
             return Ok(());
         }
         let now = self.now();
-        self.store
-            .update(|device| queue(device, now).map_err(core))?;
+        self.update(|device| queue(device, now).map_err(core))?;
         self.flush_outbox().await
     }
 
@@ -840,10 +819,12 @@ impl<R: Relay> Ctx<R> {
     /// for the next fetch; after 24 hours it is dropped.
     pub(crate) async fn flush_outbox(&mut self) -> Result<()> {
         if let Some(error) = self.deliver_outbox().await? {
-            self.say(&format!(
-                "Nachricht an die eigenen Geräte noch nicht zugestellt ({error}); neuer Versuch \
-                 beim nächsten Abrufen."
-            ));
+            let text = tr!(
+                self.texts(),
+                "warn-outbox-pending",
+                error = &error.text(self.texts())
+            );
+            self.say(&text);
         }
         Ok(())
     }
@@ -851,7 +832,7 @@ impl<R: Relay> Ctx<R> {
     /// Delivers the outbox in order, up to the first refusal, which it
     /// returns.
     async fn deliver_outbox(&mut self) -> Result<Option<RelayError>> {
-        let device = self.store.load()?;
+        let device = self.load()?;
         if device.outbox.is_empty() {
             return Ok(None);
         }
@@ -859,9 +840,9 @@ impl<R: Relay> Ctx<R> {
             return Ok(None);
         };
         let now = self.now();
-        let outbox = self.store.update(|device| {
+        let outbox = self.update(|device| {
             device.expire_sync(now);
-            Ok::<_, Fail>(device.outbox.clone())
+            Ok(device.outbox.clone())
         })?;
         for outgoing in outbox {
             let delivered = self
@@ -876,9 +857,9 @@ impl<R: Relay> Ctx<R> {
             if let Err(error) = delivered {
                 return Ok(Some(error));
             }
-            self.store.update(|device| {
+            self.update(|device| {
                 device.outbox.retain(|o| o.envelope != outgoing.envelope);
-                Ok::<_, Fail>(())
+                Ok(())
             })?;
         }
         Ok(None)
@@ -890,7 +871,7 @@ impl<R: Relay> Ctx<R> {
         match std::fs::remove_file(path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(crate::ctx::io_fail(self.texts(), &error)),
         }
         let mut lock = path.as_os_str().to_owned();
         lock.push(".lock");
@@ -900,32 +881,24 @@ impl<R: Relay> Ctx<R> {
 }
 
 /// A failed relay call while joining.
-fn join_failed(error: RelayError, again: &str) -> Fail {
+fn join_failed(t: Texts, error: RelayError, again: &str) -> Fail {
     match error {
-        RelayError::HandoverExists => alarm(&format!(
-            "Die Antwort an das vorhandene Gerät war schon vergeben. Vermutlich kennt jemand \
-             anderes den Code. Dieses Gerät wurde nicht eingerichtet.{again}"
-        )),
-        RelayError::Refused { status: 401, .. } => alarm(&format!(
-            "Auf dem Relay liegt für diesen Code etwas, das nicht für dieses Gerät bestimmt ist. \
-             Vermutlich kennt jemand anderes den Code.{again}"
-        )),
-        other => fail!("{other}. Dieses Gerät wurde nicht eingerichtet.{again}"),
+        RelayError::HandoverExists => alarm(t, &tr!(t, "alarm-reply-taken", again = again)),
+        RelayError::Refused { status: 401, .. } => {
+            alarm(t, &tr!(t, "alarm-slot-not-for-us", again = again))
+        }
+        other => fail!(t, "error-join-relay", error = &other.text(t), again = again),
     }
 }
 
 /// A refused handover slot, with the limits explained.
-fn busy_or(error: RelayError) -> Fail {
+fn busy_or(t: Texts, error: RelayError) -> Fail {
     match error {
-        RelayError::Refused { status: 429, code } if code == "handovers_quota" => fail!(
-            "Auf dem Relay warten schon zwei Übergaben dieses Geräts; versuche es in 10 Minuten \
-             noch einmal."
-        ),
-        RelayError::Refused { status: 503, .. } => fail!(
-            "Auf dem Relay warten gerade zu viele Übergaben; versuche es in 10 Minuten noch \
-             einmal."
-        ),
-        other => fail!("Übergabe nicht gespeichert: {other}."),
+        RelayError::Refused { status: 429, code } if code == "handovers_quota" => {
+            fail!(t, "error-handovers-quota")
+        }
+        RelayError::Refused { status: 503, .. } => fail!(t, "error-handovers-busy"),
+        other => fail!(t, "error-handover-not-stored", error = &other.text(t)),
     }
 }
 

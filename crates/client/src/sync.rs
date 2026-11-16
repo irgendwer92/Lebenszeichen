@@ -12,12 +12,13 @@ use std::time::Duration;
 use lz_core::contact::{ContactState, Event};
 use lz_core::group::{SyncEvent, SyncIgnored};
 use lz_core::pairing::Address;
-use lz_core::store::{Device, Store, StoredContact};
+use lz_core::store::{Device, StoredContact};
 use lz_core::wire::{ENVELOPE_LEN, MailboxId, RelayUrl, Token};
 use rand_core::OsRng;
 use tokio::sync::mpsc;
 
 use crate::ctx::{Ctx, Fail, Result};
+use crate::i18n::Texts;
 use crate::relay::{Connection, Delivery, Relay, RelayError, ServerFrame};
 use crate::show::Notice;
 
@@ -145,16 +146,19 @@ impl<R: Relay> Ctx<R> {
         if live.is_empty() && !listen {
             self.clean_invitations().await?;
             if notices.is_empty() && mode == Mode::Sync {
-                self.say("Keine Postfächer zum Abrufen.");
+                self.say(&tr!(self.texts(), "out-no-mailboxes"));
             }
             return Ok(notices);
         }
         if listen {
-            let text = format!(
-                "Warte auf Nachrichten …{}",
-                crate::show::with_hints(
+            let t = self.texts();
+            let text = tr!(
+                t,
+                "out-listening",
+                hint = &crate::show::with_hints(
                     String::new(),
                     self.hints,
+                    t,
                     &[crate::show::Hint::StopListening]
                 )
             );
@@ -197,7 +201,7 @@ impl<R: Relay> Ctx<R> {
                     if let (Some(l), Some(mailbox)) = (live.get_mut(&relay), mailbox) {
                         l.awaiting.remove(&mailbox);
                     }
-                    let device = self.store.load()?;
+                    let device = self.load()?;
                     let sync_mailbox = device
                         .group
                         .as_ref()
@@ -221,15 +225,23 @@ impl<R: Relay> Ctx<R> {
                     if deleted_on_purpose {
                         continue;
                     }
+                    let t = self.texts();
                     let whose = if sync_mailbox {
-                        " (Postfach der eigenen Geräte)".to_owned()
+                        tr!(t, "problem-whose-group")
                     } else {
                         mailbox
                             .and_then(|m| name_of(&device, &relay, &m))
-                            .map_or_else(String::new, |name| format!(" (Postfach für {name})"))
+                            .map_or_else(String::new, |name| {
+                                tr!(t, "problem-whose-contact", name = &name)
+                            })
                     };
-                    let notice =
-                        Notice::Problem(format!("Fehler vom Relay {relay}{whose}: {code}"));
+                    let notice = Notice::Problem(tr!(
+                        t,
+                        "problem-relay-error",
+                        relay = &relay.to_string(),
+                        whose = &whose,
+                        code = &code
+                    ));
                     self.show(&notice);
                     notices.push(notice);
                 }
@@ -268,9 +280,12 @@ impl<R: Relay> Ctx<R> {
                 ServerFrame::Closed => {
                     live.remove(&relay);
                     if listen {
-                        self.say(&format!(
-                            "Verbindung zu {relay} getrennt; neuer Versuch in Kürze."
-                        ));
+                        let text = tr!(
+                            self.texts(),
+                            "out-connection-lost",
+                            relay = &relay.to_string()
+                        );
+                        self.say(&text);
                     } else if live.is_empty() {
                         break;
                     }
@@ -279,7 +294,7 @@ impl<R: Relay> Ctx<R> {
         }
         self.clean_invitations().await?;
         if mode == Mode::Sync && notices.iter().all(Notice::is_dropped) {
-            self.say("Keine neuen Nachrichten.");
+            self.say(&tr!(self.texts(), "out-no-new-messages"));
         }
         Ok(notices)
     }
@@ -295,7 +310,7 @@ impl<R: Relay> Ctx<R> {
 
     fn show(&mut self, notice: &Notice) {
         if self.verbose || !notice.is_dropped() {
-            let text = notice.text(self.now(), self.hints);
+            let text = notice.text(self.texts(), self.now(), self.hints);
             self.say(&text);
         }
     }
@@ -308,7 +323,7 @@ impl<R: Relay> Ctx<R> {
         deliveries: &mpsc::UnboundedSender<Delivery>,
         notices: &mut Vec<Notice>,
     ) -> Result<()> {
-        let device = self.store.load()?;
+        let device = self.load()?;
         let mut relays: Vec<_> = own_mailboxes(&device).into_iter().collect();
         // The sync mailbox first, so that what another own device did
         // tends to arrive before the messages of contacts about it.
@@ -324,7 +339,12 @@ impl<R: Relay> Ctx<R> {
                         awaiting: HashSet::new(),
                     }),
                     Err(error) => {
-                        let notice = Notice::Problem(format!("{relay}: {error}"));
+                        let notice = Notice::Problem(tr!(
+                            self.texts(),
+                            "problem-relay",
+                            relay = &relay.to_string(),
+                            error = &error.text(self.texts())
+                        ));
                         self.show(&notice);
                         notices.push(notice);
                         continue;
@@ -355,9 +375,10 @@ impl<R: Relay> Ctx<R> {
         data: &[u8],
     ) -> Result<(Vec<Notice>, Vec<FollowUp>, bool)> {
         let now = self.now();
-        self.store.update(|device| {
+        let t = self.texts();
+        self.update(|device| {
             let queued = device.outbox.len();
-            let (notices, follow_ups) = receive_into(device, relay, mailbox, data, now)?;
+            let (notices, follow_ups) = receive_into(t, device, relay, mailbox, data, now)?;
             Ok((notices, follow_ups, device.outbox.len() > queued))
         })
     }
@@ -372,7 +393,7 @@ impl<R: Relay> Ctx<R> {
                 mailbox,
                 token,
             } => {
-                let device = self.store.load()?;
+                let device = self.load()?;
                 match self
                     .relay
                     .put_reader(
@@ -387,8 +408,12 @@ impl<R: Relay> Ctx<R> {
                     Ok(()) => Ok(None),
                     Err(error) => {
                         let name = name_of(&device, &relay, &mailbox).unwrap_or_default();
-                        Ok(Some(Notice::Problem(format!(
-                            "Dieses Gerät ist für {name} noch nicht eingetragen: {error}"
+                        let t = self.texts();
+                        Ok(Some(Notice::Problem(tr!(
+                            t,
+                            "problem-not-registered",
+                            name = &name,
+                            error = &error.text(t)
                         ))))
                     }
                 }
@@ -418,14 +443,22 @@ impl<R: Relay> Ctx<R> {
                     Ok(Some(Notice::Ended { name }))
                 }
                 Err(error) => {
-                    let what = match what {
-                        Sent::Rules => "Regeln",
-                        // Comes again when the other side repeats `hello`.
-                        Sent::Reveal => "Prüfwert für den Prüfcode",
-                        Sent::End => "Abbruch der Kopplung",
-                    };
-                    Ok(Some(Notice::Problem(format!(
-                        "{what} an {name} nicht zugestellt: {error}"
+                    let t = self.texts();
+                    let what = tr!(
+                        t,
+                        match what {
+                            Sent::Rules => "problem-what-rules",
+                            // Comes again when the other side repeats `hello`.
+                            Sent::Reveal => "problem-what-reveal",
+                            Sent::End => "problem-what-end",
+                        }
+                    );
+                    Ok(Some(Notice::Problem(tr!(
+                        t,
+                        "problem-not-delivered",
+                        what = &what,
+                        name = &name,
+                        error = &error.text(t)
                     ))))
                 }
             },
@@ -437,7 +470,7 @@ impl<R: Relay> Ctx<R> {
     /// and ends those that can no longer complete.
     async fn check_pairings(&mut self, notices: &mut Vec<Notice>) -> Result<()> {
         let now = self.now();
-        let (repeat, failed) = self.store.update(|device| {
+        let (repeat, failed) = self.update(|device| {
             let mut repeat = Vec::new();
             let mut failed = Vec::new();
             for contact in device.contacts.iter_mut().filter(|c| !c.state.ended) {
@@ -462,7 +495,7 @@ impl<R: Relay> Ctx<R> {
                     ));
                 }
             }
-            Ok::<_, Fail>((repeat, failed))
+            Ok((repeat, failed))
         })?;
         for (name, peer, envelope, relay, mailbox, token) in failed {
             // The other side may be gone already; nothing to tell then.
@@ -500,28 +533,26 @@ impl<R: Relay> Ctx<R> {
     /// their mailboxes.
     async fn clean_invitations(&mut self) -> Result<()> {
         let now = self.now();
-        let expired = self.store.update(|device| {
+        let expired = self.update(|device| {
             let (expired, open) = std::mem::take(&mut device.invitations)
                 .into_iter()
                 .partition::<Vec<_>, _>(|i| {
                     i.pending.keep_until() < now || i.pending.is_outdated()
                 });
             device.invitations = open;
-            Ok::<_, Fail>(expired)
+            Ok(expired)
         })?;
         for invitation in expired {
             let own = &invitation.pending.own;
             self.delete_own(&own.relay, &own.mailbox, &invitation.read_token)
                 .await;
             let name = &invitation.name;
-            self.say(&if invitation.pending.is_outdated() {
-                format!(
-                    "Einladung für {name} stammt aus einer älteren Version und wurde entfernt. \
-                     Lade {name} neu ein."
-                )
+            let id = if invitation.pending.is_outdated() {
+                "out-invitation-outdated-removed"
             } else {
-                format!("Einladung für {name} ist abgelaufen und wurde entfernt.")
-            });
+                "out-invitation-expired-removed"
+            };
+            self.say(&tr!(self.texts(), id, name = name));
         }
         Ok(())
     }
@@ -529,6 +560,7 @@ impl<R: Relay> Ctx<R> {
 
 /// Applies one message to the state of the device.
 fn receive_into(
+    t: Texts,
     device: &mut Device,
     relay: &RelayUrl,
     mailbox: &MailboxId,
@@ -540,7 +572,7 @@ fn receive_into(
         .as_ref()
         .is_some_and(|g| g.relay == *relay && g.mailbox == *mailbox)
     {
-        return Ok(receive_sync(device, data, now));
+        return Ok(receive_sync(t, device, data, now));
     }
     if let Some(contact) = device
         .contacts
@@ -549,13 +581,16 @@ fn receive_into(
     {
         let own_mailbox = contact.state.contact.own_mailbox;
         let name = contact.name.clone();
-        let (mut notices, follow_ups, paired) = receive_for_contact(contact, data, now);
+        let (mut notices, follow_ups, paired) = receive_for_contact(t, contact, data, now);
         if paired {
             // `receive_for_contact` has announced the rules, so the
             // record carries their stamp.
             if let Err(error) = device.sync_contact_added(&own_mailbox, now, &mut OsRng) {
-                notices.push(Notice::Problem(format!(
-                    "{name} nicht an die eigenen Geräte übergeben: {error}"
+                notices.push(Notice::Problem(tr!(
+                    t,
+                    "problem-not-handed-over",
+                    name = &name,
+                    error = &error.to_string()
                 )));
             }
         }
@@ -569,7 +604,7 @@ fn receive_into(
         return Ok((
             vec![Notice::Dropped {
                 name: None,
-                why: "unbekanntes Postfach".into(),
+                why: tr!(t, "dropped-unknown-mailbox"),
             }],
             vec![],
         ));
@@ -584,7 +619,7 @@ fn receive_into(
             let reveal = contact.reveal(now, &mut OsRng).map_err(crate::ctx::core)?;
             let code = contact
                 .verification_code()
-                .ok_or_else(|| fail!("Kein Prüfcode für {name}."))?;
+                .ok_or_else(|| fail!(t, "error-no-code", name = &name))?;
             let peer = contact.peer.clone();
             let invitation = device.invitations.remove(index);
             device.contacts.push(StoredContact {
@@ -617,7 +652,12 @@ fn receive_into(
 }
 
 /// Applies a message from the sync mailbox.
-fn receive_sync(device: &mut Device, data: &[u8], now: u64) -> (Vec<Notice>, Vec<FollowUp>) {
+fn receive_sync(
+    t: Texts,
+    device: &mut Device,
+    data: &[u8],
+    now: u64,
+) -> (Vec<Notice>, Vec<FollowUp>) {
     let before = device.devices.clone();
     // Sync messages do not say which device sent them; with only one other
     // device it is that one.
@@ -631,7 +671,7 @@ fn receive_sync(device: &mut Device, data: &[u8], now: u64) -> (Vec<Notice>, Vec
             return (
                 vec![Notice::Dropped {
                     name: None,
-                    why: format!("eigene Geräte: {error}"),
+                    why: tr!(t, "dropped-own-devices", why = &error.to_string()),
                 }],
                 vec![],
             );
@@ -694,7 +734,7 @@ fn receive_sync(device: &mut Device, data: &[u8], now: u64) -> (Vec<Notice>, Vec
             SyncEvent::PartStored | SyncEvent::Parked => continue,
             SyncEvent::Ignored(why) => Notice::Dropped {
                 name: None,
-                why: format!("eigene Geräte: {}", ignored(why)),
+                why: tr!(t, "dropped-own-devices", why = &ignored(t, why)),
             },
         };
         notices.push(notice);
@@ -702,20 +742,24 @@ fn receive_sync(device: &mut Device, data: &[u8], now: u64) -> (Vec<Notice>, Vec
     (notices, follow_ups)
 }
 
-fn ignored(why: SyncIgnored) -> &'static str {
-    match why {
-        SyncIgnored::Duplicate => "schon gesehen",
-        SyncIgnored::NotExpected => "unerwarteter Typ",
-        SyncIgnored::UnknownType => "unbekannter Typ",
-        SyncIgnored::Outdated => "ältere Regeln",
-        SyncIgnored::Known => "schon bekannt",
-        SyncIgnored::Discarded => "unvollständiger Kontakt verworfen",
-    }
+fn ignored(t: Texts, why: SyncIgnored) -> String {
+    tr!(
+        t,
+        match why {
+            SyncIgnored::Duplicate => "dropped-sync-duplicate",
+            SyncIgnored::NotExpected => "dropped-sync-not-expected",
+            SyncIgnored::UnknownType => "dropped-sync-unknown-type",
+            SyncIgnored::Outdated => "dropped-sync-outdated",
+            SyncIgnored::Known => "dropped-sync-known",
+            SyncIgnored::Discarded => "dropped-sync-discarded",
+        }
+    )
 }
 
 /// Applies a message from a contact. Returns the notices, the network work
 /// to do afterwards, and whether the pairing has just completed.
 fn receive_for_contact(
+    t: Texts,
     contact: &mut StoredContact,
     data: &[u8],
     now: u64,
@@ -741,7 +785,7 @@ fn receive_for_contact(
     };
     match event {
         Event::Paired => {
-            let (notices, follow_ups) = announce_after_pairing(contact, vec![], now);
+            let (notices, follow_ups) = announce_after_pairing(t, contact, vec![], now);
             (notices, follow_ups, true)
         }
         Event::Revealed { code, paired } => {
@@ -751,7 +795,7 @@ fn receive_for_contact(
                 paired,
             };
             if paired {
-                let (notices, follow_ups) = announce_after_pairing(contact, vec![revealed], now);
+                let (notices, follow_ups) = announce_after_pairing(t, contact, vec![revealed], now);
                 (notices, follow_ups, true)
             } else {
                 (vec![revealed], vec![], false)
@@ -776,7 +820,7 @@ fn receive_for_contact(
         Event::HelloOkKept => (
             vec![Notice::Dropped {
                 name: Some(name),
-                why: "Bestätigung vor dem Prüfcode, zurückgehalten".into(),
+                why: tr!(t, "dropped-confirmation-early"),
             }],
             vec![],
             false,
@@ -793,8 +837,11 @@ fn receive_for_contact(
                 false,
             ),
             Err(error) => (
-                vec![Notice::Problem(format!(
-                    "Prüfwert für {name} nicht verschlüsselt: {error}"
+                vec![Notice::Problem(tr!(
+                    t,
+                    "problem-reveal-not-encrypted",
+                    name = &name,
+                    error = &error.to_string()
                 ))],
                 vec![],
                 false,
@@ -829,6 +876,7 @@ fn receive_for_contact(
 /// The pairing completed on the accepting side: the own rules go to the
 /// contact.
 fn announce_after_pairing(
+    t: Texts,
     contact: &mut StoredContact,
     mut notices: Vec<Notice>,
     now: u64,
@@ -846,8 +894,11 @@ fn announce_after_pairing(
             (notices, vec![send])
         }
         Err(error) => {
-            notices.push(Notice::Problem(format!(
-                "Regeln für {name} nicht verschlüsselt: {error}"
+            notices.push(Notice::Problem(tr!(
+                t,
+                "problem-rules-not-encrypted",
+                name = &name,
+                error = &error.to_string()
             )));
             (notices, vec![])
         }

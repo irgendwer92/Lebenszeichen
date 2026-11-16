@@ -11,7 +11,7 @@ use lz_core::wire::{Body, Invitation, MAX_MESSAGE_AGE_SECS};
 use super::{HOUR, MINUTE, Person, RELAY_A, RELAY_B, TOKEN_A, TOKEN_B, World, paired};
 use crate::ctx::Status;
 use crate::relay::Relay;
-use crate::show::{COMPARE_HINT, Notice, OLD_INVITATION};
+use crate::show::Notice;
 
 fn pairing_state(person: &Person, name: &str) -> PairingState {
     person.contact(name).state.contact.state
@@ -65,7 +65,7 @@ async fn pairing_works_in_both_directions() {
     anna.ctx.contacts().unwrap();
     let listing = anna.out.take();
     assert!(listing.contains(&anna_code), "{listing}");
-    assert!(listing.contains(COMPARE_HINT), "{listing}");
+    assert!(listing.contains(&super::compare_hint()), "{listing}");
 
     bert.ctx.confirm("Anna 2").await.unwrap();
     assert_eq!(bert.contact("Anna 2").state.contact.secret, None);
@@ -398,12 +398,12 @@ async fn invitations_of_version_one_are_refused() {
     // As the previous release wrote it.
     let old = "LZ1-AEAAAAAAABVPO3CAAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQEAQCAIB";
     let error = bert.ctx.accept("Anna", old).await.unwrap_err();
-    assert_eq!(error.0, OLD_INVITATION);
+    assert_eq!(error.0, super::de().text("error-old-invitation", &[]));
     let error = bert.ctx.accept("Anna", "lz1-aeaa").await.unwrap_err();
-    assert_eq!(error.0, OLD_INVITATION);
+    assert_eq!(error.0, super::de().text("error-old-invitation", &[]));
     // `LZ2-` with the version byte 1.
     let error = bert.ctx.accept("Anna", "LZ2-AEAA").await.unwrap_err();
-    assert_eq!(error.0, OLD_INVITATION);
+    assert_eq!(error.0, super::de().text("error-old-invitation", &[]));
     let error = bert.ctx.accept("Anna", "LZ2-AM").await.unwrap_err();
     assert!(error.0.contains("neueren Version"), "{error:?}");
     assert!(bert.device().contacts.is_empty());

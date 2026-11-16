@@ -2,9 +2,11 @@
 //! relay access, the commands, and fetching messages.
 //!
 //! The protocol itself lives in `lz-core`; this crate adds the network, the
-//! state file and German texts for people. Commands are functions on
+//! state file and the texts for people, in English and German. Commands are functions on
 //! [`ctx::Ctx`], so tests can call them with a fake relay and a manual clock.
 
+#[macro_use]
+pub mod i18n;
 #[macro_use]
 pub mod ctx;
 pub mod devices;

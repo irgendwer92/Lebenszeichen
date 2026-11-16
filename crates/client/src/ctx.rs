@@ -26,6 +26,7 @@ use lz_core::wire::{
 use rand_core::{OsRng, RngCore};
 use serde::Serialize;
 
+use crate::i18n::{Language, Texts};
 use crate::relay::{Relay, RelayError, from_b64};
 use crate::show::{self, Hint, Hints, when, with_hints};
 
@@ -39,20 +40,44 @@ impl fmt::Display for Fail {
     }
 }
 
-impl From<io::Error> for Fail {
-    fn from(error: io::Error) -> Self {
-        Self(format!("Zustandsdatei: {error}"))
-    }
-}
-
-impl From<RelayError> for Fail {
-    fn from(error: RelayError) -> Self {
-        Self(error.to_string())
-    }
-}
-
+/// A failed command: `fail!(texts, "error-id", name = value, …)`.
 macro_rules! fail {
-    ($($arg:tt)*) => { $crate::ctx::Fail(format!($($arg)*)) };
+    ($($arg:tt)*) => { $crate::ctx::Fail(tr!($($arg)*)) };
+}
+
+/// Turns the errors of the state file and of relays into a [`Fail`] in the
+/// language of the person.
+pub(crate) trait Localize<T> {
+    fn loc(self, t: Texts) -> Result<T>;
+}
+
+pub(crate) fn io_fail(t: Texts, error: &io::Error) -> Fail {
+    fail!(t, "error-state-file", error = &error.to_string())
+}
+
+impl<T> Localize<T> for io::Result<T> {
+    fn loc(self, t: Texts) -> Result<T> {
+        self.map_err(|error| io_fail(t, &error))
+    }
+}
+
+impl<T> Localize<T> for std::result::Result<T, RelayError> {
+    fn loc(self, t: Texts) -> Result<T> {
+        self.map_err(|error| Fail(error.text(t)))
+    }
+}
+
+/// Carries the error of the state file out of [`JsonFile::update`], which
+/// needs a conversion from it.
+pub(crate) enum Stored {
+    Io(io::Error),
+    Fail(Fail),
+}
+
+impl From<io::Error> for Stored {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Fail>;
@@ -94,6 +119,8 @@ pub struct Ctx<R> {
     pub idle: Duration,
     /// Wording of hints such as "confirm with …"; see [`Hint`].
     pub hints: Hints,
+    /// Language of all texts. English unless the caller sets it.
+    pub lang: Language,
 }
 
 /// Creates the state file with a new device.
@@ -101,67 +128,70 @@ pub fn init(
     store: &JsonFile,
     relay: Option<&str>,
     access_token: Option<&str>,
+    lang: Language,
     out: &mut dyn Write,
 ) -> Result<()> {
+    let t = lang.texts();
     let mut device = Device::new(&mut OsRng);
     if let Some(url) = relay {
         let access_token = access_token
-            .map(|text| {
-                from_b64::<32>(text)
-                    .ok_or_else(|| fail!("Der Zugangstoken muss b64url von 32 Byte sein."))
-            })
+            .map(|text| from_b64::<32>(text).ok_or_else(|| fail!(t, "error-access-token-format")))
             .transpose()?;
         device.relay = Some(RelayAccount {
-            url: relay_url(url)?,
+            url: relay_url(t, url)?,
             access_token,
         });
     } else if access_token.is_some() {
-        return Err(fail!("Ein Zugangstoken braucht auch --relay."));
+        return Err(fail!(t, "error-access-token-needs-relay"));
     }
     if let Some(parent) = store.path().parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).loc(t)?;
     }
     store.create(&device).map_err(|error| match error.kind() {
-        io::ErrorKind::AlreadyExists => fail!("{} gibt es schon.", store.path().display()),
-        _ => error.into(),
+        io::ErrorKind::AlreadyExists => {
+            fail!(
+                t,
+                "error-exists",
+                path = &store.path().display().to_string()
+            )
+        }
+        _ => io_fail(t, &error),
     })?;
     say(
         out,
-        &format!("Gerät angelegt in {}.", store.path().display()),
+        &tr!(
+            t,
+            "out-device-created",
+            path = &store.path().display().to_string()
+        ),
     );
     match &device.relay {
         Some(RelayAccount {
             access_token: Some(_),
             ..
         }) => {}
-        Some(_) => say(
-            out,
-            "Ohne Zugangstoken kannst du nur Einladungen mit Gutschein annehmen.",
-        ),
-        None => say(
-            out,
-            "Ohne Relay kannst du nur Einladungen mit Gutschein annehmen.",
-        ),
+        Some(_) => say(out, &tr!(t, "out-no-access-token")),
+        None => say(out, &tr!(t, "out-no-relay")),
     }
     Ok(())
 }
 
 /// Checks and normalises the base address of a relay.
-pub fn relay_url(text: &str) -> Result<RelayUrl> {
+pub fn relay_url(t: Texts, text: &str) -> Result<RelayUrl> {
     let text = text.trim().trim_end_matches('/');
     let rest = text
         .strip_prefix("https://")
         .or_else(|| text.strip_prefix("http://"))
-        .ok_or_else(|| fail!("Die Relay-Adresse muss mit https:// oder http:// beginnen."))?;
+        .ok_or_else(|| fail!(t, "error-relay-url-scheme"))?;
     if rest.is_empty() {
-        return Err(fail!("Die Relay-Adresse hat keinen Rechnernamen."));
+        return Err(fail!(t, "error-relay-url-host"));
     }
-    RelayUrl::new(text).map_err(|_| fail!("Die Relay-Adresse ist zu lang."))
+    RelayUrl::new(text).map_err(|_| fail!(t, "error-relay-url-long"))
 }
 
 /// A hint to append to a sentence, with a leading space, or nothing.
-pub(crate) fn inline(hints: Hints, hint: Hint<'_>) -> String {
-    hints(&hint).map_or_else(String::new, |text| format!(" {text}"))
+pub(crate) fn inline(hints: Hints, t: Texts, hint: Hint<'_>) -> String {
+    hints(&hint, t).map_or_else(String::new, |text| format!(" {text}"))
 }
 
 pub(crate) fn say(out: &mut dyn Write, text: &str) {
@@ -182,53 +212,56 @@ fn same(a: &ContactState, b: &ContactState) -> bool {
 
 /// Fails if a contact was already made from this invitation, so that the
 /// same code is not accepted twice by mistake.
-fn already_accepted(device: &Device, invitation: &Invitation) -> Result<()> {
+fn already_accepted(t: Texts, device: &Device, invitation: &Invitation) -> Result<()> {
     let earlier = device.contacts.iter().find(|c| {
         let peer = &c.state.contact.peer;
         peer.relay == invitation.relay && peer.mailbox == invitation.mailbox
     });
     match earlier {
-        Some(contact) => Err(fail!(
-            "Diese Einladung hast du schon angenommen (als {}).",
-            contact.name
-        )),
+        Some(contact) => Err(fail!(t, "error-already-accepted", name = &contact.name)),
         None => Ok(()),
     }
 }
 
-fn name_is_free(device: &Device, name: &str) -> Result<()> {
+fn name_is_free(t: Texts, device: &Device, name: &str) -> Result<()> {
     if name.trim().is_empty() {
-        return Err(fail!("Der Name darf nicht leer sein."));
+        return Err(fail!(t, "error-name-empty"));
     }
     let taken = device.contacts.iter().any(|c| c.name == name)
         || device.invitations.iter().any(|i| i.name == name);
     if taken {
-        return Err(fail!("Den Namen {name} gibt es schon."));
+        return Err(fail!(t, "error-name-taken", name = name));
     }
     Ok(())
 }
 
-pub(crate) fn contact_mut<'a>(device: &'a mut Device, name: &str) -> Result<&'a mut StoredContact> {
+pub(crate) fn contact_mut<'a>(
+    t: Texts,
+    device: &'a mut Device,
+    name: &str,
+) -> Result<&'a mut StoredContact> {
     device
         .contacts
         .iter_mut()
         .find(|c| c.name == name)
-        .ok_or_else(|| fail!("Keinen Kontakt namens {name} gefunden."))
+        .ok_or_else(|| fail!(t, "error-no-contact", name = name))
 }
 
 /// Fails unless requests and responses are possible with this contact.
-fn check_active(name: &str, state: &ContactState) -> Result<()> {
+fn check_active(t: Texts, name: &str, state: &ContactState) -> Result<()> {
     if state.ended {
-        Err(fail!("Die Verbindung mit {name} ist beendet."))
+        Err(fail!(t, "error-contact-ended", name = name))
     } else if !state.is_paired() {
-        Err(fail!("{name} ist noch nicht gekoppelt."))
+        Err(fail!(t, "error-not-paired", name = name))
     } else {
         Ok(())
     }
 }
 
+/// A failure of the protocol part; its text is a technical detail and stays
+/// English in every language.
 pub(crate) fn core(error: lz_core::Error) -> Fail {
-    fail!("{error}")
+    Fail(error.to_string())
 }
 
 impl<R: Relay> Ctx<R> {
@@ -236,33 +269,52 @@ impl<R: Relay> Ctx<R> {
         self.clock.now()
     }
 
+    /// The translator for the language of this context.
+    pub fn texts(&self) -> Texts {
+        self.lang.texts()
+    }
+
     pub(crate) fn say(&mut self, text: &str) {
         say(&mut self.out, text);
     }
 
     pub(crate) fn load(&self) -> Result<Device> {
+        let t = self.texts();
         self.store.load().map_err(|error| match error.kind() {
             io::ErrorKind::NotFound => fail!(
-                "Kein Gerät unter {}.{}",
-                self.store.path().display(),
-                inline(self.hints, Hint::Init)
+                t,
+                "error-no-device",
+                path = &self.store.path().display().to_string(),
+                hint = &inline(self.hints, t, Hint::Init)
             ),
-            _ => error.into(),
+            _ => io_fail(t, &error),
         })
+    }
+
+    /// [`JsonFile::update`] with failures in the language of this context.
+    pub(crate) fn update<T>(&self, change: impl FnOnce(&mut Device) -> Result<T>) -> Result<T> {
+        self.store
+            .update(|device| change(device).map_err(Stored::Fail))
+            .map_err(|error| match error {
+                Stored::Fail(fail) => fail,
+                Stored::Io(error) => io_fail(self.texts(), &error),
+            })
     }
 
     /// Creates an invitation and returns its code.
     pub async fn invite(&mut self, name: &str, voucher: bool) -> Result<String> {
+        let t = self.texts();
         let device = self.load()?;
-        name_is_free(&device, name)?;
+        name_is_free(t, &device, name)?;
         let Some(RelayAccount {
             url,
             access_token: Some(access),
         }) = device.relay
         else {
             return Err(fail!(
-                "Einladen braucht ein eigenes Relay mit Zugangstoken.{}",
-                inline(self.hints, Hint::InitWithAccessToken)
+                t,
+                "error-invite-needs-relay",
+                hint = &inline(self.hints, t, Hint::InitWithAccessToken)
             ));
         };
         let read_token = random_token();
@@ -270,7 +322,8 @@ impl<R: Relay> Ctx<R> {
         let mailbox = self
             .relay
             .create_mailbox(&url, &access, &read_token, &send_token)
-            .await?;
+            .await
+            .loc(t)?;
 
         let prepared = async {
             self.relay
@@ -281,9 +334,10 @@ impl<R: Relay> Ctx<R> {
                     &device.reader_id,
                     device.push_url.as_deref(),
                 )
-                .await?;
+                .await
+                .loc(t)?;
             let voucher = match voucher {
-                true => Some(self.relay.create_voucher(&url, &access).await?),
+                true => Some(self.relay.create_voucher(&url, &access).await.loc(t)?),
                 false => None,
             };
             let own = Address {
@@ -293,14 +347,14 @@ impl<R: Relay> Ctx<R> {
             };
             let (pending, invitation) =
                 PendingInvitation::create(own, voucher, self.now(), &mut OsRng);
-            self.store.update(|device| {
-                name_is_free(device, name)?;
+            self.update(|device| {
+                name_is_free(t, device, name)?;
                 device.invitations.push(StoredInvitation {
                     name: name.into(),
                     read_token,
                     pending,
                 });
-                Ok::<_, Fail>(())
+                Ok(())
             })?;
             Ok::<_, Fail>(invitation)
         }
@@ -316,16 +370,20 @@ impl<R: Relay> Ctx<R> {
         let mut buf = [0; MAX_TEXT_LEN];
         let code = invitation.to_text(&mut buf).to_owned();
         let now = self.now();
-        self.say(&format!("Einladung für {name}:\n\n{code}\n"));
         self.say(&format!(
-            "Gültig bis {} und nur einmal{}.{}",
-            when(invitation.expires_at, now),
+            "{}\n",
+            tr!(t, "out-invitation", name = name, code = &code)
+        ));
+        let valid_until = when(t, invitation.expires_at, now);
+        self.say(&tr!(
+            t,
             if invitation.voucher.is_some() {
-                ", mit Gutschein für ein Postfach auf deinem Relay"
+                "out-invitation-valid-voucher"
             } else {
-                ""
+                "out-invitation-valid"
             },
-            inline(self.hints, Hint::Fetch)
+            until = &valid_until,
+            hint = &inline(self.hints, t, Hint::Fetch)
         ));
         Ok(code)
     }
@@ -334,21 +392,20 @@ impl<R: Relay> Ctx<R> {
     /// follows once the inviting side has answered with `reveal`, as a
     /// notice while fetching.
     pub async fn accept(&mut self, name: &str, code: &str) -> Result<()> {
+        let t = self.texts();
         let invitation = Invitation::from_text(code).map_err(|error| match error {
             WireError::OldInvitation | WireError::UnsupportedVersion(..=1) => {
-                fail!("{}", show::OLD_INVITATION)
+                fail!(t, "error-old-invitation")
             }
-            WireError::UnsupportedVersion(_) => fail!(
-                "Diese Einladung stammt aus einer neueren Version; bitte aktualisiere Lebenszeichen."
-            ),
-            _ => fail!("Das ist kein gültiger Einladungscode."),
+            WireError::UnsupportedVersion(_) => fail!(t, "error-newer-invitation"),
+            _ => fail!(t, "error-invalid-invitation"),
         })?;
         if self.now() > invitation.expires_at {
-            return Err(fail!("Die Einladung ist abgelaufen."));
+            return Err(fail!(t, "error-invitation-expired"));
         }
         let device = self.load()?;
-        name_is_free(&device, name)?;
-        already_accepted(&device, &invitation)?;
+        name_is_free(t, &device, name)?;
+        already_accepted(t, &device, &invitation)?;
         let (own_relay, authorisation) = match (&device.relay, invitation.voucher) {
             (
                 Some(RelayAccount {
@@ -360,9 +417,9 @@ impl<R: Relay> Ctx<R> {
             (_, Some(voucher)) => (invitation.relay, voucher),
             _ => {
                 return Err(fail!(
-                    "Kein Zugangstoken für ein eigenes Relay und kein Gutschein in der Einladung. \
-                     Die Gegenseite kann mit Gutschein einladen.{}",
-                    inline(self.hints, Hint::InviteWithVoucher)
+                    t,
+                    "error-accept-no-access",
+                    hint = &inline(self.hints, t, Hint::InviteWithVoucher)
                 ));
             }
         };
@@ -372,7 +429,8 @@ impl<R: Relay> Ctx<R> {
         let mailbox = self
             .relay
             .create_mailbox(&own_relay, &authorisation, &read_token, &send_token)
-            .await?;
+            .await
+            .loc(t)?;
         let own = Address {
             relay: own_relay,
             mailbox,
@@ -388,22 +446,23 @@ impl<R: Relay> Ctx<R> {
                     &device.reader_id,
                     device.push_url.as_deref(),
                 )
-                .await?;
+                .await
+                .loc(t)?;
             // A new contact key for every acceptance, also when retrying.
             let (contact, hello) =
                 accept(&invitation, own, self.now(), &mut OsRng).map_err(core)?;
             // Key, commitment and own mailbox are stored before `hello`
             // goes out, so that the `reveal` answering it can be checked.
-            self.store.update(|device| {
-                name_is_free(device, name)?;
-                already_accepted(device, &invitation)?;
+            self.update(|device| {
+                name_is_free(t, device, name)?;
+                already_accepted(t, device, &invitation)?;
                 device.contacts.push(StoredContact {
                     name: name.into(),
                     own_relay,
                     read_token,
                     state: ContactState::new(contact),
                 });
-                Ok::<_, Fail>(())
+                Ok(())
             })?;
             stored = true;
             self.relay
@@ -415,18 +474,18 @@ impl<R: Relay> Ctx<R> {
                 )
                 .await
                 .map_err(|error| match error {
-                    RelayError::UnknownMailbox => fail!("Die Einladung gilt nicht mehr."),
-                    other => other.into(),
+                    RelayError::UnknownMailbox => fail!(t, "error-invitation-void"),
+                    other => Fail(other.text(t)),
                 })
         }
         .await;
         if let Err(error) = result {
             if stored {
-                self.store.update(|device| {
+                self.update(|device| {
                     device
                         .contacts
                         .retain(|c| !(c.name == name && c.state.contact.own_mailbox == mailbox));
-                    Ok::<_, Fail>(())
+                    Ok(())
                 })?;
             }
             let _ = self
@@ -435,14 +494,16 @@ impl<R: Relay> Ctx<R> {
                 .await;
             return Err(error);
         }
-        self.say("Einladung angenommen. Warte auf den Prüfcode …");
+        self.say(&tr!(t, "out-accepted"));
         let text = with_hints(
-            format!(
-                "Der Prüfcode kommt, sobald das Gerät von {name} die Annahme abgeholt hat. \
-                 Gekoppelt seid ihr, sobald {name} bestätigt hat.{}",
-                inline(self.hints, Hint::Fetch)
+            tr!(
+                t,
+                "out-accepted-next",
+                name = name,
+                hint = &inline(self.hints, t, Hint::Fetch)
             ),
             self.hints,
+            t,
             &[Hint::Reject(name)],
         );
         self.say(&text);
@@ -452,25 +513,28 @@ impl<R: Relay> Ctx<R> {
     /// Confirms a contact that accepted an own invitation.
     pub async fn confirm(&mut self, name: &str) -> Result<()> {
         let hints = self.hints;
+        let t = self.texts();
         self.change_and_send(name, |state, now| {
             if state.ended {
-                return Err(fail!("Die Verbindung mit {name} ist beendet."));
+                return Err(fail!(t, "error-contact-ended", name = name));
             }
             match state.contact.state {
                 PairingState::AwaitingConfirmation => {}
                 PairingState::AwaitingReveal | PairingState::AwaitingHelloOk => {
                     return Err(fail!(
-                        "{name} muss bestätigen, nicht du.{}",
-                        inline(hints, Hint::Fetch)
+                        t,
+                        "error-other-confirms",
+                        name = name,
+                        hint = &inline(hints, t, Hint::Fetch)
                     ));
                 }
-                PairingState::Paired => return Err(fail!("{name} ist schon gekoppelt.")),
+                PairingState::Paired => return Err(fail!(t, "error-already-paired", name = name)),
             }
             let envelopes = state.confirm(now, &mut OsRng).map_err(core)?;
             Ok(((), envelopes.to_vec()))
         })
         .await?;
-        self.say(&format!("{name} ist jetzt gekoppelt."));
+        self.say(&tr!(t, "out-paired", name = name));
         // `confirm` has announced the rules, so the record carries their
         // stamp.
         let mailbox = self.own_mailbox_of(name)?;
@@ -480,20 +544,23 @@ impl<R: Relay> Ctx<R> {
 
     /// Asks a contact for a sign of life.
     pub async fn request(&mut self, name: &str) -> Result<()> {
+        let t = self.texts();
         let (id, at) = self
             .change_and_send(name, |state, now| {
-                check_active(name, state)?;
+                check_active(t, name, state)?;
                 match state.request(now, &mut OsRng) {
                     Ok((id, envelope)) => Ok(((id, now), vec![envelope])),
                     Err(lz_core::Error::NotYet(at)) => Err(fail!(
-                        "Anfrage an {name} erst wieder möglich ab {}.",
-                        when(at, now)
+                        t,
+                        "error-request-not-yet",
+                        name = name,
+                        at = &when(t, at, now)
                     )),
                     Err(error) => Err(core(error)),
                 }
             })
             .await?;
-        self.say(&format!("Anfrage an {name} gesendet."));
+        self.say(&tr!(t, "out-requested", name = name));
         let mailbox = self.own_mailbox_of(name)?;
         self.tell_devices(|device, now| device.sync_requested(&mailbox, id, at, now, &mut OsRng))
             .await
@@ -501,17 +568,18 @@ impl<R: Relay> Ctx<R> {
 
     /// Answers the open request of a contact.
     pub async fn respond(&mut self, name: &str) -> Result<()> {
+        let t = self.texts();
         let (id, at) = self
             .change_and_send(name, |state, now| {
-                check_active(name, state)?;
+                check_active(t, name, state)?;
                 let id = state
                     .open_request(now)
-                    .ok_or_else(|| fail!("Keine offene Anfrage von {name}."))?;
+                    .ok_or_else(|| fail!(t, "error-no-open-request", name = name))?;
                 let envelope = state.respond(&id, now, &mut OsRng).map_err(core)?;
                 Ok(((id, now), vec![envelope]))
             })
             .await?;
-        self.say(&format!("Lebenszeichen an {name} gesendet ✓"));
+        self.say(&tr!(t, "out-responded", name = name));
         let mailbox = self.own_mailbox_of(name)?;
         self.tell_devices(|device, now| {
             device.sync_responded(&mailbox, id, ResponseKind::Manual, at, now, &mut OsRng)
@@ -521,32 +589,33 @@ impl<R: Relay> Ctx<R> {
 
     /// Sends a reported state for the open request of a contact.
     pub async fn report(&mut self, name: &str, reason: &str) -> Result<()> {
-        let reason = Reason::new(reason.trim())
-            .map_err(|_| fail!("Der Grund ist zu lang (höchstens 64 Byte)."))?;
+        let t = self.texts();
+        let reason = Reason::new(reason.trim()).map_err(|_| fail!(t, "error-reason-long"))?;
         if reason.is_empty() {
-            return Err(fail!("Der Grund darf nicht leer sein."));
+            return Err(fail!(t, "error-reason-empty"));
         }
         let (id, at) = self
             .change_and_send(name, |state, now| {
-                check_active(name, state)?;
+                check_active(t, name, state)?;
                 let id = state
                     .open_request(now)
-                    .ok_or_else(|| fail!("Keine offene Anfrage von {name}."))?;
+                    .ok_or_else(|| fail!(t, "error-no-open-request", name = name))?;
                 match state.report(&id, reason, now, &mut OsRng) {
                     Ok(envelope) => Ok(((id, now), vec![envelope])),
-                    Err(lz_core::Error::Unexpected) => {
-                        Err(fail!("Zu dieser Anfrage ist schon ein Zustand gemeldet."))
-                    }
+                    Err(lz_core::Error::Unexpected) => Err(fail!(t, "error-already-reported")),
                     Err(error) => Err(core(error)),
                 }
             })
             .await?;
         let text = with_hints(
-            format!(
-                "An {name} gemeldet: {}. Die Anfrage bleibt offen, bis du antwortest.",
-                show::reported(reason)
+            tr!(
+                t,
+                "out-reported",
+                name = name,
+                reason = &show::reported(t, reason)
             ),
             self.hints,
+            t,
             &[Hint::Respond(name)],
         );
         self.say(&text);
@@ -566,20 +635,31 @@ impl<R: Relay> Ctx<R> {
         expiry_minutes: Option<u32>,
         weekly_limit: Option<u16>,
     ) -> Result<()> {
+        let t = self.texts();
         if interval_minutes.is_none() && expiry_minutes.is_none() && weekly_limit.is_none() {
             let mut device = self.load()?;
-            let contact = contact_mut(&mut device, name)?;
+            let contact = contact_mut(t, &mut device, name)?;
             let (own, peer) = (contact.state.own_rules, contact.state.peer_rules);
-            self.say(&format!("{name} darf dich fragen: {}", show::rules(&own)));
-            self.say(&format!("Du darfst {name} fragen: {}", show::rules(&peer)));
+            self.say(&tr!(
+                t,
+                "out-rules-own",
+                name = name,
+                rules = &show::rules(t, &own)
+            ));
+            self.say(&tr!(
+                t,
+                "out-rules-peer",
+                name = name,
+                rules = &show::rules(t, &peer)
+            ));
             return Ok(());
         }
         if expiry_minutes == Some(0) {
-            return Err(fail!("Die Ablaufzeit muss mindestens 1 Minute sein."));
+            return Err(fail!(t, "error-expiry-minimum"));
         }
         let rules = self
             .change_and_send(name, |state, now| {
-                check_active(name, state)?;
+                check_active(t, name, state)?;
                 let old = state.own_rules;
                 let rules = Rules {
                     min_interval_minutes: interval_minutes.unwrap_or(old.min_interval_minutes),
@@ -590,7 +670,12 @@ impl<R: Relay> Ctx<R> {
                 Ok((rules, vec![envelope]))
             })
             .await?;
-        self.say(&format!("Neue Regeln für {name}: {}", show::rules(&rules)));
+        self.say(&tr!(
+            t,
+            "out-rules-new",
+            name = name,
+            rules = &show::rules(t, &rules)
+        ));
         // Same stamp as the `rules` just sent to the contact.
         let mailbox = self.own_mailbox_of(name)?;
         self.tell_devices(|device, now| device.sync_rules_set(&mailbox, now, &mut OsRng))
@@ -599,13 +684,14 @@ impl<R: Relay> Ctx<R> {
 
     /// Ends a contact or withdraws an invitation.
     pub async fn remove(&mut self, name: &str) -> Result<()> {
+        let t = self.texts();
         let device = self.load()?;
         if let Some(invitation) = device.invitations.iter().find(|i| i.name == name) {
             // Forget the invitation first: a running `listen` then knows that
             // the mailbox is gone on purpose when the relay reports it.
-            self.store.update(|device| {
+            self.update(|device| {
                 device.invitations.retain(|i| i.name != name);
-                Ok::<_, Fail>(())
+                Ok(())
             })?;
             let own = &invitation.pending.own;
             if let Err(error) = self
@@ -615,59 +701,69 @@ impl<R: Relay> Ctx<R> {
             {
                 self.warn_unless_gone(&error);
             }
-            self.say(&format!("Einladung für {name} zurückgezogen."));
+            self.say(&tr!(t, "out-invitation-withdrawn", name = name));
             return Ok(());
         }
         self.end_contact(name).await?;
-        self.say(&format!("{name} entfernt."));
+        self.say(&tr!(t, "out-removed", name = name));
         Ok(())
     }
 
     /// Rejects a contact whose pairing is not complete, typically because the
     /// verification codes did not match. The other side sees the rejection.
     pub async fn reject(&mut self, name: &str) -> Result<()> {
+        let t = self.texts();
         let device = self.load()?;
         let contact = device
             .contacts
             .iter()
             .find(|c| c.name == name)
-            .ok_or_else(|| fail!("Keinen Kontakt namens {name} gefunden."))?;
+            .ok_or_else(|| fail!(t, "error-no-contact", name = name))?;
         let next = match contact.state.contact.state {
             PairingState::Paired => {
                 return Err(fail!(
-                    "{name} ist schon gekoppelt; ablehnen geht nur vorher.{}",
-                    inline(self.hints, Hint::Remove(name))
+                    t,
+                    "error-reject-paired",
+                    name = name,
+                    hint = &inline(self.hints, t, Hint::Remove(name))
                 ));
             }
             PairingState::AwaitingConfirmation => with_hints(
-                "Für einen neuen Versuch lade neu ein.".to_owned(),
+                tr!(t, "out-reject-reinvite"),
                 self.hints,
+                t,
                 &[Hint::Invite(name)],
             ),
             PairingState::AwaitingReveal | PairingState::AwaitingHelloOk => {
-                format!("Bitte {name} um eine neue Einladung.")
+                tr!(t, "out-reject-ask-again", name = name)
             }
         };
         // Delivered means the relay took it; whether the device on the
         // other side can read it, this side cannot know.
-        let delivered = if self.end_contact(name).await? {
-            " Die Ablehnung wurde zugestellt."
-        } else {
-            ""
-        };
-        self.say(&format!("{name} abgelehnt.{delivered} {next}"));
+        let delivered = self.end_contact(name).await?;
+        self.say(&tr!(
+            t,
+            if delivered {
+                "out-rejected-delivered"
+            } else {
+                "out-rejected"
+            },
+            name = name,
+            next = &next
+        ));
         Ok(())
     }
 
     /// Sends `end` unless the contact has already ended, deletes the own
     /// mailbox and drops the contact. Returns whether `end` was delivered.
     async fn end_contact(&mut self, name: &str) -> Result<bool> {
+        let t = self.texts();
         let device = self.load()?;
         let contact = device
             .contacts
             .iter()
             .find(|c| c.name == name)
-            .ok_or_else(|| fail!("Keinen Kontakt namens {name} gefunden."))?;
+            .ok_or_else(|| fail!(t, "error-no-contact", name = name))?;
         let (own_relay, own_mailbox, read_token) = (
             contact.own_relay,
             contact.state.contact.own_mailbox,
@@ -678,10 +774,10 @@ impl<R: Relay> Ctx<R> {
         let mut delivered = false;
         if !contact.state.ended {
             let now = self.now();
-            let (envelope, peer) = self.store.update(|device| {
-                let contact = contact_mut(device, name)?;
+            let (envelope, peer) = self.update(|device| {
+                let contact = contact_mut(t, device, name)?;
                 let envelope = contact.state.end(now, &mut OsRng).map_err(core)?;
-                Ok::<_, Fail>((envelope, contact.state.contact.peer.clone()))
+                Ok((envelope, contact.state.contact.peer.clone()))
             })?;
             match self
                 .relay
@@ -690,9 +786,11 @@ impl<R: Relay> Ctx<R> {
             {
                 Ok(()) => delivered = true,
                 Err(RelayError::UnknownMailbox) => {}
-                Err(error) => self.say(&format!(
-                    "Warnung: {name} hat die Nachricht über das Ende nicht bekommen ({error}). \
-                     Das Entfernen bemerkt {name} trotzdem bei der nächsten Anfrage."
+                Err(error) => self.say(&tr!(
+                    t,
+                    "warn-end-not-delivered",
+                    name = name,
+                    error = &error.text(t)
                 )),
             }
         }
@@ -703,9 +801,9 @@ impl<R: Relay> Ctx<R> {
         {
             self.warn_unless_gone(&error);
         }
-        self.store.update(|device| {
+        self.update(|device| {
             device.contacts.retain(|c| c.name != name);
-            Ok::<_, Fail>(())
+            Ok(())
         })?;
         if known_elsewhere {
             self.tell_devices(|device, now| {
@@ -724,15 +822,18 @@ impl<R: Relay> Ctx<R> {
             .contacts
             .iter()
             .find(|c| c.name == name)
-            .ok_or_else(|| fail!("Keinen Kontakt namens {name} gefunden."))?;
+            .ok_or_else(|| fail!(self.texts(), "error-no-contact", name = name))?;
         Ok(contact.state.contact.own_mailbox)
     }
 
     pub(crate) fn warn_unless_gone(&mut self, error: &RelayError) {
         if *error != RelayError::UnknownMailbox {
-            self.say(&format!(
-                "Warnung: eigenes Postfach nicht gelöscht ({error}). Das Relay räumt es nach 90 Tagen auf."
-            ));
+            let text = tr!(
+                self.texts(),
+                "warn-mailbox-not-deleted",
+                error = &error.text(self.texts())
+            );
+            self.say(&text);
         }
     }
 
@@ -763,77 +864,104 @@ impl<R: Relay> Ctx<R> {
 
     /// Lists contacts and open invitations.
     pub fn contacts(&mut self) -> Result<()> {
+        let t = self.texts();
         let overview = self.overview()?;
         let now = overview.now;
         let mut lines = Vec::new();
         for contact in &overview.contacts {
             let name = &contact.name;
             let status = match &contact.status {
-                Status::Ended => format!("beendet.{}", inline(self.hints, Hint::Remove(name))),
-                Status::AwaitingReveal => format!(
-                    "Einladung angenommen, warte auf den Prüfcode …{}{}",
-                    inline(self.hints, Hint::Fetch),
-                    inline(self.hints, Hint::Reject(name))
+                Status::Ended => tr!(
+                    t,
+                    "status-ended",
+                    hint = &inline(self.hints, t, Hint::Remove(name))
                 ),
-                Status::AwaitingHelloOk { code } => format!(
-                    "wartet auf die Bestätigung durch {name}, Prüfcode {code}. {}{}",
-                    show::COMPARE_HINT,
-                    inline(self.hints, Hint::Reject(name))
+                Status::AwaitingReveal => tr!(
+                    t,
+                    "status-awaiting-reveal",
+                    fetch = &inline(self.hints, t, Hint::Fetch),
+                    reject = &inline(self.hints, t, Hint::Reject(name))
                 ),
-                Status::AwaitingConfirmation { code } => format!(
-                    "hat angenommen, Prüfcode {code}. {}{}{}",
-                    show::COMPARE_HINT,
-                    inline(self.hints, Hint::Confirm(name)),
-                    inline(self.hints, Hint::Reject(name))
+                Status::AwaitingHelloOk { code } => tr!(
+                    t,
+                    "status-awaiting-confirmation-by-other",
+                    name = name,
+                    code = code,
+                    reject = &inline(self.hints, t, Hint::Reject(name))
                 ),
-                Status::Paired => "gekoppelt".to_owned(),
+                Status::AwaitingConfirmation { code } => tr!(
+                    t,
+                    "status-accepted",
+                    code = code,
+                    confirm = &inline(self.hints, t, Hint::Confirm(name)),
+                    reject = &inline(self.hints, t, Hint::Reject(name))
+                ),
+                Status::Paired => tr!(t, "status-paired"),
             };
-            lines.push(format!("{name}: {status}"));
+            lines.push(tr!(t, "status-line", name = name, status = &status));
             if contact.status != Status::Paired {
                 continue;
             }
             if let Some(open) = &contact.incoming {
-                let mut line = format!(
-                    "  offene Anfrage seit {}, läuft ab {}",
-                    when(open.since, now),
-                    when(open.expires_at, now)
-                );
-                if let Some(reason) = &open.reported {
-                    line.push_str(&format!("; gemeldet: {}", show::reported(reason)));
-                }
-                lines.push(line);
+                let since = when(t, open.since, now);
+                let expires = when(t, open.expires_at, now);
+                lines.push(match &open.reported {
+                    Some(reason) => tr!(
+                        t,
+                        "status-open-request-reported",
+                        since = &since,
+                        expires = &expires,
+                        reason = &show::reported(t, reason)
+                    ),
+                    None => tr!(t, "status-open-request", since = &since, expires = &expires),
+                });
             }
             if let Some(since) = contact.outgoing_since {
-                lines.push(format!("  eigene Anfrage offen seit {}", when(since, now)));
+                lines.push(tr!(
+                    t,
+                    "status-own-request-open",
+                    since = &when(t, since, now)
+                ));
             }
             if contact.next_request_at <= now {
-                lines.push("  Anfrage möglich".to_owned());
+                lines.push(tr!(t, "status-request-possible"));
             } else {
-                lines.push(format!(
-                    "  Anfrage wieder möglich ab {}",
-                    when(contact.next_request_at, now)
+                lines.push(tr!(
+                    t,
+                    "status-request-possible-from",
+                    at = &when(t, contact.next_request_at, now)
                 ));
             }
             if let Some(last) = &contact.last_response {
                 let text = match last {
-                    LastResponse::Manual { at } => format!("✓ {}", when(*at, now)),
-                    LastResponse::Reported { reason } => show::reported(reason),
+                    LastResponse::Manual { at } => show::response_manual(t, *at, now),
+                    LastResponse::Reported { reason } => show::reported(t, reason),
                 };
-                lines.push(format!("  letzte Antwort: {text}"));
+                lines.push(tr!(t, "status-last-response", response = &text));
             }
         }
         for invitation in &overview.invitations {
             let status = if invitation.expired {
-                "Einladung abgelaufen; eine rechtzeitige Annahme wird noch abgeholt".to_owned()
+                tr!(t, "status-invitation-expired")
             } else {
-                format!("Einladung offen bis {}", when(invitation.expires_at, now))
+                tr!(
+                    t,
+                    "status-invitation-open",
+                    until = &when(t, invitation.expires_at, now)
+                )
             };
-            lines.push(format!("{}: {status}", invitation.name));
+            lines.push(tr!(
+                t,
+                "status-line",
+                name = &invitation.name,
+                status = &status
+            ));
         }
         if lines.is_empty() {
-            lines.push(format!(
-                "Noch keine Kontakte.{}",
-                inline(self.hints, Hint::InviteSomeone)
+            lines.push(tr!(
+                t,
+                "status-no-contacts",
+                hint = &inline(self.hints, t, Hint::InviteSomeone)
             ));
         }
         for line in lines {
@@ -852,12 +980,13 @@ impl<R: Relay> Ctx<R> {
         name: &str,
         change: impl FnOnce(&mut ContactState, u64) -> Result<(T, Vec<[u8; ENVELOPE_LEN]>)>,
     ) -> Result<T> {
+        let t = self.texts();
         let now = self.now();
-        let (value, envelopes, before, after) = self.store.update(|device| {
-            let contact = contact_mut(device, name)?;
+        let (value, envelopes, before, after) = self.update(|device| {
+            let contact = contact_mut(t, device, name)?;
             let before = contact.state.clone();
             let (value, envelopes) = change(&mut contact.state, now)?;
-            Ok::<_, Fail>((value, envelopes, before, contact.state.clone()))
+            Ok((value, envelopes, before, contact.state.clone()))
         })?;
         let peer = after.contact.peer.clone();
         for (i, envelope) in envelopes.iter().enumerate() {
@@ -869,21 +998,19 @@ impl<R: Relay> Ctx<R> {
                 Ok(()) => {}
                 Err(RelayError::UnknownMailbox) => {
                     self.gone(name).await?;
-                    return Err(fail!(
-                        "{name} hat die Verbindung beendet (das Postfach gibt es nicht mehr)."
-                    ));
+                    return Err(fail!(t, "error-contact-gone", name = name));
                 }
                 Err(error) if i == 0 => {
-                    self.store.update(|device| {
-                        let contact = contact_mut(device, name)?;
+                    self.update(|device| {
+                        let contact = contact_mut(t, device, name)?;
                         if same(&contact.state, &after) {
                             contact.state = before;
                         }
-                        Ok::<_, Fail>(())
+                        Ok(())
                     })?;
-                    return Err(fail!("Nicht zugestellt, nichts geändert: {error}"));
+                    return Err(fail!(t, "error-not-delivered", error = &error.text(t)));
                 }
-                Err(error) => self.say(&format!("Warnung: nicht alles zugestellt: {error}")),
+                Err(error) => self.say(&tr!(t, "warn-partly-delivered", error = &error.text(t))),
             }
         }
         Ok(value)
@@ -892,10 +1019,11 @@ impl<R: Relay> Ctx<R> {
     /// The mailbox of the contact is gone: the contact removed this side.
     /// Marks the contact as ended and deletes the own mailbox.
     pub(crate) async fn gone(&mut self, name: &str) -> Result<()> {
-        let (relay, mailbox, token) = self.store.update(|device| {
-            let contact = contact_mut(device, name)?;
+        let t = self.texts();
+        let (relay, mailbox, token) = self.update(|device| {
+            let contact = contact_mut(t, device, name)?;
             contact.state.ended = true;
-            Ok::<_, Fail>((
+            Ok((
                 contact.own_relay,
                 contact.state.contact.own_mailbox,
                 contact.read_token,
@@ -1040,13 +1168,13 @@ fn contact_view(contact: &StoredContact, now: u64) -> ContactView {
 
 /// Path of the state file if none is given: `$XDG_DATA_HOME/lebenszeichen/device.json`,
 /// falling back to `~/.local/share/lebenszeichen/device.json`.
-pub fn default_state_path() -> Result<std::path::PathBuf> {
+pub fn default_state_path(t: Texts) -> Result<std::path::PathBuf> {
     let data = std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
         .or_else(|| {
             std::env::var_os("HOME").map(|home| Path::new(&home).join(".local").join("share"))
         })
-        .ok_or_else(|| fail!("Weder XDG_DATA_HOME noch HOME gesetzt; bitte --state angeben."))?;
+        .ok_or_else(|| fail!(t, "error-no-data-dir"))?;
     Ok(data.join("lebenszeichen").join("device.json"))
 }

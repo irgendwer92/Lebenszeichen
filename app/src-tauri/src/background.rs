@@ -172,7 +172,14 @@ mod tests {
     fn device() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("device.json");
-        ctx::init(&JsonFile::new(&path), None, None, &mut std::io::sink()).unwrap();
+        ctx::init(
+            &JsonFile::new(&path),
+            None,
+            None,
+            crate::commands::LANG,
+            &mut std::io::sink(),
+        )
+        .unwrap();
         (dir, path)
     }
 

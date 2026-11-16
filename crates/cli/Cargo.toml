@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 lz-client.workspace = true
 lz-core.workspace = true
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4", features = ["derive", "env", "string"] }
 tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints]

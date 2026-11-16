@@ -13,6 +13,8 @@ use lz_core::wire::{Hash, MailboxId, READER_ID_LEN, RelayUrl, Token};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
+use crate::i18n::{Language, Texts};
+
 mod http;
 
 #[cfg(test)]
@@ -39,18 +41,57 @@ pub enum RelayError {
     /// The relay answered with an error code.
     Refused { status: u16, code: String },
     /// The relay could not be reached or answered something unreadable.
+    /// `detail` comes from the network libraries and is not translated.
     Transport(String),
+    /// The address of the relay does not start with `http://` or `https://`.
+    BadAddress,
+    /// The relay did not answer in time.
+    Timeout,
+    /// The connection to the relay was closed.
+    Disconnected,
 }
 
+impl RelayError {
+    /// The text in a language.
+    pub fn text(&self, t: Texts) -> String {
+        match self {
+            Self::UnknownMailbox => tr!(t, "error-relay-unknown-mailbox"),
+            Self::UnknownHandover => tr!(t, "error-relay-unknown-handover"),
+            Self::HandoverExists => tr!(t, "error-relay-handover-exists"),
+            Self::Refused { status, code } => tr!(
+                t,
+                "error-relay-refused",
+                code = code,
+                status = &status.to_string()
+            ),
+            _ => tr!(t, "error-relay-unreachable", detail = &self.detail(t)),
+        }
+    }
+
+    /// Whether the relay could not be reached, as opposed to an answer.
+    pub fn is_transport(&self) -> bool {
+        matches!(
+            self,
+            Self::Transport(_) | Self::BadAddress | Self::Timeout | Self::Disconnected
+        )
+    }
+
+    /// Why the relay could not be reached; for the other errors, their text.
+    pub fn detail(&self, t: Texts) -> String {
+        match self {
+            Self::Transport(detail) => detail.clone(),
+            Self::BadAddress => tr!(t, "error-relay-bad-address"),
+            Self::Timeout => tr!(t, "error-relay-timeout"),
+            Self::Disconnected => tr!(t, "error-relay-disconnected"),
+            other => other.text(t),
+        }
+    }
+}
+
+/// In English, for logs and tests; commands use [`RelayError::text`].
 impl fmt::Display for RelayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownMailbox => f.write_str("das Postfach gibt es nicht mehr"),
-            Self::UnknownHandover => f.write_str("keine Übergabe unter dieser Kennung"),
-            Self::HandoverExists => f.write_str("unter dieser Kennung liegt schon eine Übergabe"),
-            Self::Refused { status, code } => write!(f, "Relay lehnt ab: {code} ({status})"),
-            Self::Transport(detail) => write!(f, "Relay nicht erreichbar: {detail}"),
-        }
+        f.write_str(&self.text(Language::En.texts()))
     }
 }
 
