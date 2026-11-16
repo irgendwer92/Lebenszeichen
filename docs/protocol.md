@@ -77,13 +77,19 @@ There is deliberately **no** delivery or read receipt. A only learns that the re
 
 ### Between own devices
 
-Own devices share a sync mailbox and a symmetric group key.
+Own devices share a sync mailbox and a symmetric group key. Decided on 2026-11-16 for M5; the exact format is in `wire-format.md`.
 
 | Type | Fields | Purpose |
 |---|---|---|
-| `done` | identifier of the request | Withdraw the notification on the other devices |
-| `contact` | added, changed or removed; contact data and rules | Sync the contact list |
-| `counted` | contact, identifier and time of an accepted request | Keep the counters for minimum interval and weekly limit the same on all devices |
+| `device` | reader identifier, name | A new device announces itself |
+| `device_removed` | reader identifier | A device was removed |
+| `requested` | contact, identifier and time of the request | A request of the person's own from another device: disable the button and accept the response |
+| `responded` | contact, identifier of the request, kind, reason, time | Withdraw the display on the other devices and start the minimum interval there |
+| `rules_set` | contact, own rules | Rules changed on one device |
+| `contact_part` | contact, part of its data | A contact paired on one device |
+| `contact_removed` | contact | A contact ended on one device |
+
+The earlier plan had `counted` to keep counters equal. It is not needed: every device reads all mailboxes and counts the same requests.
 
 ## Rules for requests (decided)
 
@@ -112,9 +118,9 @@ Evaluation of responses on the requester's side:
 ## Multiple devices (decided: from the start)
 
 - All devices of a person share contact keys and mailboxes. Contacts cannot see how many devices someone has.
-- A new device is set up by QR code from an existing device and takes over the contact list, rules and group key.
+- A new device is set up by QR code: the new device shows a code with a public key, the existing device seals the contact list, rules and group key to it and hands them over through the relay.
 - Every device is its own reader; the relay holds messages until all readers have acknowledged.
-- If the person reacts on one device, it sends `done` to the others.
+- If the person reacts on one device, it sends `responded` to the others.
 - A status report applies only to the device that received it. That device sends the `reported` response after the waiting time.
 - A device is removed by another device unregistering it as a reader. If a device is lost, the contacts must be paired again, because it knows all contact keys.
 
