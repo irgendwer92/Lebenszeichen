@@ -13,12 +13,17 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, WindowEvent, Wry};
 
-use crate::lang;
+use tauri_plugin_autostart::ManagerExt;
+
+use crate::{lang, settings};
 
 use crate::commands::spawn_sync;
 
 /// Label of the main window.
 const MAIN_WINDOW: &str = "main";
+
+/// Launch argument of "Start at login": the app goes straight into the tray.
+pub const HIDDEN_ARG: &str = "--hidden";
 
 /// What only the desktop keeps.
 pub struct Desktop {
@@ -67,6 +72,8 @@ pub fn poke(app: &AppHandle) {
 pub fn setup(app: &mut tauri::App, path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let tray = build_tray(app, path.clone())?;
     keep_running_when_closed(app);
+    show_unless_hidden(app);
+    offer_autostart(app, &path);
     app.manage(Desktop {
         tray,
         #[cfg(target_os = "linux")]
@@ -75,6 +82,39 @@ pub fn setup(app: &mut tauri::App, path: PathBuf) -> Result<(), Box<dyn std::err
     #[cfg(not(target_os = "linux"))]
     let _ = path;
     Ok(())
+}
+
+/// Shows the main window unless the app was started with `--hidden`. The
+/// window is created invisible (`visible: false` in the platform
+/// configuration), so a start into the tray never flashes a window.
+fn show_unless_hidden(app: &tauri::App) {
+    if !std::env::args().any(|arg| arg == HIDDEN_ARG) {
+        show_window(app.handle());
+    }
+}
+
+/// Turns "Start at login" on at the very first start, once; if the person
+/// turns it off later, it stays off. The flag is only set when it worked, so
+/// a failure is tried again at the next start.
+fn offer_autostart(app: &tauri::App, state: &std::path::Path) {
+    let file = settings::path(state);
+    if settings::load(&file).autostart_offered {
+        return;
+    }
+    let outcome = app
+        .autolaunch()
+        .enable()
+        .map_err(|error| error.to_string())
+        .and_then(|()| {
+            settings::update(&file, |settings| settings.autostart_offered = true)
+                .map_err(|error| error.to_string())
+        });
+    if let Err(error) = outcome {
+        eprintln!(
+            "{}: {error}",
+            lang::texts().text("app-error-autostart", &[])
+        );
+    }
 }
 
 /// Brings the window back, for the tray and for a second start of the app.

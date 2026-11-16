@@ -28,6 +28,8 @@ const COMMANDS: &[&str] = &[
     "set_rules",
     "texts",
     "set_language",
+    "autostart",
+    "set_autostart",
     "alert_text",
     "alert_answer",
 ];
@@ -36,6 +38,7 @@ fn main() {
     // tauri-build does not watch the platform-specific configuration, so a
     // change to it alone would not rebuild the app with the new settings.
     println!("cargo:rerun-if-changed=tauri.linux.conf.json");
+    println!("cargo:rerun-if-changed=tauri.windows.conf.json");
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),

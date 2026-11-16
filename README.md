@@ -157,7 +157,10 @@ embedded by `crates/client/src/i18n.rs`. `lz` picks the language from
 a variant to `Language` and to `Language::ALL` in `i18n.rs`; the tests check
 that the file parses and has every message id of the English one. The app
 follows the system language by default; ⚙ → Language sets it per device
-(`settings.json` next to the state file, never synced).
+(`settings.json` next to the state file, never synced). On the desktop the
+app turns "Start at login" on at the first start, because it only shows
+requests while it runs; it then starts straight into the tray (`--hidden`).
+⚙ → Start at login turns it off, and it stays off.
 
 ## License
 
