@@ -12,14 +12,15 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use lz_client::ctx::{self, Clock, ContactView, Ctx, LastResponse, Overview, Status};
+use lz_client::devices::{Check, DeviceView, Dialog};
 use lz_client::qr::{self, Qr};
-use lz_client::relay::Http;
+use lz_client::relay::{Http, b64};
 use lz_client::show::{self, no_hints, reported, when};
-use lz_core::store::JsonFile;
-use lz_core::wire::Rules;
+use lz_core::store::{JsonFile, Store};
+use lz_core::wire::{CodeKind, Rules, SetupCode, setup_code};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, oneshot, watch};
 
 /// How long a one-off fetch waits for further messages.
 const SYNC_IDLE: Duration = Duration::from_millis(1500);
@@ -31,9 +32,19 @@ const LISTEN_RETRY: Duration = Duration::from_secs(5);
 /// Event with one line of text from the background fetch.
 pub(crate) const LINE_EVENT: &str = "lz-line";
 
-/// Where the state of this device lives.
+/// Event with the steps of setting up or adding a device.
+pub(crate) const DEVICE_EVENT: &str = "lz-device";
+
+/// Where the state of this device lives, and the device flow in progress.
 pub struct AppState {
     path: PathBuf,
+    flow: Mutex<Option<Flow>>,
+}
+
+/// A device flow in progress: how the window answers and aborts it.
+struct Flow {
+    answers: mpsc::UnboundedSender<bool>,
+    cancel: Option<oneshot::Sender<()>>,
 }
 
 /// Picks the state file and starts fetching in the background.
@@ -44,7 +55,10 @@ pub struct AppState {
 /// files directory, shared with the background path.
 pub fn setup(app: &mut tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = state_path(app)?;
-    app.manage(AppState { path: path.clone() });
+    app.manage(AppState {
+        path: path.clone(),
+        flow: Mutex::new(None),
+    });
     spawn_listener(app.handle().clone(), path.clone());
     Ok(path)
 }
@@ -280,6 +294,13 @@ fn path(state: &tauri::State<'_, AppState>) -> PathBuf {
 pub struct SetupState {
     ready: bool,
     path: String,
+    /// Relay address to prefill, from the build.
+    default_relay: Option<&'static str>,
+}
+
+/// The relay address of the build variable `LZ_DEFAULT_RELAY`, if set.
+fn default_relay_of(value: Option<&'static str>) -> Option<&'static str> {
+    value.map(str::trim).filter(|relay| !relay.is_empty())
 }
 
 #[tauri::command]
@@ -287,7 +308,113 @@ pub fn setup_state(state: tauri::State<'_, AppState>) -> SetupState {
     SetupState {
         ready: state.path.exists(),
         path: state.path.display().to_string(),
+        default_relay: default_relay_of(option_env!("LZ_DEFAULT_RELAY")),
     }
+}
+
+/// Creates a device without relay and access token, which can accept an
+/// invitation with a voucher right away.
+#[tauri::command]
+pub async fn init_with_invitation_only(
+    state: tauri::State<'_, AppState>,
+) -> Result<Reply<()>, String> {
+    let path = path(&state);
+    off_thread(move || {
+        let mut out = Lines::default();
+        ctx::init(&JsonFile::new(path), None, None, &mut out).map_err(|error| error.to_string())?;
+        Ok(Reply {
+            value: (),
+            lines: out.take(),
+        })
+    })
+    .await
+}
+
+/// Relay address and access token from a setup code.
+fn read_setup_code(text: &str) -> Result<(String, String), String> {
+    match CodeKind::of(text) {
+        Some(CodeKind::Setup) => {}
+        Some(CodeKind::Invitation) => {
+            return Err("Das ist eine Einladung, kein Einrichtungscode.".into());
+        }
+        Some(CodeKind::Device) => {
+            return Err("Das ist ein Gerätecode, kein Einrichtungscode.".into());
+        }
+        None => return Err("Das ist kein Einrichtungscode.".into()),
+    }
+    let code = SetupCode::from_text(text)
+        .map_err(|_| "Der Einrichtungscode ist ungültig oder unvollständig.".to_owned())?;
+    Ok((code.relay.to_string(), b64(&code.access_token)))
+}
+
+/// Creates the device with the relay account of a setup code.
+#[tauri::command]
+pub async fn init_from_setup_code(
+    state: tauri::State<'_, AppState>,
+    code: String,
+) -> Result<Reply<()>, String> {
+    let (relay, token) = read_setup_code(&code)?;
+    let path = path(&state);
+    off_thread(move || {
+        let mut out = Lines::default();
+        ctx::init(&JsonFile::new(path), Some(&relay), Some(&token), &mut out)
+            .map_err(|error| error.to_string())?;
+        Ok(Reply {
+            value: (),
+            lines: out.take(),
+        })
+    })
+    .await
+}
+
+/// Which kind of code a text is: `invitation`, `device` or `setup`.
+fn kind_name(text: &str) -> Option<&'static str> {
+    CodeKind::of(text).map(|kind| match kind {
+        CodeKind::Invitation => "invitation",
+        CodeKind::Device => "device",
+        CodeKind::Setup => "setup",
+    })
+}
+
+#[tauri::command]
+pub fn code_kind(text: String) -> Option<&'static str> {
+    kind_name(&text)
+}
+
+/// The setup code of this device's relay account, as text and QR code.
+#[derive(Debug, Serialize)]
+pub struct SetupCodeView {
+    text: String,
+    qr: Qr,
+}
+
+fn own_setup_code(store: &impl Store) -> Result<SetupCodeView, String> {
+    let device = store.load().map_err(|error| error.to_string())?;
+    let account = device
+        .relay
+        .and_then(|relay| relay.access_token.map(|token| (relay.url, token)));
+    let Some((relay, access_token)) = account else {
+        return Err("Dieses Gerät hat keinen Zugangstoken für ein Relay.".into());
+    };
+    let code = SetupCode {
+        access_token,
+        relay,
+    };
+    let text = code.to_text(&mut [0; setup_code::MAX_TEXT_LEN]).to_owned();
+    let qr = qr::modules(&text);
+    Ok(SetupCodeView { text, qr })
+}
+
+#[tauri::command]
+pub async fn setup_code(state: tauri::State<'_, AppState>) -> Result<Reply<SetupCodeView>, String> {
+    let path = path(&state);
+    off_thread(move || {
+        Ok(Reply {
+            value: own_setup_code(&JsonFile::new(path))?,
+            lines: Vec::new(),
+        })
+    })
+    .await
 }
 
 /// Creates the device, like `lz init`.
@@ -562,13 +689,242 @@ name_command! {
     remove => remove;
 }
 
+#[tauri::command]
+pub async fn devices(state: tauri::State<'_, AppState>) -> Result<Reply<Vec<DeviceView>>, String> {
+    run(path(&state), async |ctx| ctx.devices()).await
+}
+
+/// Removes another device of this person.
+#[tauri::command]
+pub async fn device_remove(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    name: String,
+) -> Result<Reply<()>, String> {
+    let reply = run(path(&state), async move |ctx| {
+        ctx.remove_device(&name).await
+    })
+    .await;
+    poke(&app);
+    reply
+}
+
+/// One message of [`DEVICE_EVENT`]. `step` is `device_code`,
+/// `check_device`, `check_handover` (codes to show), `confirm_device`,
+/// `confirm_handover` (codes to compare, answered with `device_confirm`),
+/// `progress`, `done`, `error` or `alarm`.
+#[derive(Clone, Serialize)]
+struct DeviceStep<'a> {
+    step: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<&'a str>,
+    /// With `device_code`: the code as QR code, like `invite` gives it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qr: Option<Qr>,
+}
+
+fn emit_step(app: &AppHandle, step: &str, code: Option<&str>, text: Option<&str>) {
+    let qr = (step == "device_code")
+        .then_some(code)
+        .flatten()
+        .map(qr::modules);
+    let _ = app.emit(
+        DEVICE_EVENT,
+        DeviceStep {
+            step,
+            code,
+            text,
+            qr,
+        },
+    );
+}
+
+/// The answers of the window and the events of a device flow.
+struct DeviceDialog {
+    app: AppHandle,
+    answers: mpsc::UnboundedReceiver<bool>,
+}
+
+impl Dialog for DeviceDialog {
+    fn device_code(&mut self, code: &str) {
+        emit_step(&self.app, "device_code", Some(code), None);
+    }
+
+    fn check_code(&mut self, check: Check, code: &str) {
+        let step = match check {
+            Check::Device => "check_device",
+            Check::Handover => "check_handover",
+        };
+        emit_step(&self.app, step, Some(code), None);
+    }
+
+    async fn confirm(&mut self, check: Check, code: &str) -> bool {
+        let step = match check {
+            Check::Device => "confirm_device",
+            Check::Handover => "confirm_handover",
+        };
+        // Answers given before the question do not count.
+        while self.answers.try_recv().is_ok() {}
+        emit_step(&self.app, step, Some(code), None);
+        // A closed channel means the flow was cancelled.
+        self.answers.recv().await.unwrap_or(false)
+    }
+}
+
+/// Sends the progress lines of a device flow, without the QR code for
+/// terminals and the bare code, which the window shows itself.
+struct ProgressSink {
+    app: AppHandle,
+    pending: Vec<u8>,
+}
+
+fn is_progress(line: &str) -> bool {
+    !line.is_empty()
+        && !line.starts_with(lz_core::wire::device_code::PREFIX)
+        && !line.chars().any(|c| matches!(c, '█' | '▀' | '▄'))
+}
+
+impl Write for ProgressSink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.pending.extend_from_slice(buf);
+        while let Some(end) = self.pending.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.pending.drain(..=end).collect();
+            let line = String::from_utf8_lossy(&line).trim_end().to_owned();
+            if is_progress(&line) {
+                emit_step(&self.app, "progress", None, Some(&line));
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+enum FlowKind {
+    Join { relay: String, name: String },
+    Add { code: String, name: String },
+}
+
+/// Starts a device flow on a thread of its own; only one at a time.
+fn start_flow(app: AppHandle, state: &AppState, kind: FlowKind) -> Result<(), String> {
+    let mut slot = state.flow.lock().expect("lock poisoned");
+    if slot.is_some() {
+        return Err("Es läuft schon ein Vorgang für ein Gerät.".into());
+    }
+    let (answers, answered) = mpsc::unbounded_channel();
+    let (cancel, cancelled) = oneshot::channel();
+    *slot = Some(Flow {
+        answers,
+        cancel: Some(cancel),
+    });
+    drop(slot);
+    let path = state.path.clone();
+    std::thread::spawn(move || {
+        let outcome = runtime().and_then(|runtime| {
+            let sink = ProgressSink {
+                app: app.clone(),
+                pending: Vec::new(),
+            };
+            let mut ctx = new_ctx(path, Box::new(sink))?;
+            let mut dialog = DeviceDialog {
+                app: app.clone(),
+                answers: answered,
+            };
+            runtime.block_on(async {
+                let work = async {
+                    match &kind {
+                        FlowKind::Join { relay, name } => {
+                            ctx.join_device(relay, name, None, &mut dialog).await
+                        }
+                        FlowKind::Add { code, name } => {
+                            ctx.add_device(code, name, &mut dialog).await
+                        }
+                    }
+                    .map_err(|error| error.to_string())
+                };
+                tokio::select! {
+                    result = work => result.map(Some),
+                    _ = cancelled => Ok(None),
+                }
+            })
+        });
+        if let Some(state) = app.try_state::<AppState>() {
+            *state.flow.lock().expect("lock poisoned") = None;
+        }
+        match outcome {
+            Ok(Some(())) => {
+                emit_step(&app, "done", None, None);
+                poke(&app);
+            }
+            Ok(None) => {}
+            Err(error) if error.starts_with("Achtung:") => {
+                emit_step(&app, "alarm", None, Some(&error));
+            }
+            Err(error) => emit_step(&app, "error", None, Some(&error)),
+        }
+    });
+    Ok(())
+}
+
+/// Sets this device up as a further device of a person; progress comes as
+/// [`DEVICE_EVENT`].
+#[tauri::command]
+pub fn device_join(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    relay: String,
+    name: String,
+) -> Result<(), String> {
+    start_flow(app, &state, FlowKind::Join { relay, name })
+}
+
+/// Adds a new device to this person with its device code; progress comes
+/// as [`DEVICE_EVENT`].
+#[tauri::command]
+pub fn device_add(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    code: String,
+    name: String,
+) -> Result<(), String> {
+    start_flow(app, &state, FlowKind::Add { code, name })
+}
+
+/// The answer to the open question of the device flow.
+#[tauri::command]
+pub fn device_confirm(state: tauri::State<'_, AppState>, answer: bool) {
+    if let Some(flow) = state.flow.lock().expect("lock poisoned").as_ref() {
+        let _ = flow.answers.send(answer);
+    }
+}
+
+/// Aborts the device flow in progress.
+#[tauri::command]
+pub fn device_cancel(state: tauri::State<'_, AppState>) {
+    if let Some(flow) = state.flow.lock().expect("lock poisoned").as_mut()
+        && let Some(cancel) = flow.cancel.take()
+    {
+        let _ = cancel.send(());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use lz_client::ctx::{ContactView, IncomingView, LastResponse, Status};
 
     use lz_core::wire::Rules;
 
-    use super::{card, minutes, rules_card};
+    use lz_client::ctx;
+    use lz_core::store::JsonFile;
+
+    use super::{
+        card, default_relay_of, is_progress, kind_name, minutes, own_setup_code, read_setup_code,
+        rules_card,
+    };
 
     const NOW: u64 = 1_794_600_000;
     const HOUR: u64 = 3600;
@@ -682,5 +1038,86 @@ mod tests {
         assert_eq!(card.code.as_deref(), Some("123456"));
         assert!(!card.can_request);
         assert!(card.next_request.is_none());
+    }
+
+    #[test]
+    fn code_kinds() {
+        assert_eq!(kind_name("LZ1-ABC"), Some("invitation"));
+        assert_eq!(kind_name("  lzd1-abc"), Some("device"));
+        assert_eq!(kind_name("LZS1-ABC"), Some("setup"));
+        assert_eq!(kind_name("hallo"), None);
+        assert_eq!(kind_name(""), None);
+    }
+
+    #[test]
+    fn default_relay_ignores_empty_values() {
+        assert_eq!(default_relay_of(None), None);
+        assert_eq!(default_relay_of(Some("")), None);
+        assert_eq!(default_relay_of(Some("  ")), None);
+        assert_eq!(
+            default_relay_of(Some(" https://relay.example.org ")),
+            Some("https://relay.example.org")
+        );
+    }
+
+    #[test]
+    fn setup_code_errors_are_german() {
+        assert!(
+            read_setup_code("LZ1-ABC")
+                .unwrap_err()
+                .contains("Einladung")
+        );
+        assert!(
+            read_setup_code("LZD1-ABC")
+                .unwrap_err()
+                .contains("Gerätecode")
+        );
+        assert!(
+            read_setup_code("blabla")
+                .unwrap_err()
+                .contains("kein Einrichtungscode")
+        );
+        assert!(
+            read_setup_code("LZS1-AAAA")
+                .unwrap_err()
+                .contains("ungültig")
+        );
+    }
+
+    #[test]
+    fn setup_code_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = JsonFile::new(dir.path().join("a.json"));
+        let token = lz_client::relay::b64(&[7; 32]);
+        ctx::init(
+            &first,
+            Some("https://relay.example.org"),
+            Some(&token),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let view = own_setup_code(&first).unwrap();
+        assert!(view.text.starts_with("LZS1-"));
+
+        let (relay, read) = read_setup_code(&view.text).unwrap();
+        assert_eq!(relay, "https://relay.example.org");
+        assert_eq!(read, token);
+
+        // Without access token there is nothing to show.
+        let second = JsonFile::new(dir.path().join("b.json"));
+        ctx::init(&second, None, None, &mut Vec::new()).unwrap();
+        assert!(
+            own_setup_code(&second)
+                .unwrap_err()
+                .contains("Zugangstoken")
+        );
+    }
+
+    #[test]
+    fn progress_hides_codes_and_qr() {
+        assert!(is_progress("Das neue Gerät ist eingerichtet."));
+        assert!(!is_progress(""));
+        assert!(!is_progress("LZD1-ABCDEF"));
+        assert!(!is_progress("█▀▀▀█ ▄▄"));
     }
 }

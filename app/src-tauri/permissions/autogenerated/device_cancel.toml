@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-device-cancel"
+description = "Enables the device_cancel command without any pre-configured scope."
+commands.allow = ["device_cancel"]
+
+[[permission]]
+identifier = "deny-device-cancel"
+description = "Denies the device_cancel command without any pre-configured scope."
+commands.deny = ["device_cancel"]

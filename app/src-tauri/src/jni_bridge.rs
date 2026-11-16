@@ -172,7 +172,7 @@ pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge
 
 /// `CoreBridge.nativeDecodeQr(buffer, width, height, rowStride): String?`
 ///
-/// Looks for an invitation in the brightness plane of a camera frame. The
+/// Looks for a code (invitation, device or setup code) in the brightness plane of a camera frame. The
 /// buffer must be direct (CameraX planes are); it is read in place, never
 /// copied or kept. `null` if there is none.
 #[unsafe(no_mangle)]
@@ -196,7 +196,7 @@ pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge
         // buffer that the caller keeps alive during this call, and nothing
         // writes to it meanwhile (CameraX holds the frame until it is closed).
         let luma = unsafe { std::slice::from_raw_parts(address, capacity) };
-        lz_client::qr::decode_invitation(
+        lz_client::qr::decode_code(
             luma,
             usize::try_from(width).ok()?,
             usize::try_from(height).ok()?,

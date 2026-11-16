@@ -1,8 +1,9 @@
-//! Invitation codes as QR codes, and reading them back from a camera.
+//! Codes of Lebenszeichen as QR codes, and reading them back from a camera.
 //!
-//! `LZ1-` with Base32 in capitals fits the alphanumeric mode of QR codes
+//! Invitations, device codes and setup codes are all of this kind. `LZ1-` with Base32 in capitals fits the alphanumeric mode of QR codes
 //! (see `docs/wire-format.md`); an invitation becomes version 8 to 12.
 
+use lz_core::wire::CodeKind;
 use qrcode::render::unicode::Dense1x2;
 use qrcode::{Color, EcLevel, QrCode};
 use serde::Serialize;
@@ -52,20 +53,13 @@ pub fn terminal(text: &str) -> String {
         .build()
 }
 
-/// Prefix of every invitation code.
-const INVITATION_PREFIX: &str = "LZ1-";
-
-/// Finds an invitation in a greyscale image, such as the brightness plane
-/// of a camera frame: `width` × `height` pixels, one byte each, rows
-/// `row_stride` bytes apart. Other QR codes in the picture are ignored.
+/// Finds a code of Lebenszeichen (invitation, device code or setup code) in
+/// a greyscale image, such as the brightness plane of a camera frame:
+/// `width` × `height` pixels, one byte each, rows `row_stride` bytes apart.
+/// Other QR codes in the picture are ignored.
 ///
 /// Returns `None` if the buffer is too small for the given size.
-pub fn decode_invitation(
-    luma: &[u8],
-    width: usize,
-    height: usize,
-    row_stride: usize,
-) -> Option<String> {
+pub fn decode_code(luma: &[u8], width: usize, height: usize, row_stride: usize) -> Option<String> {
     if width == 0 || height == 0 || row_stride < width {
         return None;
     }
@@ -79,12 +73,12 @@ pub fn decode_invitation(
         .detect_grids()
         .into_iter()
         .filter_map(|grid| grid.decode().ok().map(|(_, text)| text))
-        .find(|text| text.starts_with(INVITATION_PREFIX))
+        .find(|text| CodeKind::of(text).is_some())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{QUIET_ZONE, decode_invitation, modules, terminal};
+    use super::{QUIET_ZONE, decode_code, modules, terminal};
 
     /// An invitation of typical length: no voucher, short relay address.
     fn invitation() -> String {
@@ -158,7 +152,7 @@ mod tests {
         for turned in [false, true] {
             let (luma, width, height, stride) = frame(&text, 7, turned);
             assert_eq!(
-                decode_invitation(&luma, width, height, stride).as_deref(),
+                decode_code(&luma, width, height, stride).as_deref(),
                 Some(text.as_str()),
                 "turned: {turned}"
             );
@@ -166,18 +160,32 @@ mod tests {
     }
 
     #[test]
+    fn device_and_setup_codes_are_found_too() {
+        for text in [
+            format!("LZD1-{}", "A".repeat(120)),
+            format!("LZS1-{}", "B".repeat(200)),
+        ] {
+            let (luma, width, height, stride) = frame(&text, 7, false);
+            assert_eq!(
+                decode_code(&luma, width, height, stride).as_deref(),
+                Some(text.as_str())
+            );
+        }
+    }
+
+    #[test]
     fn other_codes_and_empty_frames_give_nothing() {
         let (luma, width, height, stride) = frame("https://example.org", 7, false);
-        assert_eq!(decode_invitation(&luma, width, height, stride), None);
+        assert_eq!(decode_code(&luma, width, height, stride), None);
         let blank = vec![200u8; 640 * 480];
-        assert_eq!(decode_invitation(&blank, 640, 480, 640), None);
+        assert_eq!(decode_code(&blank, 640, 480, 640), None);
     }
 
     #[test]
     fn too_small_buffers_are_refused() {
-        assert_eq!(decode_invitation(&[0; 10], 640, 480, 640), None);
-        assert_eq!(decode_invitation(&[0; 10], 0, 0, 0), None);
-        assert_eq!(decode_invitation(&[0; 100], 10, 10, 5), None);
+        assert_eq!(decode_code(&[0; 10], 640, 480, 640), None);
+        assert_eq!(decode_code(&[0; 10], 0, 0, 0), None);
+        assert_eq!(decode_code(&[0; 100], 10, 10, 5), None);
     }
 
     #[test]

@@ -63,6 +63,8 @@ gh variable list --env release -R irgendwer92/Lebenszeichen
 
 The two secrets and the variable should appear. GitHub never shows the values of the secrets again.
 
+Optionally set the relay address that the setup screen prefills, as a repository variable (not a secret, so it is not in the code; unset means no prefill): `gh variable set LZ_DEFAULT_RELAY -R irgendwer92/Lebenszeichen -b https://relay.example.org`. The workflow passes it to the build as `LZ_DEFAULT_RELAY`.
+
 ## 5. Build
 
 - **For testing:** `gh workflow run android-release.yml --ref main` (before merging M4: `--ref m4-android`). The APK is attached to the run as an artifact, `versionCode` is the run number.

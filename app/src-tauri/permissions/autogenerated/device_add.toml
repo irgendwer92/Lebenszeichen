@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-device-add"
+description = "Enables the device_add command without any pre-configured scope."
+commands.allow = ["device_add"]
+
+[[permission]]
+identifier = "deny-device-add"
+description = "Denies the device_add command without any pre-configured scope."
+commands.deny = ["device_add"]

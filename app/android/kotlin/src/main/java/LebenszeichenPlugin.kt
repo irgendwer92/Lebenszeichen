@@ -21,6 +21,7 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import java.util.Locale
 import org.json.JSONObject
 import org.unifiedpush.android.connector.UnifiedPush
 
@@ -198,9 +199,9 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve()
     }
 
-    /** Opens the camera to scan an invitation; the answer comes in [scanResult]. */
+    /** Opens the camera to scan a code; the answer comes in [scanResult]. */
     @Command
-    fun scanInvitation(invoke: Invoke) {
+    fun scanCode(invoke: Invoke) {
         startActivityForResult(invoke, Intent(activity, ScanActivity::class.java), "scanResult")
     }
 
@@ -215,7 +216,53 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
         val answer = JSObject()
         val code = if (result.resultCode == Activity.RESULT_OK) data?.getStringExtra(ScanActivity.EXTRA_CODE) else null
         answer.put("code", code ?: JSONObject.NULL)
+        answer.put("kind", code?.let { codeKind(it) } ?: JSONObject.NULL)
         invoke.resolve(answer)
+    }
+
+    /** The kind of a code by its prefix, like `CodeKind::of` in the core. */
+    private fun codeKind(code: String): String? {
+        val text = code.trim().uppercase(Locale.ROOT)
+        return when {
+            text.startsWith("LZD1-") -> "device"
+            text.startsWith("LZS1-") -> "setup"
+            text.startsWith("LZ1-") -> "invitation"
+            else -> null
+        }
+    }
+
+    /** Opens the share sheet with a text; resolves when it is started. */
+    @Command
+    fun shareText(invoke: Invoke) {
+        val text = invoke.getArgs().getString("text", "") ?: ""
+        val send =
+            Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, text)
+        try {
+            val chooser = Intent.createChooser(send, "Teilen")
+            if (activity.isFinishing) {
+                invoke.reject("Das Teilen ließ sich nicht öffnen.")
+                return
+            }
+            activity.startActivity(chooser)
+            invoke.resolve()
+        } catch (e: ActivityNotFoundException) {
+            invoke.reject("Das Teilen ließ sich nicht öffnen.")
+        }
+    }
+
+    /**
+     * A device that was just set up as an additional device registers its
+     * push address on all its mailboxes: the stored endpoint is sent again.
+     */
+    @Command
+    fun refreshPush(invoke: Invoke) {
+        val endpoint = Store.endpoint(activity)
+        if (endpoint.isNotEmpty()) {
+            PushUrlWorker.enqueue(activity.applicationContext, endpoint)
+        }
+        invoke.resolve()
     }
 
     companion object {

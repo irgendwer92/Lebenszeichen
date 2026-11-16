@@ -9,5 +9,7 @@ permissions = [
   "allow-open-settings",
   "allow-read-log",
   "allow-clear-log",
-  "allow-scan-invitation",
+  "allow-scan-code",
+  "allow-share-text",
+  "allow-refresh-push",
 ]

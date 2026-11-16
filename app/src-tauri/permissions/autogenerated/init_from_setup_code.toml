@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-init-from-setup-code"
+description = "Enables the init_from_setup_code command without any pre-configured scope."
+commands.allow = ["init_from_setup_code"]
+
+[[permission]]
+identifier = "deny-init-from-setup-code"
+description = "Denies the init_from_setup_code command without any pre-configured scope."
+commands.deny = ["init_from_setup_code"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-device-confirm"
+description = "Enables the device_confirm command without any pre-configured scope."
+commands.allow = ["device_confirm"]
+
+[[permission]]
+identifier = "deny-device-confirm"
+description = "Denies the device_confirm command without any pre-configured scope."
+commands.deny = ["device_confirm"]
