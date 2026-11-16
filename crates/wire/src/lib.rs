@@ -4,7 +4,7 @@
 //! microcontrollers and must not depend on an operating system. It also needs
 //! no allocator; every value has a fixed upper bound and lives on the stack.
 //!
-//! The binding description is `docs/drahtformat.md`. This crate covers the
+//! The binding description is `docs/wire-format.md`. This crate covers the
 //! byte layout only. Encryption, keys and the request rules live in `lz-core`.
 
 #![no_std]

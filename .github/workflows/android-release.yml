@@ -1,12 +1,12 @@
-name: Android-Release
+name: Android release
 
-# Baut die signierte Release-APK. Nur bei einem Tag v* und von Hand, nie bei
-# Pull Requests: der Schlüssel liegt in der Umgebung "release", deren Läufe
-# eine Freigabe brauchen. Einrichtung in docs/android-release.md.
+# Builds the signed release APK. Only for a tag v* and by hand, never for
+# pull requests: the key lives in the environment "release", limited to main
+# and tags v*. Setup in docs/android-release.md.
 #
-# Tag: versionCode nach der Formel von Tauri (0.1.0 → 1000), die Version im
-# Tag muss zu tauri.conf.json passen, die APK kommt in einen Release-Entwurf.
-# Von Hand: versionCode = Laufnummer, nur zum Testen, nur als Artefakt.
+# Tag: versionCode by Tauri's formula (0.1.0 → 1000), the version in the tag
+# must match tauri.conf.json, the APK goes into a draft release.
+# By hand: versionCode = run number, for testing only, artifact only.
 
 on:
   push:
@@ -25,12 +25,12 @@ env:
 
 jobs:
   apk:
-    name: Signierte APK (arm64)
+    name: Signed APK (arm64)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: release
     permissions:
-      # Für den Release-Entwurf bei einem Tag.
+      # For the draft release on a tag.
       contents: write
     defaults:
       run:
@@ -38,24 +38,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Schlüssel vorhanden?
+      - name: Key present?
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ vars.ANDROID_KEY_ALIAS }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
-            echo "::error::Schlüssel fehlt in der Umgebung release; siehe docs/android-release.md"
+            echo "::error::Key missing in the environment release; see docs/android-release.md"
             exit 1
           fi
 
-      - name: Version bestimmen
+      - name: Determine the version
         run: |
           set -euo pipefail
           version="$(jq -r .version src-tauri/tauri.conf.json)"
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
-              echo "::error::Tag $GITHUB_REF_NAME passt nicht zu Version $version in tauri.conf.json"
+              echo "::error::Tag $GITHUB_REF_NAME does not match version $version in tauri.conf.json"
               exit 1
             fi
           else
@@ -63,7 +63,7 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Java und NDK des Runners wählen
+      - name: Pick Java and NDK of the runner
         run: |
           echo "JAVA_HOME=${JAVA_HOME_21_X64:-$JAVA_HOME}" >> "$GITHUB_ENV"
           echo "NDK_HOME=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
@@ -86,21 +86,21 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('app/package-lock.json', 'app/android/kotlin/build.gradle.kts') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: Tauri-CLI installieren
+      - name: Install the Tauri CLI
         run: npm ci
 
-      - name: Android-Projekt erzeugen
+      - name: Generate the Android project
         run: npm run tauri android init -- --ci --skip-targets-install
 
-      # Ohne --debug: Rust optimiert, R8 verkleinert den Java-Teil. Gradle
-      # signiert nicht; das geschieht im nächsten Schritt.
-      - name: APK bauen
+      # Without --debug: Rust optimized, R8 shrinks the Java part. Gradle does
+      # not sign; the next step does.
+      - name: Build the APK
         run: |
           set -euo pipefail
           if [ -n "${CONFIG:-}" ]; then set -- --config "$CONFIG"; fi
           npm run tauri android build -- --ci --apk --target aarch64 "$@"
 
-      - name: Signieren
+      - name: Sign
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -112,10 +112,10 @@ jobs:
           build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
           keystore="$RUNNER_TEMP/release.jks"
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$keystore"
-          # 16 KB für die Seiten der nativen Bibliothek (Android 15 und neuer).
+          # 16 KB pages for the native library (Android 15 and newer).
           "$build_tools/zipalign" -P 16 -f 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
           apk="$RUNNER_TEMP/lebenszeichen-$VERSION-arm64.apk"
-          # Passwörter nur über die Umgebung, nie auf der Kommandozeile.
+          # Passwords only through the environment, never on the command line.
           "$build_tools/apksigner" sign \
             --ks "$keystore" --ks-key-alias "$KEY_ALIAS" \
             --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEYSTORE_PASSWORD \
@@ -123,16 +123,16 @@ jobs:
           rm -f "$keystore" "$RUNNER_TEMP/aligned.apk"
           echo "APK=$apk" >> "$GITHUB_ENV"
 
-      - name: Schlüssel entfernen
+      - name: Remove the key
         if: always()
         run: rm -f "$RUNNER_TEMP/release.jks"
 
-      - name: APK prüfen
+      - name: Check the APK
         run: |
           set -euo pipefail
           scripts/check-apk.sh "$APK"
           build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
-          echo "::group::Zertifikat (mit keytool -list -v vergleichen)"
+          echo "::group::Certificate (compare with keytool -list -v)"
           "$build_tools/apksigner" verify --verbose --print-certs "$APK" | grep -E "Verified using|SHA-256"
           echo "::endgroup::"
           (cd "$(dirname "$APK")" && sha256sum "$(basename "$APK")" > "$(basename "$APK").sha256")
@@ -148,12 +148,12 @@ jobs:
           retention-days: 30
           compression-level: 0
 
-      - name: Release-Entwurf
+      - name: Draft release
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
             --title "Lebenszeichen $VERSION" \
-            --notes "Signierte APK für Android (arm64). Prüfsumme in der .sha256-Datei, Zertifikat im Lauf unter „APK prüfen“." \
+            --notes "Signed APK for Android (arm64). Checksum in the .sha256 file, certificate in the run under \"Check the APK\"." \
             "$APK" "$APK.sha256"

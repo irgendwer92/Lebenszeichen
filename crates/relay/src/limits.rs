@@ -1,4 +1,4 @@
-//! Fixed limits of the relay, from `docs/drahtformat.md` and `docs/protokoll.md`.
+//! Fixed limits of the relay, from `docs/wire-format.md` and `docs/protocol.md`.
 
 pub use lz_wire::{READER_ID_LEN, TOKEN_LEN};
 

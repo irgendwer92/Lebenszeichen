@@ -1,7 +1,7 @@
 //! Relay server: accepts ciphertext, hands it on and deletes it.
 //!
 //! The relay knows neither names nor keys nor message types. The interface is
-//! specified in `docs/drahtformat.md`, section "Relay-Schnittstelle".
+//! specified in `docs/wire-format.md`, section "Relay-Schnittstelle".
 //!
 //! [`app`] builds the router from an [`AppState`]; `main.rs` only reads the
 //! configuration and starts the server, so tests can run the relay in-process.

@@ -1,7 +1,7 @@
 //! Relay server: accepts ciphertext, hands it on and deletes it.
 //!
 //! The relay knows neither names nor keys nor message types. Configuration
-//! comes from environment variables, see `docs/drahtformat.md`.
+//! comes from environment variables, see `docs/wire-format.md`.
 
 use std::process::ExitCode;
 use std::sync::Arc;

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Nothing of this app leaves the device: the state file holds the private
-  keys of all contacts (konzept.md). Android 12 and newer ignore
+  keys of all contacts (concept.md). Android 12 and newer ignore
   allowBackup="false" for the transfer to a new device; these rules exclude
   everything from both.
 -->

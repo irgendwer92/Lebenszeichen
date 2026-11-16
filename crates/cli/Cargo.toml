@@ -1,6 +1,6 @@
 [package]
 name = "lz-cli"
-description = "Lebenszeichen-Client ohne Oberfläche"
+description = "Command-line client of Lebenszeichen"
 license = "GPL-3.0-or-later"
 version.workspace = true
 edition.workspace = true

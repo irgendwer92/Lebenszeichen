@@ -1,4 +1,4 @@
-//! Access to relays, as described in `docs/drahtformat.md`, section
+//! Access to relays, as described in `docs/wire-format.md`, section
 //! "Relay-Schnittstelle".
 //!
 //! [`Relay`] covers every relay at once: each call names the relay by its

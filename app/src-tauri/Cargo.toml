@@ -1,6 +1,6 @@
 [package]
 name = "lebenszeichen-app"
-description = "Lebenszeichen-App: Tauri-Hülle für den Linux-Desktop und Android"
+description = "Lebenszeichen app: Tauri shell for the Linux desktop and Android"
 version = "0.1.0"
 license = "GPL-3.0-or-later"
 edition = "2024"

@@ -1,11 +1,11 @@
-name: Android-Prototyp
+name: Android debug
 
-# Baut die Debug-APK der Android-App. Der Ablauf ist die einzige
-# Stelle, an der der Android-Teil übersetzt wird.
+# Builds the debug APK of the Android app. Pull requests compile the
+# Android part only here.
 #
-# Läuft bei Pull Requests, die App, Kern oder Abhängigkeiten berühren, und
-# weiter von Hand (Actions → Android-Prototyp → Run workflow, oder:
-# gh workflow run android-prototype.yml --ref <zweig>).
+# Runs on pull requests that touch the app, the core or dependencies, and by
+# hand (Actions → Android debug → Run workflow, or:
+# gh workflow run android-prototype.yml --ref <branch>).
 
 on:
   pull_request:
@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Java und NDK des Runners wählen
+      - name: Pick Java and NDK of the runner
         run: |
           echo "JAVA_HOME=${JAVA_HOME_21_X64:-$JAVA_HOME}" >> "$GITHUB_ENV"
           echo "NDK_HOME=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
@@ -61,24 +61,24 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('app/package-lock.json', 'app/android/kotlin/build.gradle.kts') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      # Ohne diesen Cache erzeugt jeder Lauf einen neuen Debug-Schlüssel, und
-      # eine neue APK ließe sich nicht über die alte installieren.
-      - name: Debug-Schlüssel zwischen den Läufen behalten
+      # Without this cache every run creates a new debug key, and a new APK
+      # could not be installed over the old one.
+      - name: Keep the debug key between runs
         uses: actions/cache@v6
         with:
           path: ~/.android/debug.keystore
           key: android-debug-keystore-v1
 
-      - name: Tauri-CLI installieren
+      - name: Install the Tauri CLI
         run: npm ci
 
-      - name: Android-Projekt erzeugen
+      - name: Generate the Android project
         run: npm run tauri android init -- --ci --skip-targets-install
 
-      - name: APK bauen
+      - name: Build the APK
         run: npm run tauri android build -- --ci --debug --apk --target aarch64
 
-      - name: APK prüfen
+      - name: Check the APK
         run: |
           set -euo pipefail
           apk="$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -print -quit)"

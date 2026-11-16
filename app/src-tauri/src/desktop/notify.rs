@@ -2,7 +2,7 @@
 //! notification over the D-Bus interface `org.freedesktop.Notifications`
 //! otherwise, and whenever the window cannot be opened.
 //!
-//! What counts as an answer is what the person did (see `docs/konzept.md`):
+//! What counts as an answer is what the person did (see `docs/concept.md`):
 //! the button, a click on the notification or the window, and closing either
 //! of them by hand. When a notification expires or the app withdraws one,
 //! nothing is sent. The notification plugin of Tauri does not tell why a
@@ -36,7 +36,7 @@ const RESPOND: &str = "respond";
 const CLOSED_BY_USER: u32 = 2;
 
 /// Urgency "critical": stays until the user acts. KDE Plasma shows it even
-/// during "Nicht stören"; that is intended (see `docs/konzept.md`).
+/// during "Nicht stören"; that is intended (see `docs/concept.md`).
 const CRITICAL: u8 = 2;
 
 /// An open request: name of the contact and its sending time.

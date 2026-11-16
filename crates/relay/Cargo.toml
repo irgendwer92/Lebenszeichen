@@ -1,6 +1,6 @@
 [package]
 name = "lz-relay"
-description = "Relay-Server von Lebenszeichen"
+description = "Relay server of Lebenszeichen"
 license = "AGPL-3.0-or-later"
 version.workspace = true
 edition.workspace = true

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::ids::{self, Token};
 use crate::push::PushPolicy;
 
-/// Settings of the relay, see `docs/drahtformat.md`, section "Betrieb".
+/// Settings of the relay, see `docs/wire-format.md`, section "Betrieb".
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The access token (`LZ_ACCESS_TOKEN`).

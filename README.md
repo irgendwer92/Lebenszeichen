@@ -1,149 +1,147 @@
 # Lebenszeichen
 
-Manche Menschen schaffen es nicht, auf Nachrichten zu antworten, wenn es ihnen
-nicht gut geht. Andere machen sich dann Sorgen. Lebenszeichen fragt auf Wunsch
-ein minimales Lebenszeichen ab: eine Anfrage, eine einzige mögliche Antwort,
-und Wegklicken zählt.
+Some people cannot manage to reply to messages when they are not doing well.
+Others then worry. On request, Lebenszeichen asks for a minimal sign of life:
+one request, one single possible response, and dismissing counts.
 
-Kein Chat, kein Onlinestatus, kein Zeitplan, keine Alarmkette.
+No chat, no online status, no schedule, no alarm chain.
 
-## Stand
+## Status
 
-Meilenstein M1 ist abgeschlossen: Ein Wegwerf-Prototyp für Android hat
-gezeigt, dass ein Wecksignal die beendete App erreicht und die Kotlin-Schicht
-den Rust-Kern aufrufen kann; siehe [docs/m1-durchstich.md](docs/m1-durchstich.md).
+Milestone M1 is complete: a throwaway prototype for Android showed that a wake
+signal reaches the terminated app and that the Kotlin layer can call the Rust
+core; see [docs/m1-walking-skeleton.md](docs/m1-walking-skeleton.md).
 
-Meilenstein M2 ist abgeschlossen: `crates/wire` setzt das Drahtformat aus
-[docs/drahtformat.md](docs/drahtformat.md) um (Klartext der Nachrichten,
-Einladung, Prüfung des Umschlags), `crates/core` Verschlüsselung, Kopplung,
-die Regeln für Anfragen und den Speicher als JSON-Datei, `crates/client` die
-gemeinsame Client-Schicht und `crates/cli` den Client `lz` für die
-Kommandozeile (siehe unten). Das Relay (`crates/relay`,
-Programm `lz-relay`) wird über Umgebungsvariablen eingestellt und lässt sich
-als Docker-Image bauen: `docker build -f crates/relay/Dockerfile .`
+Milestone M2 is complete: `crates/wire` implements the wire format from
+[docs/wire-format.md](docs/wire-format.md) (plaintext of the messages,
+invitation, envelope verification), `crates/core` implements encryption, pairing,
+the rules for requests and the storage as a JSON file, `crates/client` the
+shared client layer and `crates/cli` the command-line client `lz` (see below).
+The relay (`crates/relay`,
+program `lz-relay`) is configured through environment variables and can be
+built as a Docker image: `docker build -f crates/relay/Dockerfile .`
 
-Meilenstein M3 (Linux-Desktop) ist bis auf zwei Prüfungen auf anderen
-Systemen fertig. M4 (Android-App) ist abgeschlossen: Handy und Desktop fragen
-sich gegenseitig an, über ein eigenes Relay mit Wecksignalen, und die CI baut
-eine signierte APK. Stand in
-[docs/fahrplan.md](docs/fahrplan.md).
+Milestone M3 (Linux desktop) is done except for two checks on other
+systems. M4 (Android app) is complete: phone and desktop request each other
+via their own relay with wake signals, and the CI builds a signed APK. Status in
+[docs/roadmap.md](docs/roadmap.md).
 
-| Meilenstein | Inhalt |
+| Milestone | Content |
 |---|---|
-| M0 | Grundgerüst, CI, Renovate, Lizenzdateien |
-| M1 | Durchstich auf Android |
-| M2 | Kern und Relay, bedienbar über die Kommandozeile |
-| M3 | Linux-Desktop |
-| M4 | Android-App |
-| M5 | Mehrere Geräte |
+| M0 | Scaffolding, CI, Renovate, license files |
+| M1 | Walking skeleton on Android |
+| M2 | Core and relay, operable via the command line |
+| M3 | Linux desktop |
+| M4 | Android app |
+| M5 | Multiple devices |
 | M6 | Windows |
-| M7 | Lokale Schnittstelle für Zustandsmeldungen |
-| M8 | Härtung |
+| M7 | Local interface for status reports |
+| M8 | Hardening |
 
-## Kommandozeile
+## Command line
 
-`lz` ist der Client ohne Oberfläche. Jedes Gerät hat eine Zustandsdatei, wählbar
-mit `--state <pfad>` oder `LZ_STATE`; Vorgabe ist
-`$XDG_DATA_HOME/lebenszeichen/device.json` (sonst
+`lz` is the client without a UI. Each device has a state file, selectable
+with `--state <path>` or `LZ_STATE`; the default is
+`$XDG_DATA_HOME/lebenszeichen/device.json` (otherwise
 `~/.local/share/lebenszeichen/device.json`).
 
 ```sh
-# Einmalig: Gerät anlegen. Mit Zugangstoken kann es einladen.
+# Once: create the device. With an access token it can invite.
 lz init --relay https://relay.example.org --access-token <b64url>
 
-# Anna lädt Bert ein und gibt ihm den Code (10 Minuten gültig).
-lz invite Bert              # mit --voucher darf Bert ein Postfach auf Annas Relay anlegen
-# Bert nimmt an und sieht einen sechsstelligen Prüfcode.
+# Anna invites Bert and gives him the code (valid for 10 minutes).
+lz invite Bert              # with --voucher Bert may create a mailbox on Anna's relay
+# Bert accepts and sees a six-digit verification code.
 lz accept Anna LZ1-…
-# Anna holt die Annahme ab, vergleicht den Prüfcode und bestätigt.
+# Anna picks up the acceptance, compares the verification code and confirms.
 lz sync
-lz confirm Bert             # stimmt der Prüfcode nicht: lz reject Bert
-# Bert holt die Bestätigung und Annas Regeln ab.
+lz confirm Bert             # if the verification code does not match: lz reject Bert
+# Bert picks up the confirmation and Anna's rules.
 lz sync
 
-lz request Anna             # nach einem Lebenszeichen fragen
-lz respond Bert             # die offene Anfrage beantworten
-lz report Bert "schläft"    # einen Zustand melden; die Anfrage bleibt offen
+lz request Anna             # ask for a sign of life
+lz respond Bert             # respond to the open request
+lz report Bert "schläft"    # report a state; the request stays open
 lz rules Bert --interval-min 360 --expiry-min 1440 --weekly 7
-lz contacts                 # Kontakte, offene Anfragen, „wieder möglich ab …“
-lz listen                   # verbunden bleiben und Nachrichten sofort zeigen
-lz remove Bert              # Kontakt entfernen; Bert sieht das beim nächsten Abruf
-lz push https://ntfy.example.org/upXYZ  # Push-Adresse eintragen, über die das Relay weckt
-lz push --remove            # Push-Adresse entfernen
+lz contacts                 # contacts, open requests, "wieder möglich ab …"
+lz listen                   # stay connected and show messages immediately
+lz remove Bert              # remove contact; Bert sees this on the next poll
+lz push https://ntfy.example.org/upXYZ  # register the push address the relay uses to wake the device
+lz push --remove            # remove the push address
 ```
 
-`lz sync` holt alles Wartende ab und endet, `lz listen` bleibt verbunden.
-`--verbose` zeigt auch verworfene Nachrichten. Ein Gerät ohne Zugangstoken
-kann nur Einladungen mit Gutschein annehmen. Für lokale Tests sind
-`http://`-Adressen erlaubt; im Betrieb steht das Relay hinter TLS. Die
-Zertifikate prüft das Betriebssystem.
+`lz sync` picks up everything waiting and exits, `lz listen` stays connected.
+`--verbose` also shows discarded messages. A device without an access token
+can only accept invitations with a voucher. `http://` addresses are allowed
+for local tests; in operation the relay sits behind TLS. The operating system
+verifies the certificates.
 
-Die Einladung muss innerhalb von 10 Minuten angenommen werden. Abholen kann
-die einladende Seite die Annahme auch später, bis zu 24 Stunden danach.
+The invitation must be accepted within 10 minutes. The inviting side can pick
+up the acceptance later, up to 24 hours afterward.
 
-## Grundsätze
+## Principles
 
-- Die App ist kein Überwachungswerkzeug. Wer angefragt wird, bestimmt, wie oft
-  das geschehen darf, und das eigene Gerät setzt es durch.
-- Die App ist kein Notrufsystem. Keine Antwort heißt nicht "Notfall".
-- Kein Konto, keine Telefonnummer, keine E-Mail-Adresse.
-- Ende-zu-Ende-verschlüsselt. Das Relay sieht nur Chiffrat fester Länge.
+- The app is not a surveillance tool. The person being asked determines how
+  often that may happen, and their own device enforces it.
+- The app is not an emergency call system. No response does not mean "emergency".
+- No account, no phone number, no email address.
+- End-to-end encrypted. The relay sees only fixed-length ciphertext.
 
-## Aufbau
+## Structure
 
 ```
 crates/
-├── wire/    Nachrichtenhülle und Relay-Schnittstelle (no_std)
-├── core/    Protokoll, Verschlüsselung, Regelprüfung, Speicher
-├── client/  Relay-Zugang, Befehle, Abruf; genutzt von lz und der App
-├── cli/     Client ohne Oberfläche (Programm: lz)
-└── relay/   Relay-Server (Programm: lz-relay)
+├── wire/    Message envelope and relay interface (no_std)
+├── core/    Protocol, encryption, rule checking, storage
+├── client/  Relay access, commands, polling; used by lz and the app
+├── cli/     Client without a UI (program: lz)
+└── relay/   Relay server (program: lz-relay)
 app/
-├── src-tauri/   Tauri-Hülle für Linux-Desktop und Android
-├── ui/          Oberfläche für beide (schlichtes HTML ohne Build-Schritt)
-└── android/     Kotlin-Schicht: UnifiedPush, Vollbild-Anzeige, Benachrichtigungen
-docs/        Konzept, Protokoll, Fahrplan, Durchstich M1, Android-Release, Entwurf der Lizenz-Ausnahme
+├── src-tauri/   Tauri shell for Linux desktop and Android
+├── ui/          UI for both (plain HTML without a build step)
+└── android/     Kotlin layer: UnifiedPush, full-screen display, notifications
+docs/        Concept, protocol, roadmap, walking skeleton M1, Android release, draft of the license exception
 ```
 
-`app/` gehört nicht zum Cargo-Workspace. Die Desktop-App für Linux baut und
-startet man lokal (braucht WebKitGTK 4.1 und GTK 3):
+`app/` is not part of the Cargo workspace. The desktop app for Linux is built
+and started locally (needs WebKitGTK 4.1 and GTK 3):
 
 ```sh
 cd app/src-tauri
 cargo build
-LZ_STATE=/pfad/zu/device.json target/debug/lebenszeichen-app   # LZ_STATE optional
+LZ_STATE=/path/to/device.json target/debug/lebenszeichen-app   # LZ_STATE optional
 ```
 
-Ohne `LZ_STATE` liegt der Zustand im Datenverzeichnis der App
-(`~/.local/share/io.github.irgendwer92.lebenszeichen/device.json`); die
-Desktop-App ist damit ein eigenes Gerät neben `lz`.
+Without `LZ_STATE` the state lives in the app's data directory
+(`~/.local/share/io.github.irgendwer92.lebenszeichen/device.json`); the
+desktop app is thus a separate device alongside `lz`.
 
-Die Android-APK baut der CI-Ablauf "Android-Prototyp" bei Pull Requests, die
-`app/` oder `crates/` berühren, oder von Hand:
-`gh workflow run android-prototype.yml --ref <zweig>`. Die fertige APK liegt
-dort als Artefakt. Die signierte APK baut der Ablauf "Android-Release" bei
-einem Tag `v*`; Einrichtung und Prüfung in
+The Android APK is built by the CI workflow "Android debug" on pull requests
+that touch `app/` or `crates/`, or by hand:
+`gh workflow run android-prototype.yml --ref <branch>`. The finished APK is
+attached there as an artifact. The signed APK is built by the workflow "Android release" on
+a tag `v*`; setup and verification in
 [docs/android-release.md](docs/android-release.md).
 
-## Entwickeln
+## Development
 
-Voraussetzung ist eine aktuelle stabile Rust-Toolchain.
+A current stable Rust toolchain is required.
 
 ```sh
 cargo test --workspace
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo deny check        # braucht: cargo install cargo-deny
+cargo deny check        # needs: cargo install cargo-deny
 ```
 
-Dieselben Schritte laufen bei jedem Push und Pull Request in der CI, für
-`app/src-tauri` in einem eigenen Schritt (Desktop-App für Linux).
-Bezeichner im Code sind englisch, die Dokumentation ist deutsch.
+The same steps run on every push and pull request in the CI, for
+`app/src-tauri` in a separate step (desktop app for Linux).
+Identifiers in the code are English, the documentation is English.
 
-## Lizenz
+## License
 
-- `crates/wire`, `crates/core`, `crates/cli` und die App: GPL-3.0-or-later,
-  siehe [LICENSE](LICENSE). Eine App-Store-Ausnahme ist geplant, der Wortlaut
-  liegt als Entwurf in [docs/lizenz-ausnahme.md](docs/lizenz-ausnahme.md).
-- `crates/relay`: AGPL-3.0-or-later, siehe
+- `crates/wire`, `crates/core`, `crates/cli` and the app: GPL-3.0-or-later,
+  see [LICENSE](LICENSE). An app store exception is planned, the wording
+  is available as a draft in [docs/license-exception.md](docs/license-exception.md).
+- `crates/relay`: AGPL-3.0-or-later, see
   [crates/relay/LICENSE](crates/relay/LICENSE).
