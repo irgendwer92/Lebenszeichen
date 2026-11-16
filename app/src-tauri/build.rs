@@ -26,6 +26,8 @@ const COMMANDS: &[&str] = &[
     "respond",
     "remove",
     "set_rules",
+    "texts",
+    "set_language",
     "alert_text",
     "alert_answer",
 ];

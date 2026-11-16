@@ -5,16 +5,55 @@
 //
 // Every text from outside (names, codes, messages) goes in through
 // `textContent`, never as HTML.
+//
+// The texts of the interface come from the Fluent files
+// (locales/*/lebenszeichen.ftl, ids `ui-…`) through the command `texts`, in
+// the language of this device. Fixed texts in index.html carry `data-i18n*`
+// attributes; dynamic ones go through `t("ui-…", { name: … })`. Every id is
+// written out as a literal, so that a test can check that it exists.
 
 "use strict";
 
 const tauri = window.__TAURI__;
 
-/// How often the list is redrawn, so that times like "wieder möglich ab"
+/// How often the list is redrawn, so that times like "possible again from"
 /// stay right without any message arriving.
 const REFRESH_MS = 30_000;
 
 const $ = (id) => document.getElementById(id);
+
+// ---------------------------------------------------------------- Texts
+
+/// The texts of the language in effect, by id; empty until they have loaded.
+let texts = {};
+
+/// The text `id`, with `{ $name }` replaced by `args.name`.
+function t(id, args = {}) {
+  const text = texts[id] ?? id;
+  return text.replace(/\{\s*\$(\w+)\s*\}/g, (whole, name) =>
+    name in args ? String(args[name]) : whole,
+  );
+}
+
+/// Puts the texts into the elements that carry `data-i18n*` attributes.
+function applyTexts() {
+  for (const node of document.querySelectorAll("[data-i18n]")) {
+    node.textContent = t(node.dataset.i18n);
+  }
+  for (const attribute of ["aria-label", "placeholder", "title"]) {
+    for (const node of document.querySelectorAll(`[data-i18n-${attribute}]`)) {
+      node.setAttribute(attribute, t(node.getAttribute(`data-i18n-${attribute}`)));
+    }
+  }
+}
+
+/// Takes over the answer of `texts` or `set_language`.
+function useTexts(answer) {
+  texts = answer.texts;
+  document.documentElement.lang = answer.lang;
+  $("language").value = answer.language;
+  applyTexts();
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -147,7 +186,7 @@ function openPanel(name) {
     }
   }
   if (name === "device") {
-    showDevice();
+    if (isAndroid) showDevice();
   } else if (name === "devices") {
     showDevices();
   } else if (name) {
@@ -165,6 +204,23 @@ for (const toggle of document.querySelectorAll("[data-panel]")) {
 for (const close of document.querySelectorAll("[data-close]")) {
   close.addEventListener("click", () => openPanel(null));
 }
+
+// ---------------------------------------------------------------- This device
+
+/// Language setting, for the desktop and Android alike. The device is the
+/// owner of its language: saved in `settings.json`, never synced.
+$("language").addEventListener("change", async (event) => {
+  try {
+    useTexts(await tauri.core.invoke("set_language", { language: event.target.value }));
+  } catch (error) {
+    showError(String(error));
+    return;
+  }
+  // Everything that was drawn from texts is drawn again.
+  if (isAndroid && !$("panel-device").hidden) showDevice();
+  if (!$("panel-devices").hidden) showDevices();
+  refresh();
+});
 
 // ---------------------------------------------------------------- Device (Android)
 
@@ -209,35 +265,35 @@ async function showDevice() {
   const distributors = status.distributors ?? [];
   let push;
   if (status.distributorAcknowledged && status.endpoint) {
-    push = check(true, `Wecksignal: angemeldet bei ${status.distributor}`);
+    push = check(true, t("ui-check-push-on", { distributor: status.distributor }));
   } else if (distributors.length === 0) {
-    push = check(false, "Wecksignal: keine UnifiedPush-App gefunden. Installiere ntfy und öffne sie einmal.");
+    push = check(false, t("ui-check-push-none"));
   } else {
-    push = check(false, "Wecksignal: nicht angemeldet", pluginButton("Anmelden", "register"));
+    push = check(false, t("ui-check-push-off"), pluginButton(t("ui-register"), "register"));
   }
   const channelOk = status.channelImportance < 0 || status.channelImportance >= IMPORTANCE_HIGH;
   $("device-checks").replaceChildren(
     push,
     check(
       status.notificationsEnabled,
-      "Benachrichtigungen erlaubt",
-      pluginButton("Erlauben", "request_notification_permission"),
-      pluginButton("Einstellungen", "open_settings", { target: "notifications" }, "quiet"),
+      t("ui-check-notifications"),
+      pluginButton(t("ui-allow"), "request_notification_permission"),
+      pluginButton(t("ui-open-settings"), "open_settings", { target: "notifications" }, "quiet"),
     ),
     check(
       channelOk,
-      "Kanal „Anfragen“ mit hoher Wichtigkeit",
-      pluginButton("Einstellungen", "open_settings", { target: "notifications" }),
+      t("ui-check-channel"),
+      pluginButton(t("ui-open-settings"), "open_settings", { target: "notifications" }),
     ),
     check(
       status.fullScreenIntentAllowed,
-      "Vollbild-Anzeige erlaubt",
-      pluginButton("Einstellungen", "open_settings", { target: "fullscreen" }),
+      t("ui-check-fullscreen"),
+      pluginButton(t("ui-open-settings"), "open_settings", { target: "fullscreen" }),
     ),
     check(
       status.batteryUnrestricted,
-      "Von der Akku-Optimierung ausgenommen",
-      pluginButton("Ausnehmen", "open_settings", { target: "battery" }),
+      t("ui-check-battery"),
+      pluginButton(t("ui-exempt"), "open_settings", { target: "battery" }),
     ),
   );
 }
@@ -277,7 +333,7 @@ function refreshNotifications() {
 
 // Back from the system settings: show what changed.
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && !$("panel-device").hidden) showDevice();
+  if (isAndroid && !document.hidden && !$("panel-device").hidden) showDevice();
 });
 
 let isAndroid = false;
@@ -285,7 +341,8 @@ let isAndroid = false;
 tauri.core.invoke("platform").then((platform) => {
   document.documentElement.dataset.platform = platform;
   isAndroid = platform === "android";
-  $("device-toggle").hidden = !isAndroid;
+  // The ⚙ panel holds the language setting on both; the rest is Android's.
+  $("device-android").hidden = !isAndroid;
   $("scan").hidden = !isAndroid;
   $("setup-scan").hidden = !isAndroid;
   $("add-scan").hidden = !isAndroid;
@@ -296,18 +353,22 @@ tauri.core.invoke("platform").then((platform) => {
 /// What a scanned or pasted code is, in words, for "this is not what I
 /// need here".
 const KIND_TEXT = {
-  invitation: "eine Einladung",
-  old_invitation: "eine Einladung aus einer älteren Version",
-  device: "ein Gerätecode",
-  setup: "ein Einrichtungscode",
+  invitation: "ui-kind-invitation",
+  old_invitation: "ui-kind-old-invitation",
+  device: "ui-kind-device",
+  setup: "ui-kind-setup",
 };
 
-/// Same text as `show::OLD_INVITATION` in the client.
-const OLD_INVITATION = "Diese Einladung stammt aus einer älteren Version; bitte um eine neue.";
+/// What the field wants, for "this is X, not Y", by the kind of code.
+const WANTED_TEXT = {
+  invitation: "ui-wanted-not-invitation",
+  device: "ui-wanted-not-device",
+  setup: "ui-wanted-not-setup",
+};
 
 /// Opens the camera. Returns the code if it is of the wanted kind; else
 /// tells the person what it is and returns null.
-async function scanCode(kind, wanted) {
+async function scanCode(kind) {
   showError("");
   let result;
   try {
@@ -318,12 +379,13 @@ async function scanCode(kind, wanted) {
   }
   if (!result?.code) return null;
   if (result.kind === "old_invitation" && kind === "invitation") {
-    showError(OLD_INVITATION);
+    // Same text as `error-old-invitation` in the client.
+    showError(t("ui-old-invitation"));
     return null;
   }
   if (result.kind !== kind) {
-    const what = KIND_TEXT[result.kind] ?? "etwas anderes";
-    showError(`Das ist ${what}, ${wanted}.`);
+    const what = t(KIND_TEXT[result.kind] ?? "ui-kind-other");
+    showError(t("ui-wrong-code", { what, wanted: t(WANTED_TEXT[kind]) }));
     return null;
   }
   return result.code;
@@ -331,7 +393,7 @@ async function scanCode(kind, wanted) {
 
 /// Opens the camera; a recognized invitation lands in the code field.
 $("scan").addEventListener("click", async () => {
-  const code = await scanCode("invitation", "keine Einladung");
+  const code = await scanCode("invitation");
   if (!code) return;
   const form = $("accept-form");
   form.elements.code.value = code;
@@ -346,12 +408,12 @@ $("scan").addEventListener("click", async () => {
 const openSettings = new Set();
 const drafts = new Map();
 
-/// The fields of the settings: key in `drafts`, label, argument of
+/// The fields of the settings: key in `drafts`, id of the label, argument of
 /// `set_rules`, key in `contact.rules`, and the limits of the input.
 const RULE_FIELDS = [
-  ["interval", "Mindestabstand nach einer Antwort (Stunden)", "intervalHours", "interval_hours", 0, 168, 0.5],
-  ["expiry", "Unbeantwortet abgelaufen nach (Stunden)", "expiryHours", "expiry_hours", 0.5, 168, 0.5],
-  ["weekly", "Höchstens pro Woche (0: gar nicht)", "weeklyLimit", "weekly_limit", 0, 999, 1],
+  ["interval", "ui-rule-interval", "intervalHours", "interval_hours", 0, 168, 0.5],
+  ["expiry", "ui-rule-expiry", "expiryHours", "expiry_hours", 0.5, 168, 0.5],
+  ["weekly", "ui-rule-weekly", "weeklyLimit", "weekly_limit", 0, 999, 1],
 ];
 
 /// Settings of a paired contact: how often the contact may ask, how often
@@ -365,8 +427,8 @@ function settings(contact) {
   box.hidden = !openSettings.has(name);
 
   const form = el("form", "rules");
-  form.append(el("h3", "wide-field", `${name} darf dich fragen`));
-  for (const [key, text, , rule, min, max, step] of RULE_FIELDS) {
+  form.append(el("h3", "wide-field", t("ui-rules-heading", { name })));
+  for (const [key, textId, , rule, min, max, step] of RULE_FIELDS) {
     const input = el("input");
     input.type = "number";
     input.name = key;
@@ -378,11 +440,11 @@ function settings(contact) {
     input.addEventListener("input", () => {
       drafts.set(name, { ...(drafts.get(name) ?? {}), [key]: input.value });
     });
-    const label = el("label", "", text);
+    const label = el("label", "", t(textId));
     label.append(input);
     form.append(label);
   }
-  const save = el("button", "wide-field", "Speichern");
+  const save = el("button", "wide-field", t("ui-save"));
   save.type = "submit";
   form.append(save);
   form.addEventListener("submit", async (event) => {
@@ -409,12 +471,12 @@ function settings(contact) {
 
   const danger = el("div", "danger-zone");
   danger.append(
-    confirmButton(`remove:${name}`, "Verbindung beenden", "Wirklich? Nochmal klicken", () =>
+    confirmButton(`remove:${name}`, t("ui-end-connection"), t("ui-confirm-again"), () =>
       call("remove", { name }),
     ),
   );
 
-  box.append(form, el("p", "note", `Du darfst ${name} fragen: ${rules.peer}`), danger);
+  box.append(form, el("p", "note", t("ui-rules-peer-note", { name, rules: rules.peer })), danger);
   return box;
 }
 
@@ -422,7 +484,7 @@ function settings(contact) {
 function settingsToggle(name) {
   const toggle = el("button", "icon", "⚙");
   toggle.type = "button";
-  toggle.setAttribute("aria-label", `Einstellungen für ${name}`);
+  toggle.setAttribute("aria-label", t("ui-settings-for", { name }));
   toggle.setAttribute("aria-controls", `settings-${name}`);
   toggle.setAttribute("aria-expanded", String(openSettings.has(name)));
   toggle.addEventListener("click", () => {
@@ -462,12 +524,12 @@ function contactCard(contact) {
       item.classList.add("pairing");
       item.append(
         el("h3", "", name),
-        el("p", "", `${name} hat deine Einladung angenommen. Vergleicht den Prüfcode:`),
+        el("p", "", t("ui-pairing-accepted", { name })),
         el("p", "verification", grouped(contact.code)),
         el("p", "note", contact.compare_hint),
         row(
-          button("Prüfcode stimmt: bestätigen", () => call("confirm", { name }), "primary"),
-          button("Stimmt nicht: ablehnen", () => call("reject", { name }), "quiet"),
+          button(t("ui-confirm-code"), () => call("confirm", { name }), "primary"),
+          button(t("ui-reject-code"), () => call("reject", { name }), "quiet"),
         ),
       );
       return item;
@@ -476,10 +538,10 @@ function contactCard(contact) {
       item.classList.add("pairing");
       item.append(
         el("h3", "", name),
-        el("p", "", `Wartet auf die Bestätigung durch ${name}. Vergleicht den Prüfcode:`),
+        el("p", "", t("ui-awaiting-hello-ok", { name })),
         el("p", "verification", grouped(contact.code)),
         el("p", "note", contact.compare_hint),
-        row(button("Stimmt nicht: ablehnen", () => call("reject", { name }), "quiet")),
+        row(button(t("ui-reject-code"), () => call("reject", { name }), "quiet")),
       );
       return item;
 
@@ -487,13 +549,8 @@ function contactCard(contact) {
       item.classList.add("pairing");
       item.append(
         el("h3", "", name),
-        el(
-          "p",
-          "",
-          `Einladung angenommen. Warte auf den Prüfcode … Er erscheint hier, sobald das ` +
-            `Gerät von ${name} die Annahme abgeholt hat.`,
-        ),
-        row(button("Abbrechen", () => call("reject", { name }), "quiet")),
+        el("p", "", t("ui-awaiting-reveal", { name })),
+        row(button(t("ui-cancel"), () => call("reject", { name }), "quiet")),
       );
       return item;
 
@@ -501,9 +558,9 @@ function contactCard(contact) {
       item.classList.add("ended");
       item.append(
         el("h3", "", name),
-        el("p", "status", "Die Verbindung ist beendet."),
+        el("p", "status", t("ui-connection-ended")),
         row(
-          confirmButton(`remove:${name}`, "Entfernen", "Wirklich? Nochmal klicken", () =>
+          confirmButton(`remove:${name}`, t("ui-remove"), t("ui-confirm-again"), () =>
             call("remove", { name }),
           ),
         ),
@@ -515,21 +572,21 @@ function contactCard(contact) {
     item.classList.add("request");
     item.append(
       el("h3", "", name),
-      el("p", "", `${name} ${contact.incoming}`),
-      button("Lebenszeichen senden ✓", () => call("respond", { name }), "primary wide"),
+      el("p", "", contact.incoming),
+      button(t("ui-send-sign"), () => call("respond", { name }), "primary wide"),
     );
   } else {
     item.append(el("h3", "", name));
   }
 
   if (contact.last_response) {
-    const last = el("p", "status", "letzte Antwort: ");
+    const last = el("p", "status", `${t("ui-last-response")} `);
     last.append(el("span", contact.last_response.startsWith("✓") ? "ok" : "", contact.last_response));
     item.append(last);
   }
   if (contact.outgoing) item.append(el("p", "status", contact.outgoing));
 
-  const ask = button("Lebenszeichen?", () => call("request", { name }));
+  const ask = button(t("ui-ask"), () => call("request", { name }));
   ask.disabled = !contact.can_request;
   const parts = [ask];
   if (contact.next_request) parts.push(el("span", "note", contact.next_request));
@@ -555,8 +612,8 @@ function invitationCard(invitation) {
       spacer(),
       confirmButton(
         `withdraw:${name}`,
-        "Zurückziehen",
-        "Wirklich? Nochmal klicken",
+        t("ui-withdraw"),
+        t("ui-confirm-again"),
         () => call("remove", { name }),
         "quiet",
       ),
@@ -581,7 +638,7 @@ async function refresh() {
   $("join-flow").hidden = !joining;
   $("app").hidden = !setup.ready;
   $("actions").hidden = !setup.ready;
-  $("state-path").textContent = `Zustand: ${setup.path}`;
+  $("state-path").textContent = t("ui-state-path", { path: setup.path });
   if (!setup.ready) {
     prefillRelay();
     return;
@@ -668,14 +725,16 @@ const QR_QUIET_ZONE = 4;
 
 /// Draws a QR code as one SVG path, one unit per module. Built through the
 /// DOM, so the Content Security Policy needs no exception for images.
-function qrSvg(qr, label = "QR-Code der Einladung") {
+function qrSvg(qr, labelId = "ui-qr-invitation") {
   const ns = "http://www.w3.org/2000/svg";
   const side = qr.width + 2 * QR_QUIET_ZONE;
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", `0 0 ${side} ${side}`);
   svg.setAttribute("shape-rendering", "crispEdges");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", label);
+  // Kept up to date by `applyTexts` when the language changes.
+  svg.setAttribute("data-i18n-aria-label", labelId);
+  svg.setAttribute("aria-label", t(labelId));
   const background = document.createElementNS(ns, "rect");
   background.setAttribute("width", side);
   background.setAttribute("height", side);
@@ -715,9 +774,7 @@ onSubmit("accept-form", async (data, form) => {
   // A pasted invitation of version 1 is refused by the core with the same
   // text as OLD_INVITATION.
   await call("accept", { name, code: data.get("code") });
-  result.textContent =
-    `Angenommen. Warte auf den Prüfcode … Er erscheint bei ${name} in der Liste, sobald das ` +
-    `Gerät von ${name} die Annahme abgeholt hat.`;
+  result.textContent = t("ui-accepted", { name });
   result.hidden = false;
   form.reset();
 });
@@ -732,7 +789,7 @@ $("sync").addEventListener("click", async () => {
 });
 
 /// Which flow of `lz-device` is running in the window: `join` (setup
-/// screen), `add` (panel "Geräte") or null.
+/// screen), `add` (panel "Devices") or null.
 let deviceFlow = null;
 let joining = false;
 
@@ -769,7 +826,7 @@ $("setup-invitation-go").addEventListener("click", async (event) => {
 });
 
 $("setup-scan").addEventListener("click", async () => {
-  const code = await scanCode("setup", "kein Einrichtungscode");
+  const code = await scanCode("setup");
   if (code) $("setup-code-form").elements.code.value = code;
 });
 
@@ -801,7 +858,7 @@ onSubmit("setup-join-form", async (data) => {
   // Events may arrive before the command returns.
   joining = true;
   deviceFlow = "join";
-  $("join-progress").textContent = "Einen Moment …";
+  $("join-progress").textContent = t("ui-moment");
   try {
     await tauri.core.invoke("device_join", {
       relay: data.get("relay"),
@@ -817,7 +874,7 @@ onSubmit("setup-join-form", async (data) => {
 $("join-copy").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText($("join-code").value);
-    $("join-progress").textContent = "Kopiert.";
+    $("join-progress").textContent = t("ui-copied");
   } catch (error) {
     showError(String(error));
   }
@@ -859,10 +916,10 @@ $("join-restart").addEventListener("click", async () => {
 function joinEvent({ step, code, text, qr }) {
   switch (step) {
     case "device_code":
-      $("join-qr").replaceChildren(qrSvg(qr, "QR-Code des Gerätecodes"));
+      $("join-qr").replaceChildren(qrSvg(qr, "ui-qr-device"));
       $("join-code").value = code;
       showJoinPart("code");
-      $("join-progress").textContent = "Warte auf das vorhandene Gerät …";
+      $("join-progress").textContent = t("ui-join-waiting");
       break;
     case "check_device":
       $("join-check").textContent = grouped(code);
@@ -913,15 +970,15 @@ async function showDevices() {
       const item = el("li", "card");
       const parts = [el("h3", "", device.name)];
       if (device.this) {
-        parts.push(el("span", "this-device", "(dieses Gerät)"));
+        parts.push(el("span", "this-device", t("ui-this-device-tag")));
         parts.push(spacer());
       } else {
         parts.push(
           spacer(),
           confirmButton(
             `device-remove:${device.name}`,
-            "Entfernen",
-            "Wirklich? Nochmal klicken",
+            t("ui-remove"),
+            t("ui-confirm-again"),
             async () => {
               await call("device_remove", { reader: device.reader });
               await showDevices();
@@ -935,7 +992,7 @@ async function showDevices() {
   );
   try {
     const code = await tauri.core.invoke("setup_code").then((reply) => reply.value);
-    $("setup-code-qr").replaceChildren(qrSvg(code.qr, "QR-Code des Einrichtungscodes"));
+    $("setup-code-qr").replaceChildren(qrSvg(code.qr, "ui-qr-setup"));
     $("setup-code-text").value = code.text;
     $("setup-code-details").hidden = false;
   } catch {
@@ -969,7 +1026,7 @@ function resetAdd() {
 }
 
 $("add-scan").addEventListener("click", async () => {
-  const code = await scanCode("device", "kein Gerätecode");
+  const code = await scanCode("device");
   if (code) $("add-device-form").elements.code.value = code;
 });
 
@@ -979,7 +1036,7 @@ onSubmit("add-device-form", async (data) => {
   deviceFlow = "add";
   $("add-device-form").hidden = true;
   $("add-device-flow").hidden = false;
-  $("add-progress").textContent = "Einen Moment …";
+  $("add-progress").textContent = t("ui-moment");
   try {
     await tauri.core.invoke("device_add", {
       code: data.get("code"),
@@ -1022,7 +1079,7 @@ function addEvent({ step, code, text }) {
     case "done":
       resetAdd();
       $("add-device-form").reset();
-      $("add-result").textContent = "Das neue Gerät ist eingerichtet.";
+      $("add-result").textContent = t("ui-add-done");
       $("add-result").hidden = false;
       showDevices();
       break;
@@ -1044,5 +1101,13 @@ tauri.event.listen("lz-line", (event) => {
   refresh();
 });
 
-refresh();
-setInterval(refresh, REFRESH_MS);
+// The texts first, so that nothing is drawn in a wrong language; without
+// them the English defaults of the page stay.
+tauri.core
+  .invoke("texts")
+  .then(useTexts)
+  .catch((error) => showError(String(error)))
+  .finally(() => {
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+  });

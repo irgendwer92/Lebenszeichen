@@ -13,16 +13,16 @@ use std::time::Duration;
 
 use lz_client::ctx::{self, Clock, ContactView, Ctx, LastResponse, Overview, Status};
 use lz_client::devices::{Check, DeviceView, Dialog};
-use lz_client::i18n::{Language, Texts};
+use lz_client::i18n::{Arg, Language, Texts};
 use lz_client::qr::{self, Qr};
 use lz_client::relay::{Http, b64};
 use lz_client::show::{self, no_hints, reported, when};
 
-/// The language of the texts of the app, until it chooses one.
-pub(crate) const LANG: Language = Language::De;
+use crate::lang::{self, Choice};
 
-pub(crate) fn de() -> Texts {
-    LANG.texts()
+/// A text without arguments, in the language in effect.
+fn text(id: &str) -> String {
+    lang::texts().text(id, &[])
 }
 use lz_core::store::{JsonFile, Store};
 use lz_core::wire::{CodeKind, Rules, SetupCode, setup_code};
@@ -63,6 +63,7 @@ struct Flow {
 /// files directory, shared with the background path.
 pub fn setup(app: &mut tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = state_path(app)?;
+    lang::apply(&path);
     app.manage(AppState {
         path: path.clone(),
         flow: Mutex::new(None),
@@ -201,8 +202,7 @@ pub(crate) fn new_ctx(path: PathBuf, out: Box<dyn Write>) -> Result<Ctx<Http>, S
         idle: SYNC_IDLE,
         // The window has buttons for every next step.
         hints: no_hints,
-        // German until the app chooses its language.
-        lang: LANG,
+        lang: lang::current(),
     })
 }
 
@@ -292,11 +292,56 @@ where
     });
     result
         .await
-        .unwrap_or_else(|_| Err("Interner Fehler: Befehl abgebrochen.".into()))
+        .unwrap_or_else(|_| Err(text("app-error-command-aborted")))
 }
 
 fn path(state: &tauri::State<'_, AppState>) -> PathBuf {
     state.path.clone()
+}
+
+/// The texts of the window in the language in effect, and the setting.
+#[derive(Serialize)]
+pub struct UiTexts {
+    /// The language in effect: `en` or `de`.
+    lang: &'static str,
+    /// The setting of this device: `system`, `en` or `de`.
+    language: &'static str,
+    /// Raw texts of all `ui-` ids; variables are written `{ $name }`.
+    texts: std::collections::BTreeMap<String, String>,
+}
+
+fn ui_texts(path: &std::path::Path) -> UiTexts {
+    let language = lang::current();
+    UiTexts {
+        lang: language.tag(),
+        language: lang::load(&lang::settings_path(path)).tag(),
+        texts: language.raw_texts("ui-"),
+    }
+}
+
+/// The texts of the window.
+#[tauri::command]
+pub fn texts(state: tauri::State<'_, AppState>) -> UiTexts {
+    ui_texts(&state.path)
+}
+
+/// Saves the language setting of this device (`system`, `en` or `de`),
+/// makes it the language in effect and returns the new texts.
+#[tauri::command]
+pub fn set_language(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    language: String,
+) -> Result<UiTexts, String> {
+    let choice =
+        Choice::from_tag(&language).ok_or_else(|| format!("unknown language: {language}"))?;
+    lang::save(&lang::settings_path(&state.path), choice).map_err(|error| error.to_string())?;
+    lang::apply(&state.path);
+    #[cfg(desktop)]
+    crate::desktop::language_changed(&app);
+    #[cfg(not(desktop))]
+    let _ = app;
+    Ok(ui_texts(&state.path))
 }
 
 /// Whether the device is set up, and where its state lives.
@@ -331,7 +376,7 @@ pub async fn init_with_invitation_only(
     let path = path(&state);
     off_thread(move || {
         let mut out = Lines::default();
-        ctx::init(&JsonFile::new(path), None, None, LANG, &mut out)
+        ctx::init(&JsonFile::new(path), None, None, lang::current(), &mut out)
             .map_err(|error| error.to_string())?;
         Ok(Reply {
             value: (),
@@ -342,19 +387,16 @@ pub async fn init_with_invitation_only(
 }
 
 /// Relay address and access token from a setup code.
-fn read_setup_code(text: &str) -> Result<(String, String), String> {
-    match CodeKind::of(text) {
+fn read_setup_code(input: &str) -> Result<(String, String), String> {
+    match CodeKind::of(input) {
         Some(CodeKind::Setup) => {}
         Some(CodeKind::Invitation | CodeKind::OldInvitation) => {
-            return Err("Das ist eine Einladung, kein Einrichtungscode.".into());
+            return Err(text("app-error-code-is-invitation"));
         }
-        Some(CodeKind::Device) => {
-            return Err("Das ist ein Gerätecode, kein Einrichtungscode.".into());
-        }
-        None => return Err("Das ist kein Einrichtungscode.".into()),
+        Some(CodeKind::Device) => return Err(text("app-error-code-is-device")),
+        None => return Err(text("app-error-code-not-setup")),
     }
-    let code = SetupCode::from_text(text)
-        .map_err(|_| "Der Einrichtungscode ist ungültig oder unvollständig.".to_owned())?;
+    let code = SetupCode::from_text(input).map_err(|_| text("app-error-setup-code-invalid"))?;
     Ok((code.relay.to_string(), b64(&code.access_token)))
 }
 
@@ -372,7 +414,7 @@ pub async fn init_from_setup_code(
             &JsonFile::new(path),
             Some(&relay),
             Some(&token),
-            LANG,
+            lang::current(),
             &mut out,
         )
         .map_err(|error| error.to_string())?;
@@ -413,7 +455,7 @@ fn own_setup_code(store: &impl Store) -> Result<SetupCodeView, String> {
         .relay
         .and_then(|relay| relay.access_token.map(|token| (relay.url, token)));
     let Some((relay, access_token)) = account else {
-        return Err("Dieses Gerät hat keinen Zugangstoken für ein Relay.".into());
+        return Err(text("app-error-no-access-token"));
     };
     let code = SetupCode {
         access_token,
@@ -449,7 +491,8 @@ pub async fn init_device(
         let token = Some(access_token.trim()).filter(|t| !t.is_empty());
         let relay = Some(relay.trim()).filter(|r| !r.is_empty());
         let store = JsonFile::new(path);
-        ctx::init(&store, relay, token, LANG, &mut out).map_err(|error| error.to_string())?;
+        ctx::init(&store, relay, token, lang::current(), &mut out)
+            .map_err(|error| error.to_string())?;
         Ok(Reply {
             value: (),
             lines: out.take(),
@@ -501,12 +544,12 @@ pub struct RulesCard {
     peer: String,
 }
 
-fn rules_card(own: &Rules, peer: &Rules) -> RulesCard {
+fn rules_card(own: &Rules, peer: &Rules, t: Texts) -> RulesCard {
     RulesCard {
         interval_hours: f64::from(own.min_interval_minutes) / 60.0,
         expiry_hours: f64::from(own.expiry_minutes) / 60.0,
         weekly_limit: own.weekly_limit,
-        peer: show::rules(de(), peer),
+        peer: show::rules(t, peer),
     }
 }
 
@@ -516,25 +559,45 @@ const MAX_HOURS: f64 = 7.0 * 24.0;
 /// Highest weekly limit the window offers.
 const MAX_WEEKLY: u16 = 999;
 
+/// The value of the window that [`minutes`] converts.
+#[derive(Clone, Copy)]
+enum Hours {
+    Interval,
+    Expiry,
+}
+
 /// Turns hours from the window into minutes for the protocol. The window
 /// offers half hours; `lz rules` can set any minute.
-fn minutes(hours: f64, least: f64, what: &str) -> Result<u32, String> {
+fn minutes(hours: f64, least: f64, what: Hours, t: Texts) -> Result<u32, String> {
+    let (range, halves_text) = match what {
+        Hours::Interval => ("app-error-interval-range", "app-error-interval-halves"),
+        Hours::Expiry => ("app-error-expiry-range", "app-error-expiry-halves"),
+    };
     if !(least..=MAX_HOURS).contains(&hours) {
-        return Err(format!(
-            "{what} muss zwischen {} und {MAX_HOURS} Stunden liegen.",
-            show_hours(least)
+        return Err(t.text(
+            range,
+            &[
+                ("min", Arg::Text(&show_hours(least, t))),
+                ("max", Arg::Text(&show_hours(MAX_HOURS, t))),
+            ],
         ));
     }
     let halves = hours * 2.0;
     if (halves - halves.round()).abs() > 1e-9 {
-        return Err(format!("{what} geht in halben Stunden, etwa 1,5."));
+        return Err(t.text(halves_text, &[]));
     }
     // At most 336 halves, so the cast is exact.
     Ok(halves.round() as u32 * 30)
 }
 
-fn show_hours(hours: f64) -> String {
-    format!("{hours}").replace('.', ",")
+/// Hours with the decimal separator of the language.
+fn show_hours(hours: f64, t: Texts) -> String {
+    let text = format!("{hours}");
+    if t.language() == Language::De {
+        text.replace('.', ",")
+    } else {
+        text
+    }
 }
 
 #[derive(Serialize)]
@@ -549,7 +612,7 @@ pub struct Cards {
     invitations: Vec<InvitationCard>,
 }
 
-fn card(view: ContactView, now: u64) -> Card {
+fn card(view: ContactView, now: u64, t: Texts) -> Card {
     let (status, code) = match view.status {
         Status::Paired => ("paired", None),
         Status::AwaitingReveal => ("awaiting_reveal", None),
@@ -559,60 +622,67 @@ fn card(view: ContactView, now: u64) -> Card {
     };
     let paired = status == "paired";
     let incoming = view.incoming.filter(|_| paired).map(|open| {
-        let mut text = format!(
-            "fragt seit {} nach einem Lebenszeichen (läuft ab {})",
-            when(de(), open.since, now),
-            when(de(), open.expires_at, now)
-        );
-        if let Some(reason) = open.reported {
-            text.push_str(&format!("; gemeldet: {}", reported(de(), reason)));
+        let since = when(t, open.since, now);
+        let expires = when(t, open.expires_at, now);
+        let mut args = vec![
+            ("name", Arg::Text(&view.name)),
+            ("since", Arg::Text(&since)),
+            ("expires", Arg::Text(&expires)),
+        ];
+        let reason = open.reported.map(|reason| reported(t, reason));
+        if let Some(reason) = &reason {
+            args.push(("reported", Arg::Text(reason)));
+            t.text("app-contact-incoming-reported", &args)
+        } else {
+            t.text("app-contact-incoming", &args)
         }
-        text
     });
     let can_request = paired && view.next_request_at <= now;
     Card {
         name: view.name,
         status,
-        compare_hint: code.as_ref().map(|_| show::compare_hint(de())),
+        compare_hint: code.as_ref().map(|_| show::compare_hint(t)),
         code,
         incoming,
-        outgoing: view
-            .outgoing_since
-            .filter(|_| paired)
-            .map(|since| format!("eigene Anfrage offen seit {}", when(de(), since, now))),
+        outgoing: view.outgoing_since.filter(|_| paired).map(|since| {
+            t.text(
+                "app-contact-outgoing",
+                &[("since", Arg::Text(&when(t, since, now)))],
+            )
+        }),
         can_request,
         next_request: (paired && !can_request).then(|| {
-            format!(
-                "wieder möglich ab {}",
-                when(de(), view.next_request_at, now)
+            t.text(
+                "app-contact-next-request",
+                &[("at", Arg::Text(&when(t, view.next_request_at, now)))],
             )
         }),
         last_response: view.last_response.map(|last| match last {
-            LastResponse::Manual { at } => format!("✓ {}", when(de(), at, now)),
-            LastResponse::Reported { reason } => reported(de(), reason),
+            LastResponse::Manual { at } => format!("✓ {}", when(t, at, now)),
+            LastResponse::Reported { reason } => reported(t, reason),
         }),
-        rules: paired.then(|| rules_card(&view.own_rules, &view.peer_rules)),
+        rules: paired.then(|| rules_card(&view.own_rules, &view.peer_rules, t)),
     }
 }
 
-fn cards(overview: Overview) -> Cards {
+fn cards(overview: Overview, t: Texts) -> Cards {
     let now = overview.now;
     Cards {
         contacts: overview
             .contacts
             .into_iter()
-            .map(|view| card(view, now))
+            .map(|view| card(view, now, t))
             .collect(),
         invitations: overview
             .invitations
             .into_iter()
             .map(|invitation| InvitationCard {
                 text: if invitation.expired {
-                    "Einladung abgelaufen; eine rechtzeitige Annahme wird noch abgeholt".into()
+                    t.text("app-invitation-expired", &[])
                 } else {
-                    format!(
-                        "Einladung offen bis {}",
-                        when(de(), invitation.expires_at, now)
+                    t.text(
+                        "app-invitation-open",
+                        &[("until", Arg::Text(&when(t, invitation.expires_at, now)))],
                     )
                 },
                 name: invitation.name,
@@ -623,7 +693,11 @@ fn cards(overview: Overview) -> Cards {
 
 #[tauri::command]
 pub async fn overview(state: tauri::State<'_, AppState>) -> Result<Reply<Cards>, String> {
-    run(path(&state), async |ctx| ctx.overview().map(cards)).await
+    run(path(&state), async |ctx| {
+        ctx.overview()
+            .map(|overview| cards(overview, lang::texts()))
+    })
+    .await
 }
 
 /// Fetches waiting messages once, in addition to the background fetch.
@@ -675,14 +749,15 @@ pub async fn set_rules(
     expiry_hours: Option<f64>,
     weekly_limit: Option<u16>,
 ) -> Result<Reply<()>, String> {
+    let t = lang::texts();
     let interval = interval_hours
-        .map(|h| minutes(h, 0.0, "Der Mindestabstand"))
+        .map(|h| minutes(h, 0.0, Hours::Interval, t))
         .transpose()?;
     let expiry = expiry_hours
-        .map(|h| minutes(h, 0.5, "Die Ablaufzeit"))
+        .map(|h| minutes(h, 0.5, Hours::Expiry, t))
         .transpose()?;
     if weekly_limit.is_some_and(|n| n > MAX_WEEKLY) {
-        return Err(format!("Höchstens {MAX_WEEKLY} Anfragen pro Woche."));
+        return Err(t.text("app-error-weekly-max", &[("max", Arg::from(MAX_WEEKLY))]));
     }
     run(path(&state), async move |ctx| {
         ctx.rules(&name, interval, expiry, weekly_limit).await
@@ -844,7 +919,7 @@ enum FlowKind {
 fn start_flow(app: AppHandle, state: &AppState, kind: FlowKind) -> Result<(), String> {
     let mut slot = state.flow.lock().expect("lock poisoned");
     if slot.is_some() {
-        return Err("Es läuft schon ein Vorgang für ein Gerät.".into());
+        return Err(text("app-error-flow-running"));
     }
     let (answers, answered) = mpsc::unbounded_channel();
     let (cancel, cancelled) = oneshot::channel();
@@ -892,13 +967,20 @@ fn start_flow(app: AppHandle, state: &AppState, kind: FlowKind) -> Result<(), St
                 poke(&app);
             }
             Ok(None) => {}
-            Err(error) if error.starts_with("Achtung:") => {
+            Err(error) if error.starts_with(&alarm_prefix()) => {
                 emit_step(&app, "alarm", None, Some(&error));
             }
             Err(error) => emit_step(&app, "error", None, Some(&error)),
         }
     });
     Ok(())
+}
+
+/// How the texts of `lz-client` begin that report someone else interfering
+/// ("Warning:", "Achtung:").
+fn alarm_prefix() -> String {
+    let prefix = lang::texts().text("error-alarm", &[("text", Arg::Text(""))]);
+    prefix.trim_end().to_owned()
 }
 
 /// Sets this device up as a further device of a person; progress comes as
@@ -953,10 +1035,16 @@ mod tests {
     use lz_client::show;
     use lz_core::store::JsonFile;
 
+    use lz_client::i18n::Language;
+
     use super::{
-        card, default_relay_of, is_progress, kind_name, minutes, own_setup_code, read_setup_code,
-        rules_card,
+        Hours, card, default_relay_of, is_progress, kind_name, minutes, own_setup_code,
+        read_setup_code, rules_card,
     };
+
+    fn de() -> lz_client::i18n::Texts {
+        Language::De.texts()
+    }
 
     const NOW: u64 = 1_794_600_000;
     const HOUR: u64 = 3600;
@@ -983,6 +1071,7 @@ mod tests {
                 expiry_minutes: 60,
                 weekly_limit: 2,
             },
+            de(),
         );
         assert_eq!(card.interval_hours, 6.0);
         assert_eq!(card.expiry_hours, 24.0);
@@ -992,36 +1081,38 @@ mod tests {
 
     #[test]
     fn hours_become_minutes() {
-        assert_eq!(minutes(0.0, 0.0, "x"), Ok(0));
-        assert_eq!(minutes(1.5, 0.0, "x"), Ok(90));
-        assert_eq!(minutes(168.0, 0.5, "x"), Ok(10_080));
-        let error = minutes(0.0, 0.5, "Die Ablaufzeit").unwrap_err();
+        let m = |hours, least| minutes(hours, least, Hours::Interval, de());
+        assert_eq!(m(0.0, 0.0), Ok(0));
+        assert_eq!(m(1.5, 0.0), Ok(90));
+        assert_eq!(m(168.0, 0.5), Ok(10_080));
+        let error = minutes(0.0, 0.5, Hours::Expiry, de()).unwrap_err();
         assert_eq!(
             error,
             "Die Ablaufzeit muss zwischen 0,5 und 168 Stunden liegen."
         );
-        assert!(
-            minutes(1.25, 0.0, "x")
-                .unwrap_err()
-                .contains("halben Stunden")
+        assert!(m(1.25, 0.0).unwrap_err().contains("halben Stunden"));
+        assert!(m(169.0, 0.0).is_err());
+        assert!(m(f64::NAN, 0.0).is_err());
+        let english = minutes(0.0, 0.5, Hours::Interval, Language::En.texts()).unwrap_err();
+        assert_eq!(
+            english,
+            "The minimum interval must be between 0.5 and 168 hours."
         );
-        assert!(minutes(169.0, 0.0, "x").is_err());
-        assert!(minutes(f64::NAN, 0.0, "x").is_err());
     }
 
     #[test]
     fn settings_only_when_paired() {
-        assert!(card(paired(), NOW).rules.is_some());
+        assert!(card(paired(), NOW, de()).rules.is_some());
         let ended = ContactView {
             status: Status::Ended,
             ..paired()
         };
-        assert!(card(ended, NOW).rules.is_none());
+        assert!(card(ended, NOW, de()).rules.is_none());
     }
 
     #[test]
     fn request_button_follows_the_rules() {
-        let open = card(paired(), NOW);
+        let open = card(paired(), NOW, de());
         assert!(open.can_request);
         assert!(open.next_request.is_none());
 
@@ -1032,6 +1123,7 @@ mod tests {
                 ..paired()
             },
             NOW,
+            de(),
         );
         assert!(!locked.can_request);
         assert!(
@@ -1053,7 +1145,7 @@ mod tests {
             }),
             ..paired()
         };
-        let text = card(view, NOW).incoming.unwrap();
+        let text = card(view, NOW, de()).incoming.unwrap();
         assert!(text.contains("„schläft“ (gemeldet)"), "{text}");
     }
 
@@ -1065,13 +1157,10 @@ mod tests {
             },
             ..paired()
         };
-        let card = card(view, NOW);
+        let card = card(view, NOW, de());
         assert_eq!(card.status, "awaiting_confirmation");
         assert_eq!(card.code.as_deref(), Some("123456"));
-        assert_eq!(
-            card.compare_hint,
-            Some(show::compare_hint(crate::commands::de()))
-        );
+        assert_eq!(card.compare_hint, Some(show::compare_hint(de())));
         assert!(!card.can_request);
         assert!(card.next_request.is_none());
 
@@ -1080,7 +1169,7 @@ mod tests {
             status: Status::AwaitingReveal,
             ..paired()
         };
-        let waiting = super::card(view, NOW);
+        let waiting = super::card(view, NOW, de());
         assert_eq!(waiting.status, "awaiting_reveal");
         assert_eq!(waiting.code, None);
         assert_eq!(waiting.compare_hint, None);
@@ -1111,6 +1200,7 @@ mod tests {
 
     #[test]
     fn setup_code_errors_are_german() {
+        crate::lang::set_current(Language::De);
         assert!(
             read_setup_code("LZ1-ABC")
                 .unwrap_err()
@@ -1142,7 +1232,7 @@ mod tests {
             &first,
             Some("https://relay.example.org"),
             Some(&token),
-            crate::commands::LANG,
+            Language::De,
             &mut Vec::new(),
         )
         .unwrap();
@@ -1155,7 +1245,7 @@ mod tests {
 
         // Without access token there is nothing to show.
         let second = JsonFile::new(dir.path().join("b.json"));
-        ctx::init(&second, None, None, crate::commands::LANG, &mut Vec::new()).unwrap();
+        ctx::init(&second, None, None, Language::De, &mut Vec::new()).unwrap();
         assert!(
             own_setup_code(&second)
                 .unwrap_err()

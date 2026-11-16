@@ -28,6 +28,8 @@
     "allow-request",
     "allow-respond",
     "allow-remove",
-    "allow-set-rules"
+    "allow-set-rules",
+    "allow-texts",
+    "allow-set-language"
   ]
 }

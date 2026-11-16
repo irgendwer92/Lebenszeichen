@@ -1,5 +1,12 @@
 <!doctype html>
-<html lang="de">
+<!--
+  The visible texts come from the Fluent files (locales/*/lebenszeichen.ftl)
+  through the command `texts`; app.js puts them in at start. What stands here
+  is the English default that shows until then. `data-i18n` sets the text,
+  `data-i18n-aria-label`, `data-i18n-placeholder` and `data-i18n-title` the
+  attribute of that name.
+-->
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -11,19 +18,39 @@
     <header class="top">
       <h1>Lebenszeichen</h1>
       <nav id="actions" class="actions" hidden>
-        <button type="button" class="primary" data-panel="invite" aria-expanded="false">
-          + Einladen
+        <button
+          type="button"
+          class="primary"
+          data-panel="invite"
+          aria-expanded="false"
+          data-i18n="ui-invite"
+        >
+          + Invite
         </button>
-        <button type="button" data-panel="accept" aria-expanded="false">Annehmen</button>
-        <button type="button" data-panel="devices" aria-expanded="false">Geräte</button>
+        <button
+          type="button"
+          data-panel="accept"
+          aria-expanded="false"
+          data-i18n="ui-accept"
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          data-panel="devices"
+          aria-expanded="false"
+          data-i18n="ui-devices"
+        >
+          Devices
+        </button>
         <button
           id="device-toggle"
           type="button"
           class="icon"
           data-panel="device"
           aria-expanded="false"
-          aria-label="Dieses Gerät"
-          hidden
+          aria-label="This device"
+          data-i18n-aria-label="ui-this-device"
         >
           ⚙
         </button>
@@ -33,57 +60,78 @@
     <main>
       <div id="error" class="banner error" role="alert" hidden>
         <p id="error-text"></p>
-        <button id="error-close" type="button" class="icon" aria-label="Meldung schließen">
+        <button
+          id="error-close"
+          type="button"
+          class="icon"
+          aria-label="Dismiss message"
+          data-i18n-aria-label="ui-dismiss"
+        >
           ×
         </button>
       </div>
 
       <section id="setup" class="card setup" hidden>
-        <h2>Gerät einrichten</h2>
+        <h2 data-i18n="ui-setup-title">Set up this device</h2>
         <div id="setup-menu" class="row wrap">
-          <button type="button" class="primary" data-setup="new">Neues Konto</button>
-          <button type="button" data-setup="invitation">Ich habe eine Einladung</button>
-          <button type="button" data-setup="code">Einrichtungscode</button>
-          <button type="button" data-setup="join">Als weiteres Gerät einrichten</button>
+          <button type="button" class="primary" data-setup="new" data-i18n="ui-setup-new">
+            New account
+          </button>
+          <button type="button" data-setup="invitation" data-i18n="ui-setup-invitation">
+            I have an invitation
+          </button>
+          <button type="button" data-setup="code" data-i18n="ui-setup-code">Setup code</button>
+          <button type="button" data-setup="join" data-i18n="ui-setup-join">
+            Set up as another device
+          </button>
         </div>
 
         <div id="setup-new" class="setup-way" hidden>
-          <p class="note">
-            Mit einem Zugangstoken für dein Relay kannst du selbst einladen. Ohne ihn kannst
-            du nur Einladungen mit Gutschein annehmen.
+          <p class="note" data-i18n="ui-setup-new-note">
+            With an access token for your relay you can invite people yourself. Without one you
+            can only accept invitations with a voucher.
           </p>
           <form id="setup-form" class="stack">
             <label>
-              Relay-Adresse
+              <span data-i18n="ui-relay-address">Relay address</span>
               <input name="relay" type="url" placeholder="https://relay.example.org" />
             </label>
             <label>
-              Zugangstoken (optional)
+              <span data-i18n="ui-access-token-optional">Access token (optional)</span>
               <input name="access_token" type="password" autocomplete="off" />
             </label>
-            <button type="submit" class="primary">Gerät anlegen</button>
+            <button type="submit" class="primary" data-i18n="ui-create-device">
+              Create device
+            </button>
           </form>
         </div>
 
         <div id="setup-invitation" class="setup-way" hidden>
-          <p class="note">
-            Du brauchst weder Relay-Adresse noch Zugangstoken. Das Postfach kommt mit dem
-            Gutschein der Einladung.
+          <p class="note" data-i18n="ui-setup-invitation-note">
+            You need neither a relay address nor an access token. The mailbox comes with the
+            voucher of the invitation.
           </p>
-          <button id="setup-invitation-go" type="button" class="primary">
-            Weiter zur Einladung
+          <button
+            id="setup-invitation-go"
+            type="button"
+            class="primary"
+            data-i18n="ui-setup-invitation-go"
+          >
+            Continue to the invitation
           </button>
         </div>
 
         <div id="setup-code" class="setup-way" hidden>
-          <p class="note">
-            Den Einrichtungscode zeigt dir ein Mensch, der ein Relay betreibt oder dort ein
-            Konto hat. Er enthält Relay-Adresse und Zugangstoken.
+          <p class="note" data-i18n="ui-setup-code-note">
+            The setup code is shown to you by someone who runs a relay or has an account there.
+            It contains the relay address and the access token.
           </p>
           <form id="setup-code-form" class="stack">
-            <button id="setup-scan" type="button" hidden>QR-Code scannen</button>
+            <button id="setup-scan" type="button" hidden data-i18n="ui-scan-qr">
+              Scan QR code
+            </button>
             <label>
-              Einrichtungscode
+              <span data-i18n="ui-setup-code">Setup code</span>
               <textarea
                 name="code"
                 class="code"
@@ -92,86 +140,107 @@
                 placeholder="LZS1-…"
               ></textarea>
             </label>
-            <button type="submit" class="primary">Gerät anlegen</button>
+            <button type="submit" class="primary" data-i18n="ui-create-device">
+              Create device
+            </button>
           </form>
         </div>
 
         <div id="setup-join" class="setup-way" hidden>
-          <p class="note">
-            Du hast schon ein Gerät und richtest dieses als weiteres ein. Das Relay muss
-            auch dein vorhandenes Gerät kennen.
+          <p class="note" data-i18n="ui-setup-join-note">
+            You already have a device and are setting this one up as another. The relay must
+            also know your existing device.
           </p>
           <form id="setup-join-form" class="stack">
             <label>
-              Relay-Adresse
+              <span data-i18n="ui-relay-address">Relay address</span>
               <input name="relay" type="url" required placeholder="https://relay.example.org" />
             </label>
             <label>
-              Name dieses Geräts (nur für dich sichtbar)
+              <span data-i18n="ui-device-name">Name of this device (visible only to you)</span>
               <input name="name" required maxlength="32" />
             </label>
-            <button type="submit" class="primary">Weiter</button>
+            <button type="submit" class="primary" data-i18n="ui-next">Next</button>
           </form>
         </div>
       </section>
 
       <section id="join-flow" class="card setup" hidden>
-        <h2>Als weiteres Gerät einrichten</h2>
+        <h2 data-i18n="ui-setup-join">Set up as another device</h2>
         <div id="join-code-box" hidden>
-          <p class="note">
-            Scanne den Code mit einem vorhandenen Gerät (Geräte → Gerät hinzufügen) oder
-            gib ihn dort ein.
+          <p class="note" data-i18n="ui-join-code-note">
+            Scan the code with an existing device (Devices → Add device) or enter it there.
           </p>
           <div id="join-qr" class="qr"></div>
           <textarea id="join-code" class="code" readonly rows="4"></textarea>
           <div class="row">
-            <button id="join-copy" type="button" hidden>Kopieren</button>
-            <button id="join-share" type="button" hidden>Teilen</button>
+            <button id="join-copy" type="button" hidden data-i18n="ui-copy">Copy</button>
+            <button id="join-share" type="button" hidden data-i18n="ui-share">Share</button>
           </div>
         </div>
         <div id="join-check-box" hidden>
           <p class="verification big" id="join-check"></p>
-          <p class="note">Vergleiche ihn mit dem anderen Gerät und bestätige dort.</p>
+          <p class="note" data-i18n="ui-join-check-note">
+            Compare it with the other device and confirm there.
+          </p>
         </div>
         <div id="join-confirm-box" hidden>
-          <p>Prüfcode des Geräteübergangs:</p>
+          <p data-i18n="ui-join-confirm-intro">Check code of the device handover:</p>
           <p class="verification big" id="join-confirm-code"></p>
           <div class="row">
-            <button id="join-match" type="button" class="primary">Stimmt überein</button>
-            <button id="join-mismatch" type="button" class="quiet">Stimmt nicht</button>
+            <button id="join-match" type="button" class="primary" data-i18n="ui-matches">
+              It matches
+            </button>
+            <button id="join-mismatch" type="button" class="quiet" data-i18n="ui-mismatch">
+              It does not match
+            </button>
           </div>
         </div>
         <p id="join-progress" class="note"></p>
         <div id="join-failed" hidden>
           <p id="join-failed-text" class="banner error"></p>
-          <button id="join-restart" type="button" class="primary">Neu beginnen</button>
+          <button id="join-restart" type="button" class="primary" data-i18n="ui-restart">
+            Start over
+          </button>
         </div>
-        <button id="join-cancel" type="button" class="quiet">Abbrechen</button>
+        <button id="join-cancel" type="button" class="quiet" data-i18n="ui-cancel">
+          Cancel
+        </button>
       </section>
 
       <div id="app" hidden>
         <section id="panel-invite" class="card panel" hidden>
           <div class="panel-head">
-            <h2>Einladen</h2>
-            <button type="button" class="icon" data-close="invite" aria-label="Schließen">
+            <h2 data-i18n="ui-invite-title">Invite</h2>
+            <button
+              type="button"
+              class="icon"
+              data-close="invite"
+              aria-label="Close"
+              data-i18n-aria-label="ui-close"
+            >
               ×
             </button>
           </div>
           <form id="invite-form" class="stack">
             <label>
-              Name des Kontakts (nur für dich sichtbar)
+              <span data-i18n="ui-contact-name">Name of the contact (visible only to you)</span>
               <input name="name" required />
             </label>
             <label class="check">
               <input name="voucher" type="checkbox" />
-              Mit Gutschein: der Kontakt darf ein Postfach auf deinem Relay anlegen
+              <span data-i18n="ui-voucher">
+                With voucher: the contact may create a mailbox on your relay
+              </span>
             </label>
-            <button type="submit" class="primary">Einladung erzeugen</button>
+            <button type="submit" class="primary" data-i18n="ui-invite-create">
+              Create invitation
+            </button>
           </form>
           <div id="invite-result" class="result" hidden>
-            <p class="note">
-              Den QR-Code scannen lassen oder den Code darunter weitergeben. Er gilt
-              10 Minuten und nur einmal.
+            <p class="note" data-i18n="ui-invite-result-note">
+              Let them scan the QR code or pass on the code below. It is valid for 10 minutes
+              and only once.
             </p>
             <div id="invite-qr" class="qr"></div>
             <textarea id="invite-code" class="code" readonly rows="4"></textarea>
@@ -180,18 +249,24 @@
 
         <section id="panel-accept" class="card panel" hidden>
           <div class="panel-head">
-            <h2>Einladung annehmen</h2>
-            <button type="button" class="icon" data-close="accept" aria-label="Schließen">
+            <h2 data-i18n="ui-accept-title">Accept invitation</h2>
+            <button
+              type="button"
+              class="icon"
+              data-close="accept"
+              aria-label="Close"
+              data-i18n-aria-label="ui-close"
+            >
               ×
             </button>
           </div>
           <form id="accept-form" class="stack">
             <label>
-              Name des Kontakts (nur für dich sichtbar)
+              <span data-i18n="ui-contact-name">Name of the contact (visible only to you)</span>
               <input name="name" required />
             </label>
             <label>
-              Einladungscode
+              <span data-i18n="ui-invitation-code">Invitation code</span>
               <textarea
                 name="code"
                 class="code"
@@ -200,30 +275,38 @@
                 placeholder="LZ2-…"
               ></textarea>
             </label>
-            <button id="scan" type="button" hidden>QR-Code scannen</button>
-            <button type="submit" class="primary">Annehmen</button>
+            <button id="scan" type="button" hidden data-i18n="ui-scan-qr">Scan QR code</button>
+            <button type="submit" class="primary" data-i18n="ui-accept">Accept</button>
           </form>
           <p id="accept-result" class="banner success" hidden></p>
         </section>
 
         <section id="panel-devices" class="card panel" hidden>
           <div class="panel-head">
-            <h2>Geräte</h2>
-            <button type="button" class="icon" data-close="devices" aria-label="Schließen">
+            <h2 data-i18n="ui-devices">Devices</h2>
+            <button
+              type="button"
+              class="icon"
+              data-close="devices"
+              aria-label="Close"
+              data-i18n-aria-label="ui-close"
+            >
               ×
             </button>
           </div>
           <ul id="devices" class="cards"></ul>
-          <p class="note">
-            Entfernen schützt nicht vor einem verlorenen Gerät; dann alle Kontakte neu
-            koppeln.
+          <p class="note" data-i18n="ui-devices-note">
+            Removing a device does not protect you if a device is lost; in that case pair all
+            contacts again.
           </p>
 
-          <h3>+ Gerät hinzufügen</h3>
+          <h3 data-i18n="ui-add-device">+ Add device</h3>
           <form id="add-device-form" class="stack">
-            <button id="add-scan" type="button" hidden>Gerätecode scannen</button>
+            <button id="add-scan" type="button" hidden data-i18n="ui-scan-device-code">
+              Scan device code
+            </button>
             <label>
-              Gerätecode des neuen Geräts
+              <span data-i18n="ui-new-device-code">Device code of the new device</span>
               <textarea
                 name="code"
                 class="code"
@@ -233,39 +316,47 @@
               ></textarea>
             </label>
             <label>
-              Name dieses Geräts (nur für dich sichtbar)
+              <span data-i18n="ui-device-name">Name of this device (visible only to you)</span>
               <input name="name" required maxlength="32" />
             </label>
-            <button type="submit" class="primary">Hinzufügen</button>
+            <button type="submit" class="primary" data-i18n="ui-add">Add</button>
           </form>
           <div id="add-device-flow" hidden>
             <div id="add-confirm-box" hidden>
-              <p>Prüfcode:</p>
+              <p data-i18n="ui-check-code">Check code:</p>
               <p class="verification big" id="add-confirm-code"></p>
-              <p class="note">Vergleiche ihn mit dem Prüfcode auf dem neuen Gerät.</p>
+              <p class="note" data-i18n="ui-add-confirm-note">
+                Compare it with the check code on the new device.
+              </p>
               <div class="row">
-                <button id="add-match" type="button" class="primary">Stimmt überein</button>
-                <button id="add-mismatch" type="button" class="quiet">Stimmt nicht</button>
+                <button id="add-match" type="button" class="primary" data-i18n="ui-matches">
+                  It matches
+                </button>
+                <button id="add-mismatch" type="button" class="quiet" data-i18n="ui-mismatch">
+                  It does not match
+                </button>
               </div>
             </div>
             <div id="add-wait" hidden>
-              <p>Prüfcode der Übergabe:</p>
+              <p data-i18n="ui-handover-code">Check code of the handover:</p>
               <p class="verification big" id="add-handover-code"></p>
-              <p class="note">
-                Das neue Gerät zeigt ihn ebenfalls. Bestätige dort nur, wenn beide übereinstimmen.
+              <p class="note" data-i18n="ui-add-wait-note">
+                The new device shows it as well. Confirm there only if both match.
               </p>
-              <p class="note">Warte auf das neue Gerät …</p>
+              <p class="note" data-i18n="ui-add-waiting">Waiting for the new device …</p>
             </div>
             <p id="add-progress" class="note"></p>
-            <button id="add-cancel" type="button" class="quiet">Abbrechen</button>
+            <button id="add-cancel" type="button" class="quiet" data-i18n="ui-cancel">
+              Cancel
+            </button>
           </div>
           <p id="add-result" class="banner success" hidden></p>
 
           <details id="setup-code-details" class="history" hidden>
-            <summary>Einrichtungscode zeigen</summary>
-            <p class="banner error">
-              Gib diesen Code nur Menschen, denen du dein Relay öffnen willst. Nur direkt
-              zeigen, nicht verschicken.
+            <summary data-i18n="ui-show-setup-code">Show setup code</summary>
+            <p class="banner error" data-i18n="ui-setup-code-warning">
+              Give this code only to people you want to open your relay to. Show it in person,
+              do not send it.
             </p>
             <div id="setup-code-qr" class="qr"></div>
             <textarea id="setup-code-text" class="code" readonly rows="4"></textarea>
@@ -274,51 +365,74 @@
 
         <section id="panel-device" class="card panel" hidden>
           <div class="panel-head">
-            <h2>Dieses Gerät</h2>
-            <button type="button" class="icon" data-close="device" aria-label="Schließen">
+            <h2 data-i18n="ui-this-device">This device</h2>
+            <button
+              type="button"
+              class="icon"
+              data-close="device"
+              aria-label="Close"
+              data-i18n-aria-label="ui-close"
+            >
               ×
             </button>
           </div>
-          <p class="note">
-            Damit Anfragen auch bei geschlossener App ankommen und dich erreichen, braucht
-            die App ein paar Einstellungen von Android.
-          </p>
-          <ul id="device-checks" class="checks"></ul>
-          <p class="note">
-            Auch die Verteiler-App (ntfy) muss von der Akku-Optimierung ausgenommen sein,
-            sonst kommen Wecksignale im Ruhezustand verspätet an.
-          </p>
-          <p class="note">
-            Auf dem Sperrbildschirm steht nur „Lebenszeichen?“, der Name erst nach dem
-            Entsperren. Für die Benachrichtigung gilt das nur, wenn Android auf dem
-            Sperrbildschirm keine vertraulichen Inhalte zeigt (Einstellungen →
-            Benachrichtigungen → Sperrbildschirm).
-          </p>
-          <details class="history">
-            <summary>Protokoll</summary>
-            <button id="device-log-clear" type="button" class="quiet">Leeren</button>
-            <ol id="device-log" class="log"></ol>
-          </details>
+          <div class="stack">
+            <label>
+              <span data-i18n="ui-language">Language</span>
+              <select id="language" name="language">
+                <option value="system" data-i18n="ui-language-system">System</option>
+                <option value="en">English</option>
+                <option value="de">Deutsch</option>
+              </select>
+            </label>
+          </div>
+          <div id="device-android" hidden>
+            <p class="note" data-i18n="ui-device-note">
+              For requests to reach you even when the app is closed, the app needs a few
+              settings from Android.
+            </p>
+            <ul id="device-checks" class="checks"></ul>
+            <p class="note" data-i18n="ui-device-ntfy-note">
+              The distributor app (ntfy) must also be exempt from battery optimization,
+              otherwise wake signals arrive late while the device is idle.
+            </p>
+            <p class="note" data-i18n="ui-device-lockscreen-note">
+              The lock screen shows only “Sign of life?”, the name only after unlocking. For
+              the notification this holds only if Android hides sensitive content on the lock
+              screen (Settings → Notifications → Lock screen).
+            </p>
+            <details class="history">
+              <summary data-i18n="ui-log">Log</summary>
+              <button id="device-log-clear" type="button" class="quiet" data-i18n="ui-clear">
+                Clear
+              </button>
+              <ol id="device-log" class="log"></ol>
+            </details>
+          </div>
         </section>
 
         <section class="contacts">
-          <h2 class="visually-hidden">Kontakte</h2>
+          <h2 class="visually-hidden" data-i18n="ui-contacts">Contacts</h2>
           <ul id="contacts" class="cards"></ul>
           <div id="no-contacts" class="empty" hidden>
-            <p>Noch keine Kontakte.</p>
-            <p class="note">Lade jemanden ein oder nimm eine Einladung an.</p>
-            <button type="button" class="primary" data-panel="invite">+ Einladen</button>
+            <p data-i18n="ui-no-contacts">No contacts yet.</p>
+            <p class="note" data-i18n="ui-no-contacts-note">
+              Invite someone or accept an invitation.
+            </p>
+            <button type="button" class="primary" data-panel="invite" data-i18n="ui-invite">
+              + Invite
+            </button>
           </div>
         </section>
 
         <section id="invitations-section" class="invitations" hidden>
-          <h2>Offene Einladungen</h2>
+          <h2 data-i18n="ui-open-invitations">Open invitations</h2>
           <ul id="invitations" class="cards"></ul>
         </section>
 
         <details class="history">
-          <summary>Verlauf</summary>
-          <button id="sync" type="button">Jetzt abrufen</button>
+          <summary data-i18n="ui-history">History</summary>
+          <button id="sync" type="button" data-i18n="ui-sync">Fetch now</button>
           <ol id="log" class="log"></ol>
           <p id="state-path" class="note"></p>
         </details>

@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use lz_client::ctx::{Ctx, Status};
+use lz_client::i18n::Arg;
 use lz_client::relay::Http;
 use serde::Serialize;
 
@@ -60,7 +61,7 @@ impl Outcome {
 
 /// Text of the notification and the full-screen display.
 pub fn title(name: &str) -> String {
-    format!("{name} fragt nach einem Lebenszeichen")
+    crate::lang::texts().text("app-alert-title", &[("name", Arg::Text(name))])
 }
 
 /// A command context whose text output is thrown away; the Kotlin layer
@@ -165,6 +166,7 @@ pub fn set_push_url(path: &Path, url: Option<&str>) -> Outcome {
 #[cfg(test)]
 mod tests {
     use lz_client::ctx;
+    use lz_client::i18n::Language;
     use lz_core::store::JsonFile;
 
     use super::{Outcome, fetch, open_requests, respond, set_push_url, title};
@@ -176,7 +178,7 @@ mod tests {
             &JsonFile::new(&path),
             None,
             None,
-            crate::commands::LANG,
+            Language::De,
             &mut std::io::sink(),
         )
         .unwrap();
@@ -185,6 +187,7 @@ mod tests {
 
     #[test]
     fn no_device_is_an_error_not_a_crash() {
+        crate::lang::set_current(Language::De);
         let dir = tempfile::tempdir().unwrap();
         let requests = open_requests(&dir.path().join("missing.json"));
         assert!(requests.requests.is_empty());
@@ -220,6 +223,7 @@ mod tests {
 
     #[test]
     fn title_names_the_contact() {
+        crate::lang::set_current(Language::De);
         assert_eq!(title("Anna"), "Anna fragt nach einem Lebenszeichen");
     }
 }

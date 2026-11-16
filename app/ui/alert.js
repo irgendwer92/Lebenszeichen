@@ -2,7 +2,9 @@
 // keyboard focus; a click anywhere answers, keys never do. Closing the
 // window answers too; that is handled in src-tauri/src/desktop/alert.rs.
 //
-// Texts go in through `textContent`, never as HTML.
+// Texts go in through `textContent`, never as HTML. They come from Fluent
+// (app-alert-* in locales/*/lebenszeichen.ftl), formatted in Rust by the
+// command `alert_text`, in the language in effect.
 
 "use strict";
 
@@ -14,6 +16,7 @@ let sent = false;
 tauri.core
   .invoke("alert_text")
   .then((text) => {
+    document.documentElement.lang = text.lang;
     $("title").textContent = text.title;
     $("hint").textContent = text.hint;
   })
