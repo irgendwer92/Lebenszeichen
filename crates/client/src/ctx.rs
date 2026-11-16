@@ -8,7 +8,6 @@
 
 use std::fmt;
 use std::io::{self, Write};
-use std::path::Path;
 #[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]
@@ -1177,7 +1176,9 @@ pub fn default_state_path(t: Texts) -> Result<std::path::PathBuf> {
     #[cfg(not(windows))]
     let data = var("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
-        .or_else(|| var("HOME").map(|home| Path::new(&home).join(".local").join("share")));
+        .or_else(|| {
+            var("HOME").map(|home| std::path::PathBuf::from(home).join(".local").join("share"))
+        });
     let data = data.ok_or_else(|| fail!(t, "error-no-data-dir"))?;
     Ok(data.join("lebenszeichen").join("device.json"))
 }
