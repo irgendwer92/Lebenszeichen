@@ -107,13 +107,13 @@ object CoreBridge {
 
     /** Turns every way of failing into an answer with `error`, in the chosen language. */
     private fun call(context: Context, native: () -> String?): JSONObject {
-        loadError?.let { return failure(Texts.get(context, R.string.core_not_loaded, it)) }
+        loadError?.let { return failure(Texts.get(context, R.string.lz_core_not_loaded, it)) }
         return try {
-            native()?.let { JSONObject(it) } ?: failure(Texts.get(context, R.string.core_empty))
+            native()?.let { JSONObject(it) } ?: failure(Texts.get(context, R.string.lz_core_empty))
         } catch (e: UnsatisfiedLinkError) {
-            failure(Texts.get(context, R.string.core_unreachable, e.message ?: ""))
+            failure(Texts.get(context, R.string.lz_core_unreachable, e.message ?: ""))
         } catch (e: org.json.JSONException) {
-            failure(Texts.get(context, R.string.core_bad_answer, e.message ?: ""))
+            failure(Texts.get(context, R.string.lz_core_bad_answer, e.message ?: ""))
         }
     }
 

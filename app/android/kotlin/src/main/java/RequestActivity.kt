@@ -63,7 +63,7 @@ class RequestActivity : ComponentActivity() {
 
         name = intent.getStringExtra(RequestPresenter.EXTRA_NAME) ?: ""
         since = intent.getLongExtra(RequestPresenter.EXTRA_SINCE, -1)
-        titleText = intent.getStringExtra(RequestPresenter.EXTRA_TITLE) ?: getString(R.string.neutral_title)
+        titleText = intent.getStringExtra(RequestPresenter.EXTRA_TITLE) ?: getString(R.string.lz_neutral_title)
         if (name.isEmpty() || since < 0 || Store.isAnswered(this, key)) {
             finish()
             return
@@ -85,7 +85,7 @@ class RequestActivity : ComponentActivity() {
         )
         val hint =
             TextView(this).apply {
-                setText(R.string.fullscreen_hint)
+                setText(R.string.lz_fullscreen_hint)
                 textSize = 18f
                 gravity = Gravity.CENTER
                 setPadding(0, padding / 2, 0, 0)
@@ -117,7 +117,7 @@ class RequestActivity : ComponentActivity() {
     /** The name of the contact only when the device is unlocked. */
     private fun showTitle() {
         val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-        titleView?.text = if (keyguard.isKeyguardLocked) getString(R.string.neutral_title) else titleText
+        titleView?.text = if (keyguard.isKeyguardLocked) getString(R.string.lz_neutral_title) else titleText
     }
 
     override fun onDestroy() {

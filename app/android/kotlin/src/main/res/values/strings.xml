@@ -2,34 +2,34 @@
 <!-- English is the default and the fallback; German is in values-de. Keep both files in step (app/scripts/check-android-strings.sh). -->
 <resources>
     <!-- Notification channel -->
-    <string name="notification_channel_name">Requests</string>
-    <string name="notification_channel_description">Requests for a sign of life. Silent by default, no vibration.</string>
+    <string name="lz_notification_channel_name">Requests</string>
+    <string name="lz_notification_channel_description">Requests for a sign of life. Silent by default, no vibration.</string>
 
     <!-- Notification and full-screen display. The neutral title is all the lock screen shows. -->
-    <string name="neutral_title">Lebenszeichen?</string>
-    <string name="notification_hint">Tap or swipe away to send your sign of life.</string>
-    <string name="fullscreen_hint">Tap or close to send your sign of life.</string>
+    <string name="lz_neutral_title">Lebenszeichen?</string>
+    <string name="lz_notification_hint">Tap or swipe away to send your sign of life.</string>
+    <string name="lz_fullscreen_hint">Tap or close to send your sign of life.</string>
 
     <!-- QR scanner -->
-    <string name="scan_hint">Hold the QR code in view</string>
-    <string name="scan_cancel">Cancel</string>
-    <string name="scan_error_no_camera">Without the camera, please paste the code.</string>
-    <string name="scan_error_camera_start">The camera could not be started.</string>
+    <string name="lz_scan_hint">Hold the QR code in view</string>
+    <string name="lz_scan_cancel">Cancel</string>
+    <string name="lz_scan_error_no_camera">Without the camera, please paste the code.</string>
+    <string name="lz_scan_error_camera_start">The camera could not be started.</string>
 
     <!-- Errors of the plugin commands -->
-    <string name="error_no_distributor">No UnifiedPush distributor found. Please install the ntfy app and open it once.</string>
-    <string name="error_register_failed">Registration failed: %1$s</string>
-    <string name="error_unregister_failed">Unregistering failed: %1$s</string>
-    <string name="error_open_settings">The settings could not be opened.</string>
-    <string name="share_chooser_title">Share</string>
-    <string name="error_share_failed">Sharing could not be opened.</string>
+    <string name="lz_error_no_distributor">No UnifiedPush distributor found. Please install the ntfy app and open it once.</string>
+    <string name="lz_error_register_failed">Registration failed: %1$s</string>
+    <string name="lz_error_unregister_failed">Unregistering failed: %1$s</string>
+    <string name="lz_error_open_settings">The settings could not be opened.</string>
+    <string name="lz_share_chooser_title">Share</string>
+    <string name="lz_error_share_failed">Sharing could not be opened.</string>
 
     <!-- Errors of the Rust core bridge -->
-    <string name="core_not_loaded">Rust core not loaded: %1$s</string>
-    <string name="core_empty">Rust core returned nothing</string>
-    <string name="core_unreachable">Rust core not reachable: %1$s</string>
-    <string name="core_bad_answer">Answer of the Rust core not readable: %1$s</string>
+    <string name="lz_core_not_loaded">Rust core not loaded: %1$s</string>
+    <string name="lz_core_empty">Rust core returned nothing</string>
+    <string name="lz_core_unreachable">Rust core not reachable: %1$s</string>
+    <string name="lz_core_bad_answer">Answer of the Rust core not readable: %1$s</string>
 
     <!-- Event log -->
-    <string name="log_unreadable">Log not readable: %1$s</string>
+    <string name="lz_log_unreadable">Log not readable: %1$s</string>
 </resources>

@@ -114,7 +114,7 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
             }
         if (chosen == null) {
             EventLog.add(activity, Requests.NO_REQUEST, "registration-failed", "no distributor installed")
-            invoke.reject(Texts.get(activity, R.string.error_no_distributor))
+            invoke.reject(Texts.get(activity, R.string.lz_error_no_distributor))
             return
         }
         try {
@@ -124,7 +124,7 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
             invoke.resolve()
         } catch (e: Exception) {
             EventLog.add(activity, Requests.NO_REQUEST, "registration-failed", e.toString())
-            invoke.reject(Texts.get(activity, R.string.error_register_failed, e.toString()))
+            invoke.reject(Texts.get(activity, R.string.lz_error_register_failed, e.toString()))
         }
     }
 
@@ -136,7 +136,7 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
             EventLog.add(activity, Requests.NO_REQUEST, "unregister", "unregistered by the app")
             invoke.resolve()
         } catch (e: Exception) {
-            invoke.reject(Texts.get(activity, R.string.error_unregister_failed, e.toString()))
+            invoke.reject(Texts.get(activity, R.string.lz_error_unregister_failed, e.toString()))
         }
     }
 
@@ -182,7 +182,7 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
                 activity.startActivity(appDetails)
                 invoke.resolve()
             } catch (e2: ActivityNotFoundException) {
-                invoke.reject(Texts.get(activity, R.string.error_open_settings))
+                invoke.reject(Texts.get(activity, R.string.lz_error_open_settings))
             }
         }
     }
@@ -242,15 +242,15 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
                 .setType("text/plain")
                 .putExtra(Intent.EXTRA_TEXT, text)
         try {
-            val chooser = Intent.createChooser(send, Texts.get(activity, R.string.share_chooser_title))
+            val chooser = Intent.createChooser(send, Texts.get(activity, R.string.lz_share_chooser_title))
             if (activity.isFinishing) {
-                invoke.reject(Texts.get(activity, R.string.error_share_failed))
+                invoke.reject(Texts.get(activity, R.string.lz_error_share_failed))
                 return
             }
             activity.startActivity(chooser)
             invoke.resolve()
         } catch (e: ActivityNotFoundException) {
-            invoke.reject(Texts.get(activity, R.string.error_share_failed))
+            invoke.reject(Texts.get(activity, R.string.lz_error_share_failed))
         }
     }
 

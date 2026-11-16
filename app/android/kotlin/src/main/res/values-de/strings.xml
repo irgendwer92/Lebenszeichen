@@ -1,34 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Notification channel -->
-    <string name="notification_channel_name">Anfragen</string>
-    <string name="notification_channel_description">Anfragen nach einem Lebenszeichen. Standardmäßig ohne Ton und Vibration.</string>
+    <string name="lz_notification_channel_name">Anfragen</string>
+    <string name="lz_notification_channel_description">Anfragen nach einem Lebenszeichen. Standardmäßig ohne Ton und Vibration.</string>
 
     <!-- Notification and full-screen display. The neutral title is all the lock screen shows. -->
-    <string name="neutral_title">Lebenszeichen?</string>
-    <string name="notification_hint">Antippen oder Wegwischen sendet dein Lebenszeichen.</string>
-    <string name="fullscreen_hint">Antippen oder Schließen sendet dein Lebenszeichen.</string>
+    <string name="lz_neutral_title">Lebenszeichen?</string>
+    <string name="lz_notification_hint">Antippen oder Wegwischen sendet dein Lebenszeichen.</string>
+    <string name="lz_fullscreen_hint">Antippen oder Schließen sendet dein Lebenszeichen.</string>
 
     <!-- QR scanner -->
-    <string name="scan_hint">Halte den QR-Code ins Bild</string>
-    <string name="scan_cancel">Abbrechen</string>
-    <string name="scan_error_no_camera">Ohne Kamera bitte den Code einfügen.</string>
-    <string name="scan_error_camera_start">Die Kamera ließ sich nicht starten.</string>
+    <string name="lz_scan_hint">Halte den QR-Code ins Bild</string>
+    <string name="lz_scan_cancel">Abbrechen</string>
+    <string name="lz_scan_error_no_camera">Ohne Kamera bitte den Code einfügen.</string>
+    <string name="lz_scan_error_camera_start">Die Kamera ließ sich nicht starten.</string>
 
     <!-- Errors of the plugin commands -->
-    <string name="error_no_distributor">Kein UnifiedPush-Verteiler gefunden. Bitte die ntfy-App installieren und einmal öffnen.</string>
-    <string name="error_register_failed">Registrierung fehlgeschlagen: %1$s</string>
-    <string name="error_unregister_failed">Abmelden fehlgeschlagen: %1$s</string>
-    <string name="error_open_settings">Die Einstellungen ließen sich nicht öffnen.</string>
-    <string name="share_chooser_title">Teilen</string>
-    <string name="error_share_failed">Das Teilen ließ sich nicht öffnen.</string>
+    <string name="lz_error_no_distributor">Kein UnifiedPush-Verteiler gefunden. Bitte die ntfy-App installieren und einmal öffnen.</string>
+    <string name="lz_error_register_failed">Registrierung fehlgeschlagen: %1$s</string>
+    <string name="lz_error_unregister_failed">Abmelden fehlgeschlagen: %1$s</string>
+    <string name="lz_error_open_settings">Die Einstellungen ließen sich nicht öffnen.</string>
+    <string name="lz_share_chooser_title">Teilen</string>
+    <string name="lz_error_share_failed">Das Teilen ließ sich nicht öffnen.</string>
 
     <!-- Errors of the Rust core bridge -->
-    <string name="core_not_loaded">Rust-Kern nicht geladen: %1$s</string>
-    <string name="core_empty">Rust-Kern lieferte nichts</string>
-    <string name="core_unreachable">Rust-Kern nicht erreichbar: %1$s</string>
-    <string name="core_bad_answer">Antwort des Rust-Kerns nicht lesbar: %1$s</string>
+    <string name="lz_core_not_loaded">Rust-Kern nicht geladen: %1$s</string>
+    <string name="lz_core_empty">Rust-Kern lieferte nichts</string>
+    <string name="lz_core_unreachable">Rust-Kern nicht erreichbar: %1$s</string>
+    <string name="lz_core_bad_answer">Antwort des Rust-Kerns nicht lesbar: %1$s</string>
 
     <!-- Event log -->
-    <string name="log_unreadable">Protokoll nicht lesbar: %1$s</string>
+    <string name="lz_log_unreadable">Protokoll nicht lesbar: %1$s</string>
 </resources>

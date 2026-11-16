@@ -45,7 +45,7 @@ class ScanActivity : ComponentActivity() {
             if (granted) {
                 startCamera()
             } else {
-                finishOnce { setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, getString(R.string.scan_error_no_camera))) }
+                finishOnce { setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, getString(R.string.lz_scan_error_no_camera))) }
             }
         }
 
@@ -66,7 +66,7 @@ class ScanActivity : ComponentActivity() {
         previewView = PreviewView(this)
         val hint =
             TextView(this).apply {
-                setText(R.string.scan_hint)
+                setText(R.string.lz_scan_hint)
                 textSize = 18f
                 gravity = Gravity.CENTER
                 setTextColor(0xFFFFFFFF.toInt())
@@ -75,7 +75,7 @@ class ScanActivity : ComponentActivity() {
             }
         val cancel =
             Button(this).apply {
-                setText(R.string.scan_cancel)
+                setText(R.string.lz_scan_cancel)
                 setOnClickListener { cancelScan() }
             }
         val overlay =
@@ -123,7 +123,7 @@ class ScanActivity : ComponentActivity() {
                         future.get()
                     } catch (e: Exception) {
                         finishOnce {
-                            setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, getString(R.string.scan_error_camera_start)))
+                            setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, getString(R.string.lz_scan_error_camera_start)))
                         }
                         return@addListener
                     }
@@ -140,7 +140,7 @@ class ScanActivity : ComponentActivity() {
                     provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
                 } catch (e: Exception) {
                     finishOnce {
-                        setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, getString(R.string.scan_error_camera_start)))
+                        setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, getString(R.string.lz_scan_error_camera_start)))
                     }
                 }
             },

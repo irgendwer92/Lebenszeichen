@@ -57,10 +57,10 @@ object RequestPresenter {
         val channel =
             NotificationChannel(
                 CHANNEL_ID,
-                texts.getString(R.string.notification_channel_name),
+                texts.getString(R.string.lz_notification_channel_name),
                 NotificationManager.IMPORTANCE_HIGH,
             ).apply {
-                description = texts.getString(R.string.notification_channel_description)
+                description = texts.getString(R.string.lz_notification_channel_description)
                 setSound(null, null)
                 enableVibration(false)
                 enableLights(false)
@@ -117,7 +117,7 @@ object RequestPresenter {
             NotificationCompat.Builder(app, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_lz_request)
                 .setContentTitle(request.title)
-                .setContentText(texts.getString(R.string.notification_hint))
+                .setContentText(texts.getString(R.string.lz_notification_hint))
                 .addExtras(android.os.Bundle().apply { putString(EXTRA_KEY, key) })
                 // A reminder is held back by "do not disturb" unless the user allows reminders.
                 .setCategory(NotificationCompat.CATEGORY_REMINDER)
@@ -132,8 +132,8 @@ object RequestPresenter {
                 .setPublicVersion(
                     NotificationCompat.Builder(app, CHANNEL_ID)
                         .setSmallIcon(R.drawable.ic_lz_request)
-                        .setContentTitle(texts.getString(R.string.neutral_title))
-                        .setContentText(texts.getString(R.string.notification_hint))
+                        .setContentTitle(texts.getString(R.string.lz_neutral_title))
+                        .setContentText(texts.getString(R.string.lz_notification_hint))
                         .setCategory(NotificationCompat.CATEGORY_REMINDER)
                         .build(),
                 )
