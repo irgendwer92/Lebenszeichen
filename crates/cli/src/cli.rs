@@ -132,6 +132,9 @@ enum Command {
         /// Name des Kontakts
         name: String,
     },
+    /// Eigene Geräte: hinzufügen, auflisten, entfernen
+    #[command(subcommand)]
+    Device(DeviceCommand),
     /// Trägt die Push-Adresse (UnifiedPush) ein, über die das Relay dieses Gerät weckt
     Push {
         /// Push-Adresse https://…
@@ -143,10 +146,55 @@ enum Command {
     },
 }
 
-/// Parses the arguments, with German headings in the help of subcommands.
-fn parse() -> Args {
-    let command = Args::command().mut_subcommands(|sub| {
-        sub.help_template(HELP_TEMPLATE).mut_args(|arg| {
+#[derive(Subcommand)]
+enum DeviceCommand {
+    /// Richtet dieses Gerät als weiteres Gerät ein: zeigt einen Gerätecode für ein vorhandenes Gerät
+    Join {
+        /// Relay, auf dem das vorhandene Gerät ein Konto oder Postfach hat
+        #[arg(long, value_name = "URL")]
+        relay: String,
+        /// Name dieses Geräts, etwa „Laptop“
+        #[arg(long, value_name = "NAME")]
+        name: String,
+    },
+    /// Fügt das Gerät hinzu, das den Gerätecode zeigt, und übergibt ihm alle Kontakte
+    Add {
+        /// Gerätecode LZD1-…
+        code: String,
+        /// Name dieses Geräts, wie die anderen Geräte es zeigen, etwa „Handy“
+        #[arg(long, value_name = "NAME")]
+        name: String,
+    },
+    /// Listet die eigenen Geräte
+    List,
+    /// Entfernt ein anderes eigenes Gerät
+    Remove {
+        /// Name des Geräts
+        name: String,
+    },
+}
+
+/// Asks on the terminal whether a check code matches.
+struct Terminal;
+
+impl lz_client::devices::Dialog for Terminal {
+    async fn confirm(&mut self, _check: lz_client::devices::Check, _code: &str) -> bool {
+        print!("Stimmt der Code überein? [j/N] ");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let mut answer = String::new();
+        if std::io::stdin().read_line(&mut answer).is_err() {
+            return false;
+        }
+        matches!(answer.trim().to_lowercase().as_str(), "j" | "ja")
+    }
+}
+
+/// German headings in the help of a command and its subcommands.
+fn german(command: clap::Command) -> clap::Command {
+    command
+        .help_template(HELP_TEMPLATE)
+        .subcommand_help_heading("Befehle")
+        .mut_args(|arg| {
             let heading = if arg.is_positional() {
                 "Argumente"
             } else {
@@ -154,7 +202,12 @@ fn parse() -> Args {
             };
             arg.help_heading(heading)
         })
-    });
+        .mut_subcommands(german)
+}
+
+/// Parses the arguments, with German headings in the help of subcommands.
+fn parse() -> Args {
+    let command = Args::command().mut_subcommands(german);
     Args::from_arg_matches(&command.get_matches()).unwrap_or_else(|error| error.exit())
 }
 
@@ -211,5 +264,13 @@ pub async fn run() -> Result<()> {
         } => ctx.rules(&name, interval_min, expiry_min, weekly).await,
         Command::Remove { name } => ctx.remove(&name).await,
         Command::Push { url, .. } => ctx.set_push_url(url.as_deref()).await,
+        Command::Device(DeviceCommand::Join { relay, name }) => {
+            ctx.join_device(&relay, &name, None, &mut Terminal).await
+        }
+        Command::Device(DeviceCommand::Add { code, name }) => {
+            ctx.add_device(&code, &name, &mut Terminal).await
+        }
+        Command::Device(DeviceCommand::List) => ctx.list_devices(),
+        Command::Device(DeviceCommand::Remove { name }) => ctx.remove_device(&name).await,
     }
 }

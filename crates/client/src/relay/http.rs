@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use lz_core::wire::{MailboxId, RelayUrl, Token};
+use lz_core::wire::{Hash, MailboxId, RelayUrl, Token};
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use rustls::ClientConfig;
 use rustls_platform_verifier::BuilderVerifierExt;
@@ -17,8 +17,14 @@ use tokio_tungstenite::Connector;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::{
-    Connection, Delivery, ReaderId, Relay, RelayError, ServerFrame, b64, from_b64, token_hash,
+    Connection, Delivery, ReaderId, Relay, RelayError, ServerFrame, b64, from_b64, hex, token_hash,
 };
+
+/// Header with the hash of the fetch token of a handover slot.
+const FETCH_HASH: &str = "Lz-Fetch-Hash";
+
+/// Header with the hash of the reply token; reserves the reveal slot.
+const REPLY_HASH: &str = "Lz-Reply-Hash";
 
 /// Time limit for a single HTTP call.
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -108,8 +114,11 @@ async fn send(request: RequestBuilder, expected: StatusCode) -> Result<Response,
         .await
         .map(|body| body.error)
         .unwrap_or_default();
-    if status == StatusCode::NOT_FOUND && code == "unknown_mailbox" {
-        return Err(RelayError::UnknownMailbox);
+    match (status, code.as_str()) {
+        (StatusCode::NOT_FOUND, "unknown_mailbox") => return Err(RelayError::UnknownMailbox),
+        (StatusCode::NOT_FOUND, "unknown_handover") => return Err(RelayError::UnknownHandover),
+        (StatusCode::CONFLICT, "handover_exists") => return Err(RelayError::HandoverExists),
+        _ => {}
     }
     Err(RelayError::Refused {
         status: status.as_u16(),
@@ -207,6 +216,73 @@ impl Relay for Http {
             .bearer_auth(b64(read_token))
             .json(&ReaderBody { push_url });
         send(request, StatusCode::NO_CONTENT).await.map(drop)
+    }
+
+    async fn delete_reader(
+        &self,
+        relay: &RelayUrl,
+        mailbox: &MailboxId,
+        read_token: &Token,
+        reader: &ReaderId,
+    ) -> Result<(), RelayError> {
+        let path = format!("mailboxes/{}/readers/{}", b64(mailbox), b64(reader));
+        let request = self
+            .call(Method::DELETE, relay, &path)
+            .bearer_auth(b64(read_token));
+        send(request, StatusCode::NO_CONTENT).await.map(drop)
+    }
+
+    async fn put_slot(
+        &self,
+        relay: &RelayUrl,
+        slot: &Hash,
+        authorisation: &Token,
+        fetch_hash: &Hash,
+        reply_hash: Option<&Hash>,
+        data: &[u8],
+    ) -> Result<(), RelayError> {
+        let mut request = self
+            .call(Method::PUT, relay, &format!("handovers/{}", b64(slot)))
+            .bearer_auth(b64(authorisation))
+            .header(FETCH_HASH, hex(fetch_hash))
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(data.to_vec());
+        if let Some(reply_hash) = reply_hash {
+            request = request.header(REPLY_HASH, hex(reply_hash));
+        }
+        send(request, StatusCode::CREATED).await.map(drop)
+    }
+
+    async fn put_reveal(
+        &self,
+        relay: &RelayUrl,
+        slot: &Hash,
+        reply_token: &Token,
+        value: &[u8; 32],
+    ) -> Result<(), RelayError> {
+        let request = self
+            .call(Method::PUT, relay, &format!("handovers/{}", b64(slot)))
+            .bearer_auth(b64(reply_token))
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(value.to_vec());
+        send(request, StatusCode::CREATED).await.map(drop)
+    }
+
+    async fn get_slot(
+        &self,
+        relay: &RelayUrl,
+        slot: &Hash,
+        token: &Token,
+    ) -> Result<Vec<u8>, RelayError> {
+        let request = self
+            .call(Method::GET, relay, &format!("handovers/{}", b64(slot)))
+            .bearer_auth(b64(token));
+        let body = send(request, StatusCode::OK)
+            .await?
+            .bytes()
+            .await
+            .map_err(transport)?;
+        Ok(body.to_vec())
     }
 
     async fn deliver(
@@ -476,6 +552,59 @@ mod tests {
                     code: "rate_limited".into()
                 })
             );
+        };
+        tokio::join!(server, client);
+    }
+
+    #[tokio::test]
+    async fn handover_calls_follow_the_interface() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let relay = RelayUrl::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let http = Http::new().unwrap();
+        let (slot, token, fetch, reply) = ([1; 32], [2; 32], [3; 32], [4; 32]);
+
+        let server = async {
+            let (head, body) = answer_once(&listener, "201 Created", "{}").await;
+            assert!(head.starts_with(&format!("PUT /v1/handovers/{} HTTP/1.1", b64(&slot))));
+            assert!(head.contains(&format!("authorization: Bearer {}", b64(&token))));
+            assert!(head.contains(&format!("lz-fetch-hash: {}", "03".repeat(32))));
+            assert!(head.contains(&format!("lz-reply-hash: {}", "04".repeat(32))));
+            assert_eq!(body, b"cd");
+            let (head, _) =
+                answer_once(&listener, "409 Conflict", r#"{"error":"handover_exists"}"#).await;
+            assert!(!head.contains("lz-reply-hash"), "{head}");
+            let (head, body) = answer_once(
+                &listener,
+                "404 Not Found",
+                r#"{"error":"unknown_handover"}"#,
+            )
+            .await;
+            assert!(head.starts_with("PUT /v1/handovers/"), "{head}");
+            assert!(!head.contains("lz-fetch-hash"), "{head}");
+            assert_eq!(body, vec![5; 32]);
+            let (head, _) = answer_once(&listener, "200 OK", "ab").await;
+            assert!(head.starts_with(&format!("GET /v1/handovers/{} HTTP/1.1", b64(&slot))));
+            let (head, _) = answer_once(&listener, "204 No Content", "").await;
+            let path = format!(
+                "DELETE /v1/mailboxes/{}/readers/{}",
+                b64(&slot),
+                b64(&[6; 16])
+            );
+            assert!(head.starts_with(&path), "{head}");
+        };
+        let client = async {
+            let put = http.put_slot(&relay, &slot, &token, &fetch, Some(&reply), b"cd");
+            assert_eq!(put.await, Ok(()));
+            let put = http.put_slot(&relay, &slot, &token, &fetch, None, b"cd");
+            assert_eq!(put.await, Err(RelayError::HandoverExists));
+            let reveal = http.put_reveal(&relay, &slot, &token, &[5; 32]);
+            assert_eq!(reveal.await, Err(RelayError::UnknownHandover));
+            assert_eq!(
+                http.get_slot(&relay, &slot, &token).await,
+                Ok(b"ab".to_vec())
+            );
+            let deleted = http.delete_reader(&relay, &slot, &token, &[6; 16]);
+            assert_eq!(deleted.await, Ok(()));
         };
         tokio::join!(server, client);
     }

@@ -1,6 +1,8 @@
 //! The M2 scenario end to end: two devices with their own state files talk
 //! through fake relays.
 
+mod devices;
+
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -60,12 +62,30 @@ struct Person {
 
 impl World {
     fn new() -> Self {
-        let relay = FakeRelay::default();
+        let clock = Arc::new(AtomicU64::new(T));
+        let relay = FakeRelay::new(clock.clone());
         relay.add(RELAY_A, TOKEN_A);
         relay.add(RELAY_B, TOKEN_B);
-        Self {
-            relay,
-            clock: Arc::new(AtomicU64::new(T)),
+        Self { relay, clock }
+    }
+
+    /// A device without state file, as before `lz device join`.
+    fn blank(&self) -> Person {
+        let dir = tempfile::tempdir().unwrap();
+        let store = JsonFile::new(dir.path().join("sub").join("device.json"));
+        let out = Output::default();
+        Person {
+            ctx: Ctx {
+                store,
+                relay: self.relay.clone(),
+                clock: Clock::Manual(self.clock.clone()),
+                out: Box::new(out.clone()),
+                verbose: true,
+                idle: Duration::from_millis(20),
+                hints: test_hints,
+            },
+            out,
+            _dir: dir,
         }
     }
 
