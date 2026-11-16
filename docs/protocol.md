@@ -30,10 +30,11 @@ B invites A. After that, both are equals and can request each other.
    - relay address, mailbox identifier and send token of B's mailbox
    - B's public contact key
    - optionally a voucher with which A may create one mailbox on B's relay, once
+   - a commitment to a secret value that B reveals only later
 
    The invitation is valid for 10 minutes and only once.
 2. **A accepts.** A's app generates its own contact key and its own mailbox, on its own relay or, with the voucher, on B's relay. It sends `hello` to B's mailbox: A's public key as well as the address and send token of A's mailbox.
-3. **Both see a verification code.** Six digits, derived from both public keys. If the QR code was scanned directly from the screen, the comparison is unnecessary. If the invitation was sent, it protects against an attacker who swapped it on the way.
+3. **Both see a verification code.** B's device answers the `hello` right away with `reveal`, the secret value from the commitment. Then both see six digits, derived from both public keys and that value. If the QR code was scanned directly from the screen, the comparison is unnecessary. If the invitation was sent, it protects against an attacker who swapped it on the way: because of the commitment, the attacker cannot search for keys that produce the same digits (since 2026-11-16).
 4. **B confirms** and sends `hello_ok`. Both assign a name for the contact locally and exchange their `rules`.
 
 If the verification code does not match, the side that notices rejects the pairing: it sends `end` and deletes its mailbox, and the other side sees "Kopplung abgelehnt" (decided on 2026-11-14). If B receives another `hello` for the same invitation after the first acceptance, B's app warns clearly: the code is then known to someone else, and the verification code must be compared with particular care.
@@ -66,6 +67,7 @@ Open requests in both directions expire in the process.
 |---|---|---|
 | `hello` | public key, mailbox address, send token | Accept pairing |
 | `hello_ok` | – | Confirm pairing |
+| `reveal` | secret value of the invitation | Lets the accepting side compute the verification code (since 2026-11-16) |
 | `rules` | minimum interval, expiry time, weekly limit | The requested party states how often they may be asked |
 | `request` | identifier, time | "Lebenszeichen?" |
 | `response` | identifier of the request, kind (`manual` or `reported`), reason (only for `reported`), time | The sign of life |
