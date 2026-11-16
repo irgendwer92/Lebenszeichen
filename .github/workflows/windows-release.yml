@@ -34,15 +34,16 @@ jobs:
           workspaces: app/src-tauri
           key: release
 
-      # taiki-e/install-action has no manifest for tauri-cli, so build it.
+      # Same pinned version as for Android (app/package-lock.json).
       - name: Install the Tauri CLI
-        run: cargo install tauri-cli --locked --version "^2"
+        working-directory: app
+        run: npm ci
 
       - name: Build the installer
-        working-directory: app/src-tauri
+        working-directory: app
         env:
           LZ_DEFAULT_RELAY: ${{ vars.LZ_DEFAULT_RELAY }}
-        run: cargo tauri build
+        run: npm run tauri build
 
       - name: Find the installer
         shell: bash

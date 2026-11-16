@@ -34,6 +34,8 @@ signing is an open point for M8).
 
 "Settings > Apps > Installed apps > Lebenszeichen > Uninstall", or the
 uninstaller in the install folder. It also removes the autostart entry
-(`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`). The state file with
-the device keys (`%APPDATA%\lebenszeichen\device.json`) stays; delete it by
-hand to remove the device for good.
+(`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`). The state of the
+app with the device keys
+(`%APPDATA%\io.github.irgendwer92.lebenszeichen\device.json`) stays, unless
+"Delete the application data" is ticked in the uninstaller; remove the device
+in another device's list first if it is to go for good.
