@@ -40,7 +40,7 @@ One person asks another for a minimal sign of life. Responding takes practically
 4. A sees "✓" with the time.
 
 If B does not react within the waiting time:
-- If a valid status report exists, the app sends it as the response. A sees the reason and that it was reported, not tapped, e.g. "schläft (gemeldet)".
+- If a valid status report exists, the app sends it as the response. A sees the reason and that it was reported, not tapped, e.g. "“asleep” (reported)".
 - If none exists, nothing happens: no reminder, no "ignored" display for B, and for A the request stays open and expires.
 
 The display stays in place after a reported response. If B reacts later after all, A additionally gets the normal "✓".
@@ -112,7 +112,7 @@ External programs (sleep detection, home automation, a script on the CPAP device
 **Rules**
 - The report is used only after the configurable waiting time for a normal response has passed, and only if it is still valid then.
 - Configurable per contact whether reported responses are sent. Default: off.
-- The reason is a short text that B sets personally. A sees exactly this text, so "schläft" instead of "CPAP aktiv".
+- The reason is a short text that B sets personally. A sees exactly this text, so "asleep" instead of "CPAP on".
 - Only the reason and the "reported" marker are transmitted, never the remaining duration or the time of the report.
 - Reachable locally only: Unix socket (Linux), named pipe (Windows), intent with its own permission (Android). No network port.
 - The report applies only on the device that received it.

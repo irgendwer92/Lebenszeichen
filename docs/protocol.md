@@ -57,7 +57,7 @@ Open requests in both directions expire in the process.
 - Layout of a message on the wire: version byte, nonce (24 bytes), ciphertext. The plaintext is padded to a fixed length before encryption.
 - Replay protection: every message carries a timestamp and a random identifier; the receiver remembers identifiers until they expire and discards duplicates and expired messages.
 
-**No forward secrecy (decided).** There is no ratchet. Anyone who later obtains a contact key can decrypt old recorded messages of that contact. Their content is "Anfrage", "✓" or a short reason text. In return, the protocol stays small, and multiple devices can use the same key. Remedy in case of suspicion: pair the contact again.
+**No forward secrecy (decided).** There is no ratchet. Anyone who later obtains a contact key can decrypt old recorded messages of that contact. Their content is a request, "✓" or a short reason text. In return, the protocol stays small, and multiple devices can use the same key. Remedy in case of suspicion: pair the contact again.
 
 ## Message types
 
@@ -95,7 +95,7 @@ The earlier plan had `counted` to keep counters equal. It is not needed: every d
 
 ## Rules for requests (decided)
 
-The app should not become a surveillance tool. The requested party sets the rules per contact and enforces them on their devices. The requester's device knows them from `rules` and disables the button accordingly ("wieder möglich ab 18:00").
+The app should not become a surveillance tool. The requested party sets the rules per contact and enforces them on their devices. The requester's device knows them from `rules` and disables the button accordingly ("request possible again from 18:00").
 
 | Rule | Default | Adjustable |
 |---|---|---|

@@ -64,9 +64,9 @@ lz sync
 
 lz request Anna             # ask for a sign of life
 lz respond Bert             # respond to the open request
-lz report Bert "schläft"    # report a state; the request stays open
+lz report Bert "asleep"     # report a state; the request stays open
 lz rules Bert --interval-min 360 --expiry-min 1440 --weekly 7
-lz contacts                 # contacts, open requests, "wieder möglich ab …"
+lz contacts                 # contacts, open requests, "request possible again from …"
 lz listen                   # stay connected and show messages immediately
 lz remove Bert              # remove contact; Bert sees this on the next poll
 lz push https://ntfy.example.org/upXYZ  # register the push address the relay uses to wake the device

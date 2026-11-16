@@ -90,7 +90,7 @@ The user interface is not needed for this path. It only shows state and log and 
 
 After building, CI checks that the symbol `Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge_marker` is exported in the library in the APK. The name of the library appears in two places and must stay the same: `[lib] name` in `app/src-tauri/Cargo.toml` and `LIBRARY` in `CoreBridge.kt`.
 
-**App outside the workspace.** `app/` is excluded in the root `Cargo.toml`. On Linux, Tauri builds only with WebKitGTK and brings a large dependency tree. This keeps the "Prüfen" workflow just as fast. Consequence: `cargo deny`, Clippy and tests do not run over the code under `app/`.
+**App outside the workspace.** `app/` is excluded in the root `Cargo.toml`. On Linux, Tauri builds only with WebKitGTK and brings a large dependency tree. This keeps the "Check" workflow (then named "Prüfen") just as fast. Consequence: `cargo deny`, Clippy and tests do not run over the code under `app/`.
 
 **UnifiedPush through the official connector library.** `org.unifiedpush.android:connector` in the service variant (`PushService`), as the current documentation provides; the receiver comes from the library. No embedded FCM distributor, no Google services. The prototype picks the distributor without asking: the saved one, otherwise ntfy (`io.heckel.ntfy`), otherwise the first one found.
 
@@ -135,7 +135,7 @@ After building, CI checks that the symbol `Java_io_github_irgendwer92_lebenszeic
 
 The workflow starts on every pull request that changes `app/`, `crates/` or the workflow itself, and manually via "Run workflow". Artifacts are kept for 30 days.
 
-**About the signature:** Debug builds are signed with a debug key that the Android Gradle plugin generates on the CI runner. The workflow keeps this key in the GitHub Actions cache so that consecutive builds have the same signature and can be installed over each other. This is only a stopgap: The cache applies per branch or pull request and expires after seven days without access. If Android reports on installing that the package conflicts with an existing app, the signature has changed. Then uninstall the old app and install again. Registration, settings and log are lost in the process, and the endpoint changes. The checksum of the certificate is in the CI run, in the step "APK prüfen" under "Signatur und Versionen". The debug key is not a secret and protects nothing; the proper signature comes with M4.
+**About the signature:** Debug builds are signed with a debug key that the Android Gradle plugin generates on the CI runner. The workflow keeps this key in the GitHub Actions cache so that consecutive builds have the same signature and can be installed over each other. This is only a stopgap: The cache applies per branch or pull request and expires after seven days without access. If Android reports on installing that the package conflicts with an existing app, the signature has changed. Then uninstall the old app and install again. Registration, settings and log are lost in the process, and the endpoint changes. The checksum of the certificate is in the CI run, in the step "Check the APK" under "Signature and versions". The debug key is not a secret and protects nothing; the proper signature comes with M4.
 
 ## Setup
 
@@ -148,7 +148,7 @@ You need an ntfy server (your own or a public one) and the ntfy app as distribut
    - Battery optimization: "Ausnehmen".
 3. **Tap "Registrieren".** After a few seconds, an address of the form `https://<ntfy-server>/up…?up=1` appears under "Endpunkt". If the field stays empty, the reason is in the log.
 4. **Enter the response address and save it**, for example an ntfy topic with a hard-to-guess name: `https://<ntfy-server>/lz-test-<random>`. The topic must be writable without login; the prototype sends no credentials. Do not subscribe to this topic in the ntfy app on the same phone, otherwise every response creates another notification there. The response address must differ from the endpoint from step 3: If both are the same, every response wakes the device again, and nothing arrives on the computer. The prototype does not check this.
-5. **"Anfrage lokal auslösen"** as a first test: A banner appears; tap it. In the log, `local-trigger`, `core`, `shown`, `reaction`, `core`, `answer-queued`, `answer-sent` follow.
+5. **"Anfrage lokal auslösen"** (trigger a request locally; a prototype button, removed in M4) as a first test: A banner appears; tap it. In the log, `local-trigger`, `core`, `shown`, `reaction`, `core`, `answer-queued`, `answer-sent` follow.
 
 ### Sending the wake signal and watching responses
 
@@ -223,7 +223,7 @@ For each run, note:
 - Number of POSTs for this ID
 - for 9 and 10 additionally: battery level, Wi-Fi or mobile data
 
-Note once: device, Android version and manufacturer's user interface (shown in the app under "Gerät"), version of the ntfy app, ntfy server, number of the CI run of the APK.
+Note once: device, Android version and manufacturer's user interface (shown in the app under "This device"), version of the ntfy app, ntfy server, number of the CI run of the APK.
 
 **Evaluation:**
 
