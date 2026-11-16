@@ -13,7 +13,8 @@ use crate::crypto;
 use crate::pairing::{Contact, PairingState, check_time, new_message};
 use crate::rules::Ledger;
 use crate::wire::{
-    Body, ENVELOPE_LEN, MessageId, REPLAY_MEMORY_SECS, Reason, Response, ResponseKind, Rules,
+    Body, ENVELOPE_LEN, Message, MessageId, REPLAY_MEMORY_SECS, Reason, Response, ResponseKind,
+    Rules, Stamp,
 };
 
 /// State of one contact as stored on the device.
@@ -32,6 +33,57 @@ pub struct ContactState {
     pub seen: Vec<Seen>,
     /// One side has ended the contact. Nothing is sent or accepted anymore.
     pub ended: bool,
+    /// Time and identifier of the last applied own rules; zero for none.
+    #[serde(default, skip_serializing_if = "is_unset", with = "stamp")]
+    pub own_rules_stamp: Stamp,
+    /// Time and identifier of the last applied rules of the other side.
+    #[serde(default, skip_serializing_if = "is_unset", with = "stamp")]
+    pub peer_rules_stamp: Stamp,
+}
+
+fn is_unset(stamp: &Stamp) -> bool {
+    *stamp == Stamp::default()
+}
+
+/// [`Stamp`] in stored JSON: `{"at": …, "id": "<hex>"}`.
+mod stamp {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::wire::{MessageId, Stamp};
+
+    #[derive(Serialize, Deserialize)]
+    struct Stored {
+        at: u64,
+        #[serde(with = "crate::hex")]
+        id: MessageId,
+    }
+
+    pub fn serialize<S: Serializer>(stamp: &Stamp, serializer: S) -> Result<S::Ok, S::Error> {
+        Stored {
+            at: stamp.at,
+            id: stamp.id,
+        }
+        .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Stamp, D::Error> {
+        Stored::deserialize(deserializer).map(|s| Stamp { at: s.at, id: s.id })
+    }
+}
+
+/// A stamp for new own rules, newer than `last`: now with a random
+/// identifier, one second later if that would not be newer.
+pub(crate) fn next_stamp(last: Stamp, now: u64, rng: &mut impl CryptoRngCore) -> Stamp {
+    let mut id = [0; 16];
+    rng.fill_bytes(&mut id);
+    let mut stamp = Stamp {
+        at: now.max(last.at),
+        id,
+    };
+    if stamp <= last {
+        stamp.at = last.at.saturating_add(1);
+    }
+    stamp
 }
 
 /// A received message, remembered for [`REPLAY_MEMORY_SECS`].
@@ -41,6 +93,20 @@ pub struct Seen {
     pub id: MessageId,
     /// Sending time of the message.
     pub at: u64,
+}
+
+/// Remembers a received message in `seen`; returns `true` if it was seen
+/// before. Forgets entries older than [`REPLAY_MEMORY_SECS`].
+pub(crate) fn remember(seen: &mut Vec<Seen>, id: &MessageId, sent_at: u64, now: u64) -> bool {
+    seen.retain(|seen| now < seen.at.saturating_add(REPLAY_MEMORY_SECS));
+    if seen.iter().any(|seen| &seen.id == id) {
+        return true;
+    }
+    seen.push(Seen {
+        id: *id,
+        at: sent_at,
+    });
+    false
 }
 
 /// What a received envelope meant.
@@ -90,6 +156,8 @@ pub enum Ignored {
     AlreadyAnswered,
     /// A message type this version does not know.
     UnknownType,
+    /// Rules not newer than the ones applied last.
+    Outdated,
     /// The contact has ended.
     Ended,
 }
@@ -105,6 +173,8 @@ impl ContactState {
             outgoing: Ledger::default(),
             seen: Vec::new(),
             ended: false,
+            own_rules_stamp: Stamp::default(),
+            peer_rules_stamp: Stamp::default(),
         }
     }
 
@@ -127,12 +197,25 @@ impl ContactState {
     }
 
     /// The own rules as a message, sent after pairing and after each change.
+    ///
+    /// Its time and identifier become [`Self::own_rules_stamp`] and are
+    /// always newer than the previous one, so that the contact applies it
+    /// even if sent in the same second. A `rules_set` to the own devices
+    /// reuses them, see [`crate::store::Device::sync_rules_set`].
     pub fn announce_rules(
-        &self,
+        &mut self,
         now: u64,
         rng: &mut impl CryptoRngCore,
     ) -> Result<[u8; ENVELOPE_LEN], Error> {
-        self.contact.seal(Body::Rules(self.own_rules), now, rng)
+        let stamp = next_stamp(self.own_rules_stamp, now, rng);
+        let message = Message {
+            id: stamp.id,
+            sent_at: stamp.at,
+            body: Body::Rules(self.own_rules),
+        };
+        let envelope = self.contact.seal_message(&message, rng)?;
+        self.own_rules_stamp = stamp;
+        Ok(envelope)
     }
 
     /// Changes the own rules and returns the message announcing them.
@@ -282,7 +365,17 @@ impl ContactState {
         Ok(match message.body {
             Body::Hello(_) | Body::HelloOk => Event::Ignored(Ignored::NotExpected),
             Body::Rules(rules) => {
+                // Two devices of the contact may have sent rules; the newest
+                // wins, judged by the uncapped sending time.
+                let stamp = Stamp {
+                    at: message.sent_at,
+                    id: message.id,
+                };
+                if stamp <= self.peer_rules_stamp {
+                    return Ok(Event::Ignored(Ignored::Outdated));
+                }
                 self.peer_rules = rules;
+                self.peer_rules_stamp = stamp;
                 Event::Rules(rules)
             }
             Body::Request => self.accept_request(message.id, at, now),
@@ -291,8 +384,63 @@ impl ContactState {
                 self.ended = true;
                 Event::Ended
             }
+            // Messages between own devices never come from a contact.
+            Body::Device(_)
+            | Body::DeviceRemoved(_)
+            | Body::Requested(_)
+            | Body::Responded(_)
+            | Body::RulesSet(_)
+            | Body::ContactPart(_)
+            | Body::ContactRemoved(_) => Event::Ignored(Ignored::NotExpected),
             Body::Unknown(_) => Event::Ignored(Ignored::UnknownType),
         })
+    }
+
+    /// Applies own rules set on another device, if they are newer than the
+    /// last applied ones. Returns whether they were applied.
+    pub fn apply_own_rules(&mut self, rules: Rules, stamp: Stamp) -> bool {
+        if stamp <= self.own_rules_stamp {
+            return false;
+        }
+        self.own_rules = rules;
+        self.own_rules_stamp = stamp;
+        true
+    }
+
+    /// Records a request another own device sent to this contact, so that
+    /// its response is accepted here too.
+    pub fn apply_requested(&mut self, request: MessageId, at: u64, now: u64) {
+        self.outgoing.prune(&self.peer_rules, now);
+        if !self.outgoing.entries.iter().any(|e| e.id == request) {
+            self.outgoing.record(request, at);
+        }
+    }
+
+    /// Records a response another own device sent at `at`, as if this device
+    /// had sent it.
+    ///
+    /// If the request has not arrived here yet, it is recorded with the time
+    /// of the response, so that it is not shown as open when it arrives; see
+    /// [`Self::receive`].
+    pub fn apply_responded(&mut self, request: &MessageId, kind: &ResponseKind, at: u64) {
+        if !self.incoming.entries.iter().any(|e| &e.id == request) {
+            self.incoming.record(*request, at);
+        }
+        match kind {
+            ResponseKind::Manual => {
+                self.incoming.answer(request, at);
+            }
+            ResponseKind::Reported(reason) => {
+                if let Some(entry) = self
+                    .incoming
+                    .entries
+                    .iter_mut()
+                    .find(|e| &e.id == request && e.answered_at.is_none())
+                {
+                    entry.reported.get_or_insert(*reason);
+                }
+            }
+        }
     }
 
     /// Handles an envelope that is not in the ordinary form for this contact.
@@ -316,20 +464,25 @@ impl ContactState {
 
     /// Remembers a received message; returns `true` if it was seen before.
     fn remember(&mut self, id: &MessageId, sent_at: u64, now: u64) -> bool {
-        self.seen
-            .retain(|seen| now < seen.at.saturating_add(REPLAY_MEMORY_SECS));
-        if self.seen.iter().any(|seen| &seen.id == id) {
-            return true;
-        }
-        self.seen.push(Seen {
-            id: *id,
-            at: sent_at,
-        });
-        false
+        remember(&mut self.seen, id, sent_at, now)
     }
 
     fn accept_request(&mut self, id: MessageId, at: u64, now: u64) -> Event {
         let rules = self.own_rules;
+        if let Some(pos) = self.incoming.entries.iter().position(|e| e.id == id) {
+            // Another own device answered it before it arrived here; it was
+            // accepted there and now gets its real time.
+            let mut entry = self.incoming.entries.remove(pos);
+            entry.at = at;
+            let open = entry.answered_at.is_none();
+            self.incoming.insert(entry);
+            let still_open = self.incoming.open(&rules, now).is_some_and(|e| e.id == id);
+            return if open && still_open {
+                Event::Request(id)
+            } else {
+                Event::Ignored(Ignored::AlreadyAnswered)
+            };
+        }
         self.incoming.prune(&rules, now);
         if self.incoming.next_allowed(&rules, now) > now {
             return Event::Ignored(Ignored::RuleViolation);
@@ -390,7 +543,7 @@ mod tests {
     use crate::Error;
     use crate::pairing::{Address, PendingInvitation, accept};
     use crate::rules::WEEK_SECS;
-    use crate::wire::{Body, Reason, RelayUrl, ResponseKind, Rules};
+    use crate::wire::{Body, ENVELOPE_LEN, Reason, RelayUrl, ResponseKind, Rules, Stamp};
 
     const T: u64 = 1_794_600_000;
     const HOUR: u64 = 3600;
@@ -678,6 +831,73 @@ mod tests {
         b.confirm(T + 70, &mut OsRng).unwrap();
         let (_, third) = accept(&invitation, address(7), T + 80, &mut OsRng).unwrap();
         assert_eq!(b.receive(&third, T + 81).unwrap(), Event::SecondAcceptance);
+    }
+
+    fn rules_message(b: &ContactState, id: u8, at: u64, rules: Rules) -> [u8; ENVELOPE_LEN] {
+        let message = crate::wire::Message {
+            id: [id; 16],
+            sent_at: at,
+            body: Body::Rules(rules),
+        };
+        b.contact.seal_message(&message, &mut OsRng).unwrap()
+    }
+
+    #[test]
+    fn newest_rules_of_the_contact_win() {
+        let (mut a, b) = paired();
+        let one = Rules {
+            weekly_limit: 1,
+            ..Rules::DEFAULT
+        };
+        let two = Rules {
+            weekly_limit: 2,
+            ..Rules::DEFAULT
+        };
+        let at = T + HOUR;
+        assert_eq!(
+            a.receive(&rules_message(&b, 5, at, one), at).unwrap(),
+            Event::Rules(one)
+        );
+        // Older, or the same time with a smaller identifier: ignored.
+        for (id, sent) in [(9, at - 1), (4, at)] {
+            assert_eq!(
+                a.receive(&rules_message(&b, id, sent, two), at).unwrap(),
+                Event::Ignored(Ignored::Outdated)
+            );
+        }
+        assert_eq!(a.peer_rules, one);
+        // The same time with a larger identifier wins.
+        assert_eq!(
+            a.receive(&rules_message(&b, 6, at, two), at).unwrap(),
+            Event::Rules(two)
+        );
+        assert_eq!(a.peer_rules_stamp, Stamp { at, id: [6; 16] });
+    }
+
+    #[test]
+    fn rule_changes_within_one_second_arrive_in_order() {
+        let (mut a, mut b) = paired();
+        for limit in 1..20 {
+            let rules = Rules {
+                weekly_limit: limit,
+                ..Rules::DEFAULT
+            };
+            let envelope = b.set_rules(rules, T + HOUR, &mut OsRng).unwrap();
+            assert_eq!(a.receive(&envelope, T + HOUR).unwrap(), Event::Rules(rules));
+        }
+    }
+
+    #[test]
+    fn next_stamp_is_always_newer() {
+        let last = Stamp {
+            at: T,
+            id: [0xFF; 16],
+        };
+        let next = super::next_stamp(last, T, &mut OsRng);
+        assert_eq!(next.at, T + 1);
+        // A clock that went back still gives a newer stamp.
+        assert!(super::next_stamp(last, T - 100, &mut OsRng) > last);
+        assert_eq!(super::next_stamp(last, T + 5, &mut OsRng).at, T + 5);
     }
 
     #[test]

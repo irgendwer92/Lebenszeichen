@@ -83,27 +83,16 @@ impl Invitation {
     pub fn to_text<'a>(&self, out: &'a mut [u8; MAX_TEXT_LEN]) -> &'a str {
         let mut bytes = [0; MAX_LEN];
         let len = self.to_bytes(&mut bytes);
-        out[..PREFIX.len()].copy_from_slice(PREFIX.as_bytes());
-        let code_len = base32::encode(&bytes[..len], &mut out[PREFIX.len()..])
-            .expect("MAX_TEXT_LEN covers every invitation");
-        core::str::from_utf8(&out[..PREFIX.len() + code_len]).expect("Base32 is ASCII")
+        base32::write_code(PREFIX, &bytes[..len], out)
+            .expect("MAX_TEXT_LEN covers every invitation")
     }
 
     /// Reads an invitation code as typed or pasted by a person.
     ///
     /// Lower case, spaces and line breaks are tolerated.
     pub fn from_text(text: &str) -> Result<Self, Error> {
-        let mut clean = [0; MAX_TEXT_LEN];
-        let mut len = 0;
-        for c in text.bytes().filter(|c| !c.is_ascii_whitespace()) {
-            *clean.get_mut(len).ok_or(Error::TooLong)? = c.to_ascii_uppercase();
-            len += 1;
-        }
-        let code = clean[..len]
-            .strip_prefix(PREFIX.as_bytes())
-            .ok_or(Error::InvalidCode)?;
         let mut bytes = [0; MAX_LEN];
-        let len = base32::decode(code, &mut bytes)?;
+        let len = base32::read_code::<MAX_TEXT_LEN>(text, PREFIX, &mut bytes)?;
         Self::from_bytes(&bytes[..len])
     }
 }

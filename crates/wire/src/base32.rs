@@ -1,7 +1,7 @@
 //! Base32 after RFC 4648, section 6: upper-case alphabet, no padding.
 //!
-//! Used for invitation codes because it fits the alphanumeric mode of QR
-//! codes and stays readable when typed by hand.
+//! Used for invitation and device codes because it fits the alphanumeric
+//! mode of QR codes and stays readable when typed by hand.
 
 use crate::Error;
 
@@ -65,6 +65,39 @@ pub fn decode(input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
         return Err(Error::InvalidCode);
     }
     Ok(n)
+}
+
+/// Writes `prefix` followed by the Base32 of `bytes` into `out`.
+pub(crate) fn write_code<'a>(
+    prefix: &str,
+    bytes: &[u8],
+    out: &'a mut [u8],
+) -> Result<&'a str, Error> {
+    let head = out.get_mut(..prefix.len()).ok_or(Error::TooLong)?;
+    head.copy_from_slice(prefix.as_bytes());
+    let len = encode(bytes, &mut out[prefix.len()..])?;
+    Ok(core::str::from_utf8(&out[..prefix.len() + len]).expect("Base32 is ASCII"))
+}
+
+/// Reads a code of at most `T` characters, as typed or pasted by a person,
+/// into the start of `out` and returns the number of bytes.
+///
+/// Lower case, spaces and line breaks are tolerated.
+pub(crate) fn read_code<const T: usize>(
+    text: &str,
+    prefix: &str,
+    out: &mut [u8],
+) -> Result<usize, Error> {
+    let mut clean = [0; T];
+    let mut len = 0;
+    for c in text.bytes().filter(|c| !c.is_ascii_whitespace()) {
+        *clean.get_mut(len).ok_or(Error::TooLong)? = c.to_ascii_uppercase();
+        len += 1;
+    }
+    let code = clean[..len]
+        .strip_prefix(prefix.as_bytes())
+        .ok_or(Error::InvalidCode)?;
+    decode(code, out)
 }
 
 #[cfg(test)]
