@@ -1,6 +1,6 @@
 # Lebenszeichen – Signierte Android-App
 
-Stand: 15.11.2026. Gehört zu `fahrplan.md` (M4).
+Stand: 16.11.2026. Gehört zu `fahrplan.md` (M4).
 
 Die signierte APK baut der Ablauf `.github/workflows/android-release.yml`, bei einem Tag `v*` oder von Hand. Pull Requests bauen weiter nur die Debug-APK. Den Schlüssel dazu legst du einmal selbst an; er verlässt deinen Rechner nur als Secret bei GitHub.
 
@@ -51,16 +51,17 @@ Die Umgebung hält den Schlüssel und kann jeden Lauf an eine Freigabe binden. W
 ```sh
 base64 -w0 ~/lebenszeichen-release.jks | gh secret set ANDROID_KEYSTORE_BASE64 --env release -R irgendwer92/Lebenszeichen
 gh secret set ANDROID_KEYSTORE_PASSWORD --env release -R irgendwer92/Lebenszeichen
-gh secret set ANDROID_KEY_ALIAS --env release -R irgendwer92/Lebenszeichen -b lebenszeichen
+gh variable set ANDROID_KEY_ALIAS --env release -R irgendwer92/Lebenszeichen -b lebenszeichen
 ```
 
-Der zweite Befehl fragt nach dem Passwort; so landet es nicht in der Shell-Historie. Prüfen:
+Der zweite Befehl fragt nach dem Passwort; so landet es nicht in der Shell-Historie. Der Alias ist kein Geheimnis und liegt deshalb als Variable vor: Als Secret ersetzte GitHub jedes „lebenszeichen“ in den Protokollen durch `***`. Prüfen:
 
 ```sh
 gh secret list --env release -R irgendwer92/Lebenszeichen
+gh variable list --env release -R irgendwer92/Lebenszeichen
 ```
 
-Es sollten die drei Namen erscheinen. Die Werte zeigt GitHub nie wieder an.
+Es sollten die beiden Secrets und die Variable erscheinen. Die Werte der Secrets zeigt GitHub nie wieder an.
 
 ## 5. Bauen
 
