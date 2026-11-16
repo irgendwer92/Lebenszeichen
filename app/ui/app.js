@@ -135,7 +135,7 @@ function confirmButton(key, text, question, onClick, className = "danger") {
 
 // ---------------------------------------------------------------- Panels
 
-const PANELS = ["invite", "accept", "device"];
+const PANELS = ["invite", "accept", "devices", "device"];
 
 /// Opens one of the panels in the header, or closes all with `null`.
 function openPanel(name) {
@@ -148,6 +148,8 @@ function openPanel(name) {
   }
   if (name === "device") {
     showDevice();
+  } else if (name === "devices") {
+    showDevices();
   } else if (name) {
     $(`panel-${name}`).querySelector("input")?.focus();
   }
@@ -278,25 +280,53 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden && !$("panel-device").hidden) showDevice();
 });
 
+let isAndroid = false;
+
 tauri.core.invoke("platform").then((platform) => {
   document.documentElement.dataset.platform = platform;
-  $("device-toggle").hidden = platform !== "android";
-  $("scan").hidden = platform !== "android";
+  isAndroid = platform === "android";
+  $("device-toggle").hidden = !isAndroid;
+  $("scan").hidden = !isAndroid;
+  $("setup-scan").hidden = !isAndroid;
+  $("add-scan").hidden = !isAndroid;
+  $("join-share").hidden = !isAndroid;
+  $("join-copy").hidden = isAndroid;
 });
 
-/// Opens the camera; a recognized invitation lands in the code field.
-$("scan").addEventListener("click", async () => {
+/// What a scanned or pasted code is, in words, for "this is not what I
+/// need here".
+const KIND_TEXT = {
+  invitation: "eine Einladung",
+  device: "ein Gerätecode",
+  setup: "ein Einrichtungscode",
+};
+
+/// Opens the camera. Returns the code if it is of the wanted kind; else
+/// tells the person what it is and returns null.
+async function scanCode(kind, wanted) {
   showError("");
   let result;
   try {
-    result = await tauri.core.invoke(PLUGIN + "scan_invitation");
+    result = await tauri.core.invoke(PLUGIN + "scan_code");
   } catch (error) {
     showError(String(error));
-    return;
+    return null;
   }
-  if (!result?.code) return;
+  if (!result?.code) return null;
+  if (result.kind !== kind) {
+    const what = KIND_TEXT[result.kind] ?? "etwas anderes";
+    showError(`Das ist ${what}, ${wanted}.`);
+    return null;
+  }
+  return result.code;
+}
+
+/// Opens the camera; a recognized invitation lands in the code field.
+$("scan").addEventListener("click", async () => {
+  const code = await scanCode("invitation", "keine Einladung");
+  if (!code) return;
   const form = $("accept-form");
-  form.elements.code.value = result.code;
+  form.elements.code.value = code;
   const name = form.elements.name;
   (name.value.trim() ? form.querySelector("button[type=submit]") : name).focus();
 });
@@ -522,11 +552,16 @@ async function refresh() {
   const ticket = ++refreshes;
   const setup = await tauri.core.invoke("setup_state");
   if (ticket !== refreshes) return;
-  $("setup").hidden = setup.ready;
+  defaultRelay = setup.default_relay ?? "";
+  $("setup").hidden = setup.ready || joining;
+  $("join-flow").hidden = !joining;
   $("app").hidden = !setup.ready;
   $("actions").hidden = !setup.ready;
   $("state-path").textContent = `Zustand: ${setup.path}`;
-  if (!setup.ready) return;
+  if (!setup.ready) {
+    prefillRelay();
+    return;
+  }
   let cards;
   try {
     cards = await tauri.core.invoke("overview").then((reply) => reply.value);
@@ -550,6 +585,18 @@ async function refresh() {
 }
 
 let redrawLater = false;
+
+/// The relay address from the build, and whether it is already in the
+/// fields (so that typing there is never overwritten).
+let defaultRelay = "";
+let relayPrefilled = false;
+
+function prefillRelay() {
+  if (relayPrefilled || !defaultRelay) return;
+  relayPrefilled = true;
+  $("setup-form").elements.relay.value = defaultRelay;
+  $("setup-join-form").elements.relay.value = defaultRelay;
+}
 
 function editing() {
   const active = document.activeElement;
@@ -597,14 +644,14 @@ const QR_QUIET_ZONE = 4;
 
 /// Draws a QR code as one SVG path, one unit per module. Built through the
 /// DOM, so the Content Security Policy needs no exception for images.
-function qrSvg(qr) {
+function qrSvg(qr, label = "QR-Code der Einladung") {
   const ns = "http://www.w3.org/2000/svg";
   const side = qr.width + 2 * QR_QUIET_ZONE;
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", `0 0 ${side} ${side}`);
   svg.setAttribute("shape-rendering", "crispEdges");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", "QR-Code der Einladung");
+  svg.setAttribute("aria-label", label);
   const background = document.createElementNS(ns, "rect");
   background.setAttribute("width", side);
   background.setAttribute("height", side);
@@ -656,6 +703,313 @@ $("sync").addEventListener("click", async () => {
     // Already shown by `call`.
   }
   await refresh();
+});
+
+/// Which flow of `lz-device` is running in the window: `join` (setup
+/// screen), `add` (panel "Geräte") or null.
+let deviceFlow = null;
+let joining = false;
+
+// ---------------------------------------------------------------- Setup screen
+
+const SETUP_WAYS = ["new", "invitation", "code", "join"];
+
+function openSetupWay(name) {
+  for (const way of SETUP_WAYS) {
+    $(`setup-${way}`).hidden = way !== name;
+  }
+  for (const toggle of document.querySelectorAll("[data-setup]")) {
+    toggle.classList.toggle("primary", toggle.dataset.setup === name);
+  }
+}
+
+for (const toggle of document.querySelectorAll("[data-setup]")) {
+  toggle.addEventListener("click", () => openSetupWay(toggle.dataset.setup));
+}
+
+openSetupWay("new");
+
+$("setup-invitation-go").addEventListener("click", async (event) => {
+  event.target.disabled = true;
+  try {
+    await call("init_with_invitation_only");
+    await refresh();
+    openPanel("accept");
+  } catch {
+    // Already shown by `call`.
+  } finally {
+    event.target.disabled = false;
+  }
+});
+
+$("setup-scan").addEventListener("click", async () => {
+  const code = await scanCode("setup", "kein Einrichtungscode");
+  if (code) $("setup-code-form").elements.code.value = code;
+});
+
+onSubmit("setup-code-form", async (data) => {
+  await call("init_from_setup_code", { code: data.get("code") });
+});
+
+// ---------------------------------------------------------------- Join flow
+
+function showJoinPart(part) {
+  for (const id of ["code", "check", "confirm"]) {
+    $(`join-${id}-box`).hidden = id !== part;
+  }
+}
+
+function resetJoin() {
+  joining = false;
+  deviceFlow = null;
+  showJoinPart(null);
+  $("join-progress").textContent = "";
+  $("join-failed").hidden = true;
+  $("join-cancel").hidden = false;
+  $("join-qr").replaceChildren();
+  $("join-code").value = "";
+}
+
+onSubmit("setup-join-form", async (data) => {
+  resetJoin();
+  // Events may arrive before the command returns.
+  joining = true;
+  deviceFlow = "join";
+  $("join-progress").textContent = "Einen Moment …";
+  try {
+    await tauri.core.invoke("device_join", {
+      relay: data.get("relay"),
+      name: data.get("name"),
+    });
+  } catch (error) {
+    resetJoin();
+    showError(String(error));
+    throw error;
+  }
+});
+
+$("join-copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("join-code").value);
+    $("join-progress").textContent = "Kopiert.";
+  } catch (error) {
+    showError(String(error));
+  }
+});
+
+$("join-share").addEventListener("click", async () => {
+  try {
+    await tauri.core.invoke(PLUGIN + "share_text", { text: $("join-code").value });
+  } catch (error) {
+    showError(String(error));
+  }
+});
+
+$("join-code").addEventListener("focus", (event) => event.target.select());
+
+async function answerDevice(answer) {
+  try {
+    await tauri.core.invoke("device_confirm", { answer });
+  } catch (error) {
+    showError(String(error));
+  }
+}
+
+$("join-match").addEventListener("click", () => answerDevice(true));
+$("join-mismatch").addEventListener("click", () => answerDevice(false));
+
+$("join-cancel").addEventListener("click", async () => {
+  await tauri.core.invoke("device_cancel").catch(() => {});
+  resetJoin();
+  await refresh();
+});
+
+$("join-restart").addEventListener("click", async () => {
+  await tauri.core.invoke("device_cancel").catch(() => {});
+  resetJoin();
+  await refresh();
+});
+
+function joinEvent({ step, code, text, qr }) {
+  switch (step) {
+    case "device_code":
+      $("join-qr").replaceChildren(qrSvg(qr, "QR-Code des Gerätecodes"));
+      $("join-code").value = code;
+      showJoinPart("code");
+      $("join-progress").textContent = "Warte auf das vorhandene Gerät …";
+      break;
+    case "check_device":
+      $("join-check").textContent = grouped(code);
+      showJoinPart("check");
+      $("join-progress").textContent = "";
+      break;
+    case "confirm_handover":
+      $("join-confirm-code").textContent = grouped(code);
+      showJoinPart("confirm");
+      $("join-progress").textContent = "";
+      break;
+    case "progress":
+      $("join-progress").textContent = text;
+      break;
+    case "done":
+      resetJoin();
+      if (isAndroid) tauri.core.invoke(PLUGIN + "refresh_push").catch((e) => showError(String(e)));
+      refresh();
+      break;
+    case "error":
+    case "alarm":
+      showJoinPart(null);
+      $("join-progress").textContent = "";
+      $("join-failed-text").textContent = text;
+      $("join-failed").hidden = false;
+      $("join-cancel").hidden = true;
+      break;
+  }
+}
+
+// ---------------------------------------------------------------- Devices panel
+
+/// Draws the list of devices of this person.
+async function showDevices() {
+  let list;
+  try {
+    list = await call("devices");
+  } catch {
+    return;
+  }
+  const form = $("add-device-form");
+  if (!form.elements.name.value) {
+    // A device that has a name already keeps it.
+    form.elements.name.value = list.find((d) => d.this)?.name ?? "";
+  }
+  $("devices").replaceChildren(
+    ...list.map((device) => {
+      const item = el("li", "card");
+      const parts = [el("h3", "", device.name)];
+      if (device.this) {
+        parts.push(el("span", "this-device", "(dieses Gerät)"));
+        parts.push(spacer());
+      } else {
+        parts.push(
+          spacer(),
+          confirmButton(
+            `device-remove:${device.name}`,
+            "Entfernen",
+            "Wirklich? Nochmal klicken",
+            async () => {
+              await call("device_remove", { name: device.name });
+              await showDevices();
+            },
+          ),
+        );
+      }
+      item.append(row(...parts));
+      return item;
+    }),
+  );
+  try {
+    const code = await tauri.core.invoke("setup_code").then((reply) => reply.value);
+    $("setup-code-qr").replaceChildren(qrSvg(code.qr, "QR-Code des Einrichtungscodes"));
+    $("setup-code-text").value = code.text;
+    $("setup-code-details").hidden = false;
+  } catch {
+    // No access token: nothing to show.
+    $("setup-code-details").hidden = true;
+    $("setup-code-details").open = false;
+  }
+}
+
+$("setup-code-details").addEventListener("toggle", (event) => {
+  // Not left on screen once folded away.
+  if (!event.target.open) {
+    $("setup-code-qr").replaceChildren();
+    $("setup-code-text").value = "";
+  } else {
+    showDevices();
+  }
+});
+
+function showAddPart(part) {
+  $("add-confirm-box").hidden = part !== "confirm";
+  $("add-wait").hidden = part !== "wait";
+}
+
+function resetAdd() {
+  deviceFlow = null;
+  $("add-device-form").hidden = false;
+  $("add-device-flow").hidden = true;
+  $("add-progress").textContent = "";
+  showAddPart(null);
+}
+
+$("add-scan").addEventListener("click", async () => {
+  const code = await scanCode("device", "kein Gerätecode");
+  if (code) $("add-device-form").elements.code.value = code;
+});
+
+onSubmit("add-device-form", async (data) => {
+  $("add-result").hidden = true;
+  // Events may arrive before the command returns.
+  deviceFlow = "add";
+  $("add-device-form").hidden = true;
+  $("add-device-flow").hidden = false;
+  $("add-progress").textContent = "Einen Moment …";
+  try {
+    await tauri.core.invoke("device_add", {
+      code: data.get("code"),
+      name: data.get("name"),
+    });
+  } catch (error) {
+    resetAdd();
+    showError(String(error));
+    throw error;
+  }
+});
+
+$("add-match").addEventListener("click", () => {
+  showAddPart(null);
+  answerDevice(true);
+});
+$("add-mismatch").addEventListener("click", () => {
+  showAddPart(null);
+  answerDevice(false);
+});
+$("add-cancel").addEventListener("click", async () => {
+  await tauri.core.invoke("device_cancel").catch(() => {});
+  resetAdd();
+});
+
+function addEvent({ step, code, text }) {
+  switch (step) {
+    case "confirm_device":
+      $("add-confirm-code").textContent = grouped(code);
+      showAddPart("confirm");
+      $("add-progress").textContent = "";
+      break;
+    case "check_handover":
+      showAddPart("wait");
+      break;
+    case "progress":
+      $("add-progress").textContent = text;
+      break;
+    case "done":
+      resetAdd();
+      $("add-device-form").reset();
+      $("add-result").textContent = "Das neue Gerät ist eingerichtet.";
+      $("add-result").hidden = false;
+      showDevices();
+      break;
+    case "error":
+    case "alarm":
+      resetAdd();
+      showError(text);
+      break;
+  }
+}
+
+tauri.event.listen("lz-device", (event) => {
+  if (deviceFlow === "join") joinEvent(event.payload);
+  else if (deviceFlow === "add") addEvent(event.payload);
 });
 
 tauri.event.listen("lz-line", (event) => {

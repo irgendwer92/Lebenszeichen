@@ -95,6 +95,8 @@ jobs:
       # Without --debug: Rust optimized, R8 shrinks the Java part. Gradle does
       # not sign; the next step does.
       - name: Build the APK
+        env:
+          LZ_DEFAULT_RELAY: ${{ vars.LZ_DEFAULT_RELAY }}
         run: |
           set -euo pipefail
           if [ -n "${CONFIG:-}" ]; then set -- --config "$CONFIG"; fi

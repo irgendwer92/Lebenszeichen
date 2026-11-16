@@ -76,6 +76,8 @@ jobs:
         run: npm run tauri android init -- --ci --skip-targets-install
 
       - name: Build the APK
+        env:
+          LZ_DEFAULT_RELAY: ${{ vars.LZ_DEFAULT_RELAY }}
         run: npm run tauri android build -- --ci --debug --apk --target aarch64
 
       - name: Check the APK

@@ -112,6 +112,13 @@ cargo build
 LZ_STATE=/path/to/device.json target/debug/lebenszeichen-app   # LZ_STATE optional
 ```
 
+The relay address prefilled in the setup screen comes from the build-time
+variable `LZ_DEFAULT_RELAY`, so that the address is not in the code
+(`LZ_DEFAULT_RELAY=https://relay.example.org cargo build`). The CI reads it
+from the GitHub repository variable of the same name
+(`gh variable set LZ_DEFAULT_RELAY -b https://relay.example.org`); unset or
+empty means no prefill.
+
 Without `LZ_STATE` the state lives in the app's data directory
 (`~/.local/share/io.github.irgendwer92.lebenszeichen/device.json`); the
 desktop app is thus a separate device alongside `lz`.

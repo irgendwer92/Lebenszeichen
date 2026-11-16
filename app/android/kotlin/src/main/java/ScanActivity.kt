@@ -25,7 +25,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Scans the QR code of an invitation with the back camera.
+ * Scans a QR code (invitation, device code or setup code) with the back camera.
  *
  * Privacy: the frames are only examined in memory, by the Rust core, while
  * they are on screen. No frame, photo or video is stored or sent anywhere;
@@ -57,7 +57,7 @@ class ScanActivity : ComponentActivity() {
         previewView = PreviewView(this)
         val hint =
             TextView(this).apply {
-                text = "Halte den QR-Code der Einladung ins Bild"
+                text = "Halte den QR-Code ins Bild"
                 textSize = 18f
                 gravity = Gravity.CENTER
                 setTextColor(0xFFFFFFFF.toInt())
@@ -174,7 +174,7 @@ class ScanActivity : ComponentActivity() {
     }
 
     companion object {
-        /** The text of the invitation found, in the result of the activity. */
+        /** The text of the code found, in the result of the activity. */
         const val EXTRA_CODE = "code"
 
         /** Why the scan is impossible (German, for the user), with `RESULT_CANCELED`. */

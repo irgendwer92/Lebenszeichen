@@ -71,6 +71,10 @@ jobs:
       - name: Formatting
         run: cargo fmt --check
       - name: Clippy
+        env:
+          LZ_DEFAULT_RELAY: ${{ vars.LZ_DEFAULT_RELAY }}
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Tests
+        env:
+          LZ_DEFAULT_RELAY: ${{ vars.LZ_DEFAULT_RELAY }}
         run: cargo test --locked

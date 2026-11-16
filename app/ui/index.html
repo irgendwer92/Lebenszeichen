@@ -15,6 +15,7 @@
           + Einladen
         </button>
         <button type="button" data-panel="accept" aria-expanded="false">Annehmen</button>
+        <button type="button" data-panel="devices" aria-expanded="false">Geräte</button>
         <button
           id="device-toggle"
           type="button"
@@ -39,21 +40,113 @@
 
       <section id="setup" class="card setup" hidden>
         <h2>Gerät einrichten</h2>
-        <p class="note">
-          Mit einem Zugangstoken für dein Relay kannst du selbst einladen. Ohne ihn kannst
-          du nur Einladungen mit Gutschein annehmen.
-        </p>
-        <form id="setup-form" class="stack">
-          <label>
-            Relay-Adresse
-            <input name="relay" type="url" placeholder="https://relay.example.org" />
-          </label>
-          <label>
-            Zugangstoken (optional)
-            <input name="access_token" type="password" autocomplete="off" />
-          </label>
-          <button type="submit" class="primary">Gerät anlegen</button>
-        </form>
+        <div id="setup-menu" class="row wrap">
+          <button type="button" class="primary" data-setup="new">Neues Konto</button>
+          <button type="button" data-setup="invitation">Ich habe eine Einladung</button>
+          <button type="button" data-setup="code">Einrichtungscode</button>
+          <button type="button" data-setup="join">Als weiteres Gerät einrichten</button>
+        </div>
+
+        <div id="setup-new" class="setup-way" hidden>
+          <p class="note">
+            Mit einem Zugangstoken für dein Relay kannst du selbst einladen. Ohne ihn kannst
+            du nur Einladungen mit Gutschein annehmen.
+          </p>
+          <form id="setup-form" class="stack">
+            <label>
+              Relay-Adresse
+              <input name="relay" type="url" placeholder="https://relay.example.org" />
+            </label>
+            <label>
+              Zugangstoken (optional)
+              <input name="access_token" type="password" autocomplete="off" />
+            </label>
+            <button type="submit" class="primary">Gerät anlegen</button>
+          </form>
+        </div>
+
+        <div id="setup-invitation" class="setup-way" hidden>
+          <p class="note">
+            Du brauchst weder Relay-Adresse noch Zugangstoken. Das Postfach kommt mit dem
+            Gutschein der Einladung.
+          </p>
+          <button id="setup-invitation-go" type="button" class="primary">
+            Weiter zur Einladung
+          </button>
+        </div>
+
+        <div id="setup-code" class="setup-way" hidden>
+          <p class="note">
+            Den Einrichtungscode zeigt dir ein Mensch, der ein Relay betreibt oder dort ein
+            Konto hat. Er enthält Relay-Adresse und Zugangstoken.
+          </p>
+          <form id="setup-code-form" class="stack">
+            <button id="setup-scan" type="button" hidden>QR-Code scannen</button>
+            <label>
+              Einrichtungscode
+              <textarea
+                name="code"
+                class="code"
+                rows="4"
+                required
+                placeholder="LZS1-…"
+              ></textarea>
+            </label>
+            <button type="submit" class="primary">Gerät anlegen</button>
+          </form>
+        </div>
+
+        <div id="setup-join" class="setup-way" hidden>
+          <p class="note">
+            Du hast schon ein Gerät und richtest dieses als weiteres ein. Das Relay muss
+            auch dein vorhandenes Gerät kennen.
+          </p>
+          <form id="setup-join-form" class="stack">
+            <label>
+              Relay-Adresse
+              <input name="relay" type="url" required placeholder="https://relay.example.org" />
+            </label>
+            <label>
+              Name dieses Geräts (nur für dich sichtbar)
+              <input name="name" required maxlength="32" />
+            </label>
+            <button type="submit" class="primary">Weiter</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="join-flow" class="card setup" hidden>
+        <h2>Als weiteres Gerät einrichten</h2>
+        <div id="join-code-box" hidden>
+          <p class="note">
+            Scanne den Code mit einem vorhandenen Gerät (Geräte → Gerät hinzufügen) oder
+            gib ihn dort ein.
+          </p>
+          <div id="join-qr" class="qr"></div>
+          <textarea id="join-code" class="code" readonly rows="4"></textarea>
+          <div class="row">
+            <button id="join-copy" type="button" hidden>Kopieren</button>
+            <button id="join-share" type="button" hidden>Teilen</button>
+          </div>
+        </div>
+        <div id="join-check-box" hidden>
+          <p class="verification big" id="join-check"></p>
+          <p class="note">Vergleiche ihn mit dem anderen Gerät und bestätige dort.</p>
+        </div>
+        <div id="join-confirm-box" hidden>
+          <p>Prüfcode des Geräteübergangs:</p>
+          <p class="verification big" id="join-confirm-code"></p>
+          <div class="row">
+            <button id="join-match" type="button" class="primary">Stimmt überein</button>
+            <button id="join-mismatch" type="button" class="quiet">Stimmt nicht</button>
+          </div>
+        </div>
+        <p id="join-progress" class="note"></p>
+        <div id="join-failed" hidden>
+          <p id="join-failed-text" class="banner error"></p>
+          <button id="join-restart" type="button" class="primary">Neu beginnen</button>
+        </div>
+        <button id="join-cancel" type="button" class="quiet">Abbrechen</button>
       </section>
 
       <div id="app" hidden>
@@ -111,6 +204,65 @@
             <button type="submit" class="primary">Annehmen</button>
           </form>
           <p id="accept-result" class="banner success" hidden></p>
+        </section>
+
+        <section id="panel-devices" class="card panel" hidden>
+          <div class="panel-head">
+            <h2>Geräte</h2>
+            <button type="button" class="icon" data-close="devices" aria-label="Schließen">
+              ×
+            </button>
+          </div>
+          <ul id="devices" class="cards"></ul>
+          <p class="note">
+            Entfernen schützt nicht vor einem verlorenen Gerät; dann alle Kontakte neu
+            koppeln.
+          </p>
+
+          <h3>+ Gerät hinzufügen</h3>
+          <form id="add-device-form" class="stack">
+            <button id="add-scan" type="button" hidden>Gerätecode scannen</button>
+            <label>
+              Gerätecode des neuen Geräts
+              <textarea
+                name="code"
+                class="code"
+                rows="3"
+                required
+                placeholder="LZD1-…"
+              ></textarea>
+            </label>
+            <label>
+              Name dieses Geräts (nur für dich sichtbar)
+              <input name="name" required maxlength="32" />
+            </label>
+            <button type="submit" class="primary">Hinzufügen</button>
+          </form>
+          <div id="add-device-flow" hidden>
+            <div id="add-confirm-box" hidden>
+              <p>Prüfcode:</p>
+              <p class="verification big" id="add-confirm-code"></p>
+              <p class="note">Vergleiche ihn mit dem Prüfcode auf dem neuen Gerät.</p>
+              <div class="row">
+                <button id="add-match" type="button" class="primary">Stimmt überein</button>
+                <button id="add-mismatch" type="button" class="quiet">Stimmt nicht</button>
+              </div>
+            </div>
+            <p id="add-wait" class="note" hidden>Warte auf das neue Gerät …</p>
+            <p id="add-progress" class="note"></p>
+            <button id="add-cancel" type="button" class="quiet">Abbrechen</button>
+          </div>
+          <p id="add-result" class="banner success" hidden></p>
+
+          <details id="setup-code-details" class="history" hidden>
+            <summary>Einrichtungscode zeigen</summary>
+            <p class="banner error">
+              Gib diesen Code nur Menschen, denen du dein Relay öffnen willst. Nur direkt
+              zeigen, nicht verschicken.
+            </p>
+            <div id="setup-code-qr" class="qr"></div>
+            <textarea id="setup-code-text" class="code" readonly rows="4"></textarea>
+          </details>
         </section>
 
         <section id="panel-device" class="card panel" hidden>
