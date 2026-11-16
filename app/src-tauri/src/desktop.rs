@@ -97,6 +97,10 @@ fn show_unless_hidden(app: &tauri::App) {
 /// turns it off later, it stays off. The flag is only set when it worked, so
 /// a failure is tried again at the next start.
 fn offer_autostart(app: &tauri::App, state: &std::path::Path) {
+    // Development builds never put themselves into autostart.
+    if cfg!(debug_assertions) {
+        return;
+    }
     let file = settings::path(state);
     if settings::load(&file).autostart_offered {
         return;
