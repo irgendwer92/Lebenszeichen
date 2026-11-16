@@ -23,8 +23,10 @@ built as a Docker image: `docker build -f crates/relay/Dockerfile .`
 
 Milestone M3 (Linux desktop) is done except for two checks on other
 systems. M4 (Android app) is complete: phone and desktop request each other
-via their own relay with wake signals, and the CI builds a signed APK. Status in
-[docs/roadmap.md](docs/roadmap.md).
+via their own relay with wake signals, and the CI builds a signed APK. M5
+(multiple devices) is complete: a person's phone and computer share contacts,
+an answer on one withdraws the request on the other, and new devices are added
+with a QR code and two check codes. Status in [docs/roadmap.md](docs/roadmap.md).
 
 | Milestone | Content |
 |---|---|
