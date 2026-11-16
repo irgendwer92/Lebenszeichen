@@ -34,7 +34,7 @@ B invites A. After that, both are equals and can request each other.
 
    The invitation is valid for 10 minutes and only once.
 2. **A accepts.** A's app generates its own contact key and its own mailbox, on its own relay or, with the voucher, on B's relay. It sends `hello` to B's mailbox: A's public key as well as the address and send token of A's mailbox.
-3. **Both see a verification code.** B's device answers the `hello` right away with `reveal`, the secret value from the commitment. Then both see six digits, derived from both public keys and that value. If the QR code was scanned directly from the screen, the comparison is unnecessary. If the invitation was sent, it protects against an attacker who swapped it on the way: because of the commitment, the attacker cannot search for keys that produce the same digits (since 2026-11-16).
+3. **Both see a verification code.** B's device answers the `hello` right away with `reveal`, the secret value from the commitment. Then both see six digits, derived from both public keys and that value. If the QR code was scanned directly from the screen, the comparison is unnecessary. Otherwise the digits are compared over another channel than the one the invitation took, for example in person or on the phone. If the invitation was sent, it protects against an attacker who swapped it on the way: because of the commitment, the attacker cannot search for keys that produce the same digits (since 2026-11-16).
 4. **B confirms** and sends `hello_ok`. Both assign a name for the contact locally and exchange their `rules`.
 
 If the verification code does not match, the side that notices rejects the pairing: it sends `end` and deletes its mailbox, and the other side sees "Kopplung abgelehnt" (decided on 2026-11-14). If B receives another `hello` for the same invitation after the first acceptance, B's app warns clearly: the code is then known to someone else, and the verification code must be compared with particular care.
@@ -174,6 +174,8 @@ Even without content, metadata remains if someone actively observes the relay:
 With a self-operated relay, the operator is a trusted person. For a later release with third-party relays, this would be the most important point to sharpen.
 
 - **Several devices (M5):** a sync mailbox is recognizable by its behavior, because its readers also deliver into it. Storing a handover links a mailbox of the person to the network address of the new device. Derived mailboxes cannot be withdrawn by the holder of the access token who issued the voucher.
+
+- **Pairing (since 2026-11-16):** the inviter answers a `hello` right away with `reveal`. A delivery into the inviter's mailbox followed at once by one into the accepting side's mailbox links the two mailboxes and marks the moment of pairing.
 
 The push service (ntfy) only sees when a device is woken.
 
