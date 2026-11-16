@@ -16,6 +16,7 @@ mod desktop;
 #[cfg(target_os = "android")]
 mod jni_bridge;
 mod lang;
+mod settings;
 
 /// Builds the command handler from the commands both systems share and,
 /// optionally, a few more.
@@ -60,6 +61,12 @@ macro_rules! handler {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
+    // "Start at login" starts the app with `--hidden`: straight into the tray.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        Some(vec![desktop::HIDDEN_ARG]),
+    ));
     // A second start only brings the window of the first one back; two
     // instances would fetch for the same state file twice.
     #[cfg(desktop)]
@@ -77,7 +84,12 @@ pub fn run() {
             Ok(())
         });
     #[cfg(desktop)]
-    let builder = builder.invoke_handler(handler![desktop::alert_text, desktop::alert_answer]);
+    let builder = builder.invoke_handler(handler![
+        desktop::alert_text,
+        desktop::alert_answer,
+        commands::autostart,
+        commands::set_autostart,
+    ]);
     #[cfg(not(desktop))]
     let builder = builder.invoke_handler(handler![]);
     builder

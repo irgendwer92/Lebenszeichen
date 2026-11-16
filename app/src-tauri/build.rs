@@ -28,6 +28,8 @@ const COMMANDS: &[&str] = &[
     "set_rules",
     "texts",
     "set_language",
+    "autostart",
+    "set_autostart",
     "alert_text",
     "alert_answer",
 ];

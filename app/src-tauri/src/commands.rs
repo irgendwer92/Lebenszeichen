@@ -344,6 +344,42 @@ pub fn set_language(
     Ok(ui_texts(&state.path))
 }
 
+/// Whether the app starts at login (desktop only).
+#[cfg(desktop)]
+#[tauri::command]
+pub fn autostart(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|error| format!("{}: {error}", text("app-error-autostart")))
+}
+
+/// Turns "Start at login" on or off (desktop only). Counts as the offer
+/// having been made, so that the app never turns it on again by itself.
+#[cfg(desktop)]
+#[tauri::command]
+pub fn set_autostart(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    on: bool,
+) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let failed =
+        |error: &dyn std::fmt::Display| format!("{}: {error}", text("app-error-autostart"));
+    let launcher = app.autolaunch();
+    if on {
+        launcher.enable()
+    } else {
+        launcher.disable()
+    }
+    .map_err(|error| failed(&error))?;
+    crate::settings::update(&crate::settings::path(&state.path), |settings| {
+        settings.autostart_offered = true;
+    })
+    .map_err(|error| failed(&error))?;
+    launcher.is_enabled().map_err(|error| failed(&error))
+}
+
 /// Whether the device is set up, and where its state lives.
 #[derive(Serialize)]
 pub struct SetupState {
