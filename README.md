@@ -104,7 +104,7 @@ app/
 ├── src-tauri/   Tauri shell for Linux desktop and Android
 ├── ui/          UI for both (plain HTML without a build step)
 └── android/     Kotlin layer: UnifiedPush, full-screen display, notifications
-docs/        Concept, protocol, roadmap, walking skeleton M1, Android release, draft of the license exception
+docs/        Concept, protocol, roadmap, walking skeleton M1, Android release, Windows release, draft of the license exception
 ```
 
 `app/` is not part of the Cargo workspace. The desktop app for Linux is built
@@ -133,6 +133,8 @@ that touch `app/` or `crates/`, or by hand:
 attached there as an artifact. The signed APK is built by the workflow "Android release" on
 a tag `v*`; setup and verification in
 [docs/android-release.md](docs/android-release.md).
+The Windows installer (unsigned, per user) is built by the workflow "Windows release";
+see [docs/windows-release.md](docs/windows-release.md).
 
 ## Development
 
