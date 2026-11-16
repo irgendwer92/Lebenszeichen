@@ -295,12 +295,20 @@ pub fn six_digits(hash: &[u8; 32]) -> String {
     format!("{:06}", number % 1_000_000)
 }
 
-/// Six digits both sides show after pairing, derived from both public keys.
-///
-/// The order of the arguments does not matter.
-pub fn verification_code(a: &PublicKey, b: &PublicKey) -> String {
-    let (low, high) = if a <= b { (a, b) } else { (b, a) };
-    six_digits(&sha256(&[b"lebenszeichen-v1-code", low, high]))
+/// Commitment in an invitation to the inviting side's secret value `n`.
+pub fn invite_commitment(secret: &[u8; 32]) -> [u8; 32] {
+    sha256(&[b"lebenszeichen-v2-invite-commit", secret])
+}
+
+/// Six digits both sides show while pairing, derived from both public keys
+/// and the inviting side's secret value `n`, revealed after the `hello`.
+pub fn verification_code(inviter: &PublicKey, accepter: &PublicKey, secret: &[u8; 32]) -> String {
+    six_digits(&sha256(&[
+        b"lebenszeichen-v2-code",
+        inviter,
+        accepter,
+        secret,
+    ]))
 }
 
 #[cfg(test)]
@@ -308,8 +316,8 @@ mod tests {
     use rand_core::OsRng;
 
     use super::{
-        ContactKey, GroupKey, HandoverKey, open, open_anonymous, open_group, seal, seal_anonymous,
-        seal_bytes, seal_group, verification_code,
+        ContactKey, GroupKey, HandoverKey, invite_commitment, open, open_anonymous, open_group,
+        seal, seal_anonymous, seal_bytes, seal_group, verification_code,
     };
     use crate::Error;
     use crate::wire::{Body, ENVELOPE_LEN, Message, PROTOCOL_VERSION};
@@ -365,20 +373,35 @@ mod tests {
     }
 
     #[test]
-    fn verification_code_is_symmetric_and_six_digits() {
+    fn verification_code_depends_on_order_and_secret() {
         let a = ContactKey::generate(&mut OsRng).public_key();
         let b = ContactKey::generate(&mut OsRng).public_key();
-        let code = verification_code(&a, &b);
-        assert_eq!(code, verification_code(&b, &a));
+        let code = verification_code(&a, &b, &[7; 32]);
         assert_eq!(code.len(), 6);
         assert!(code.bytes().all(|c| c.is_ascii_digit()));
+        assert_eq!(code, verification_code(&a, &b, &[7; 32]));
+        assert_ne!(code, verification_code(&b, &a, &[7; 32]));
+        assert_ne!(code, verification_code(&a, &b, &[8; 32]));
     }
 
     #[test]
     fn verification_code_matches_documented_formula() {
-        // SHA-256("lebenszeichen-v1-code" || 32 × 0x01 || 32 × 0x02), first
-        // four bytes as big-endian number, modulo one million.
-        assert_eq!(verification_code(&[2; 32], &[1; 32]), "259986");
+        // Computed with Python's hashlib:
+        // SHA-256("lebenszeichen-v2-code" || 32 × 0x01 || 32 × 0x02 ||
+        // 32 × 0x07), first four bytes as big-endian number, modulo one
+        // million; and with the keys swapped.
+        assert_eq!(verification_code(&[1; 32], &[2; 32], &[7; 32]), "070675");
+        assert_eq!(verification_code(&[2; 32], &[1; 32], &[7; 32]), "865637");
+    }
+
+    #[test]
+    fn invite_commitment_matches_documented_formula() {
+        // SHA-256("lebenszeichen-v2-invite-commit" || 32 × 0x07), computed
+        // with Python's hashlib.
+        assert_eq!(
+            crate::hex::encode(&invite_commitment(&[7; 32])),
+            "27c81a0592f12626f924929560438efae9620a436d9a69d163c50781896bffbc"
+        );
     }
 
     // Envelopes made with libsodium through PyNaCl 1.6.2: contact keys

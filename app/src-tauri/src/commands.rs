@@ -334,7 +334,7 @@ pub async fn init_with_invitation_only(
 fn read_setup_code(text: &str) -> Result<(String, String), String> {
     match CodeKind::of(text) {
         Some(CodeKind::Setup) => {}
-        Some(CodeKind::Invitation) => {
+        Some(CodeKind::Invitation | CodeKind::OldInvitation) => {
             return Err("Das ist eine Einladung, kein Einrichtungscode.".into());
         }
         Some(CodeKind::Device) => {
@@ -367,10 +367,12 @@ pub async fn init_from_setup_code(
     .await
 }
 
-/// Which kind of code a text is: `invitation`, `device` or `setup`.
+/// Which kind of code a text is: `invitation`, `old_invitation` (version 1,
+/// refused), `device` or `setup`.
 fn kind_name(text: &str) -> Option<&'static str> {
     CodeKind::of(text).map(|kind| match kind {
         CodeKind::Invitation => "invitation",
+        CodeKind::OldInvitation => "old_invitation",
         CodeKind::Device => "device",
         CodeKind::Setup => "setup",
     })
@@ -452,10 +454,13 @@ async fn off_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static
 #[derive(Serialize)]
 pub struct Card {
     name: String,
-    /// `paired`, `awaiting_confirmation`, `awaiting_hello_ok` or `ended`.
+    /// `paired`, `awaiting_reveal`, `awaiting_confirmation`,
+    /// `awaiting_hello_ok` or `ended`.
     status: &'static str,
-    /// Verification code while pairing.
+    /// Verification code while pairing, once there is one.
     code: Option<String>,
+    /// To show next to the code: over which channel to compare it.
+    compare_hint: Option<&'static str>,
     /// Text about the open request of the contact, if any.
     incoming: Option<String>,
     /// Text about the own open request, if any.
@@ -530,6 +535,7 @@ pub struct Cards {
 fn card(view: ContactView, now: u64) -> Card {
     let (status, code) = match view.status {
         Status::Paired => ("paired", None),
+        Status::AwaitingReveal => ("awaiting_reveal", None),
         Status::AwaitingConfirmation { code } => ("awaiting_confirmation", Some(code)),
         Status::AwaitingHelloOk { code } => ("awaiting_hello_ok", Some(code)),
         Status::Ended => ("ended", None),
@@ -550,6 +556,7 @@ fn card(view: ContactView, now: u64) -> Card {
     Card {
         name: view.name,
         status,
+        compare_hint: code.as_ref().map(|_| show::COMPARE_HINT),
         code,
         incoming,
         outgoing: view
@@ -627,7 +634,7 @@ pub async fn accept(
     state: tauri::State<'_, AppState>,
     name: String,
     code: String,
-) -> Result<Reply<String>, String> {
+) -> Result<Reply<()>, String> {
     run(path(&state), async move |ctx| {
         ctx.accept(name.trim(), &code).await
     })
@@ -919,6 +926,7 @@ mod tests {
     use lz_core::wire::Rules;
 
     use lz_client::ctx;
+    use lz_client::show;
     use lz_core::store::JsonFile;
 
     use super::{
@@ -1036,13 +1044,27 @@ mod tests {
         let card = card(view, NOW);
         assert_eq!(card.status, "awaiting_confirmation");
         assert_eq!(card.code.as_deref(), Some("123456"));
+        assert_eq!(card.compare_hint, Some(show::COMPARE_HINT));
         assert!(!card.can_request);
         assert!(card.next_request.is_none());
+
+        // While waiting for `reveal` there is no code yet.
+        let view = ContactView {
+            status: Status::AwaitingReveal,
+            ..paired()
+        };
+        let waiting = super::card(view, NOW);
+        assert_eq!(waiting.status, "awaiting_reveal");
+        assert_eq!(waiting.code, None);
+        assert_eq!(waiting.compare_hint, None);
+        assert!(!waiting.can_request);
+        assert!(waiting.rules.is_none());
     }
 
     #[test]
     fn code_kinds() {
-        assert_eq!(kind_name("LZ1-ABC"), Some("invitation"));
+        assert_eq!(kind_name("LZ2-ABC"), Some("invitation"));
+        assert_eq!(kind_name("lz1-abc"), Some("old_invitation"));
         assert_eq!(kind_name("  lzd1-abc"), Some("device"));
         assert_eq!(kind_name("LZS1-ABC"), Some("setup"));
         assert_eq!(kind_name("hallo"), None);

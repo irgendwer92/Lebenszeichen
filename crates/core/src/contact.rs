@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Error;
 use crate::crypto;
-use crate::pairing::{Contact, PairingState, check_time, new_message};
+use crate::pairing::{Contact, PairingState, Revealed, check_time, new_message};
 use crate::rules::Ledger;
 use crate::wire::{
     Body, ENVELOPE_LEN, Message, MessageId, REPLAY_MEMORY_SECS, Reason, Response, ResponseKind,
@@ -114,6 +114,20 @@ pub(crate) fn remember(seen: &mut Vec<Seen>, id: &MessageId, sent_at: u64, now: 
 pub enum Event {
     /// `hello_ok` arrived. The caller should now send [`ContactState::announce_rules`].
     Paired,
+    /// A valid `reveal` arrived on the accepting side: the code can be shown
+    /// now. If `paired`, a `hello_ok` kept back has completed the pairing as
+    /// well; the caller then acts as for [`Event::Paired`].
+    Revealed { code: String, paired: bool },
+    /// A `reveal` that does not match the commitment of the invitation:
+    /// someone interferes. The caller shows an alarm, sends
+    /// [`ContactState::end`] and deletes the own mailbox.
+    RevealMismatch,
+    /// `hello_ok` arrived before `reveal` and is kept until a valid one.
+    HelloOkKept,
+    /// The `hello` this contact was made from arrived again, while the
+    /// person has not confirmed yet: the caller sends
+    /// [`Contact::reveal`] again, in case the first one got lost.
+    HelloAgain,
     /// The other side changed how often it may be asked.
     Rules(Rules),
     /// A request was accepted and should be shown.
@@ -328,7 +342,7 @@ impl ContactState {
             return Err(Error::Ended);
         }
         let envelope = self.contact.seal(Body::End, now, rng)?;
-        self.ended = true;
+        self.set_ended();
         Ok(envelope)
     }
 
@@ -350,20 +364,32 @@ impl ContactState {
         }
 
         if !self.is_paired() {
-            if message.body == Body::End {
-                self.ended = true;
-                return Ok(Event::Rejected);
-            }
-            return Ok(match self.contact.receive_hello_ok(&message) {
-                Ok(()) => Event::Paired,
-                Err(_) => Event::Ignored(Ignored::NotExpected),
+            return Ok(match &message.body {
+                Body::End => {
+                    self.set_ended();
+                    Event::Rejected
+                }
+                Body::HelloOk => match self.contact.receive_hello_ok(&message) {
+                    Ok(true) => Event::Paired,
+                    Ok(false) => Event::HelloOkKept,
+                    Err(_) => Event::Ignored(Ignored::NotExpected),
+                },
+                Body::Reveal(secret) => match self.contact.receive_reveal(secret) {
+                    Ok(Revealed::Code { code, paired }) => Event::Revealed { code, paired },
+                    Ok(Revealed::Again) => Event::Ignored(Ignored::Duplicate),
+                    Err(Error::Mismatch) => Event::RevealMismatch,
+                    Err(_) => Event::Ignored(Ignored::NotExpected),
+                },
+                _ => Event::Ignored(Ignored::NotExpected),
             });
         }
 
         // Times from the other side are capped at the own clock.
         let at = message.sent_at.min(now);
         Ok(match message.body {
-            Body::Hello(_) | Body::HelloOk => Event::Ignored(Ignored::NotExpected),
+            Body::Hello(_) | Body::HelloOk | Body::Reveal(_) => {
+                Event::Ignored(Ignored::NotExpected)
+            }
             Body::Rules(rules) => {
                 // Two devices of the contact may have sent rules; the newest
                 // wins, judged by the uncapped sending time.
@@ -381,7 +407,7 @@ impl ContactState {
             Body::Request => self.accept_request(message.id, at, now),
             Body::Response(response) => self.accept_response(response, at),
             Body::End => {
-                self.ended = true;
+                self.set_ended();
                 Event::Ended
             }
             // Messages between own devices never come from a contact.
@@ -446,20 +472,44 @@ impl ContactState {
     /// Handles an envelope that is not in the ordinary form for this contact.
     ///
     /// The only sealed message that makes sense here is a further `hello` for
-    /// the invitation this contact came from.
+    /// the invitation this contact came from: with the key of this contact,
+    /// it asks for `reveal` again; with another key, someone else accepted
+    /// the invitation too, and gets nothing.
     fn receive_sealed(&mut self, envelope: &[u8], now: u64) -> Result<Event, Error> {
         let message = crypto::open_anonymous(envelope, &self.contact.key)?;
         check_time(&message, now)?;
         let Body::Hello(hello) = &message.body else {
             return Err(Error::Decrypt);
         };
-        if self.remember(&message.id, message.sent_at, now)
-            || hello.public_key == self.contact.peer_key
-        {
-            // Seen before, or the `hello` this contact was made from.
+        let seen = self.remember(&message.id, message.sent_at, now);
+        if hello.public_key == self.contact.peer_key {
+            // The `hello` this contact was made from. A repetition is the
+            // purpose here, so it is not dropped as a duplicate.
+            let waiting = self.contact.state == PairingState::AwaitingConfirmation
+                && self.contact.secret.is_some();
+            return Ok(if waiting {
+                Event::HelloAgain
+            } else {
+                Event::Ignored(Ignored::Duplicate)
+            });
+        }
+        if seen {
             return Ok(Event::Ignored(Ignored::Duplicate));
         }
         Ok(Event::SecondAcceptance)
+    }
+
+    /// Marks the contact as ended and deletes what only the pairing needed.
+    fn set_ended(&mut self) {
+        self.ended = true;
+        self.contact.forget_pairing();
+    }
+
+    /// Whether a pairing that is not complete can no longer complete; see
+    /// [`Contact::pairing_failed`]. The caller then shows that the pairing
+    /// failed, sends [`Self::end`] and deletes the own mailbox.
+    pub fn pairing_failed(&self, now: u64) -> bool {
+        !self.ended && self.contact.pairing_failed(now)
     }
 
     /// Remembers a received message; returns `true` if it was seen before.
@@ -562,6 +612,11 @@ mod tests {
         let (a, hello) = accept(&invitation, address(3), T, &mut OsRng).unwrap();
         let mut a = ContactState::new(a);
         let mut b = ContactState::new(pending.receive_hello(&hello, T).unwrap());
+        let reveal = b.contact.reveal(T, &mut OsRng).unwrap();
+        assert!(matches!(
+            a.receive(&reveal, T).unwrap(),
+            Event::Revealed { paired: false, .. }
+        ));
         let [hello_ok, rules] = b.confirm(T, &mut OsRng).unwrap();
         assert_eq!(a.receive(&hello_ok, T).unwrap(), Event::Paired);
         assert_eq!(a.receive(&rules, T).unwrap(), Event::Rules(Rules::DEFAULT));
@@ -818,10 +873,8 @@ mod tests {
         let (_, second) = accept(&invitation, address(5), T + 60, &mut OsRng).unwrap();
         let mut b = ContactState::new(pending.receive_hello(&first, T).unwrap());
 
-        assert_eq!(
-            b.receive(&first, T + 1).unwrap(),
-            Event::Ignored(Ignored::Duplicate)
-        );
+        // The first `hello` again asks for `reveal` again.
+        assert_eq!(b.receive(&first, T + 1).unwrap(), Event::HelloAgain);
         assert_eq!(b.receive(&second, T + 61).unwrap(), Event::SecondAcceptance);
         assert_eq!(
             b.receive(&second, T + 62).unwrap(),
@@ -831,6 +884,11 @@ mod tests {
         b.confirm(T + 70, &mut OsRng).unwrap();
         let (_, third) = accept(&invitation, address(7), T + 80, &mut OsRng).unwrap();
         assert_eq!(b.receive(&third, T + 81).unwrap(), Event::SecondAcceptance);
+        // Once confirmed, n is gone and nothing is revealed anymore.
+        assert_eq!(
+            b.receive(&first, T + 82).unwrap(),
+            Event::Ignored(Ignored::Duplicate)
+        );
     }
 
     fn rules_message(b: &ContactState, id: u8, at: u64, rules: Rules) -> [u8; ENVELOPE_LEN] {
@@ -912,7 +970,51 @@ mod tests {
             a.receive(&early, T).unwrap(),
             Event::Ignored(Ignored::NotExpected)
         );
+        let code = b.contact.verification_code().unwrap();
         let [hello_ok, _] = b.confirm(T, &mut OsRng).unwrap();
-        assert_eq!(a.receive(&hello_ok, T).unwrap(), Event::Paired);
+        // `hello_ok` before `reveal` is kept back, not applied.
+        assert_eq!(a.receive(&hello_ok, T).unwrap(), Event::HelloOkKept);
+        assert!(!a.is_paired());
+        assert_eq!(a.request(T, &mut OsRng).unwrap_err(), Error::Unexpected);
+        // The `reveal` b made before confirming completes it.
+        let reveal = b
+            .contact
+            .seal(Body::Reveal(pending.secret.unwrap()), T, &mut OsRng)
+            .unwrap();
+        assert_eq!(
+            a.receive(&reveal, T).unwrap(),
+            Event::Revealed { code, paired: true }
+        );
+        assert!(a.is_paired());
+        assert_eq!(a.contact.secret, None);
+    }
+
+    #[test]
+    fn reveal_that_does_not_match_is_reported() {
+        let (pending, invitation) = PendingInvitation::create(address(1), None, T, &mut OsRng);
+        let (a, hello) = accept(&invitation, address(3), T, &mut OsRng).unwrap();
+        let mut a = ContactState::new(a);
+        let b = ContactState::new(pending.receive_hello(&hello, T).unwrap());
+        let forged = b
+            .contact
+            .seal(Body::Reveal([1; 32]), T, &mut OsRng)
+            .unwrap();
+        assert_eq!(a.receive(&forged, T).unwrap(), Event::RevealMismatch);
+        assert!(!a.is_paired());
+        a.end(T, &mut OsRng).unwrap();
+        assert!(a.contact.awaiting_reveal.is_none());
+    }
+
+    #[test]
+    fn rejecting_deletes_the_secret_value() {
+        let (pending, invitation) = PendingInvitation::create(address(1), None, T, &mut OsRng);
+        let (a, hello) = accept(&invitation, address(3), T, &mut OsRng).unwrap();
+        let mut a = ContactState::new(a);
+        let mut b = ContactState::new(pending.receive_hello(&hello, T).unwrap());
+        assert!(b.contact.secret.is_some());
+        let end = a.end(T, &mut OsRng).unwrap();
+        assert_eq!(b.receive(&end, T).unwrap(), Event::Rejected);
+        assert_eq!(b.contact.secret, None);
+        assert!(!b.pairing_failed(T));
     }
 }

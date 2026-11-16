@@ -2,6 +2,7 @@
 //! through fake relays.
 
 mod devices;
+mod pairing;
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -162,20 +163,37 @@ async fn paired(world: &World) -> (Person, Person) {
     let mut bert = world.person(Some((RELAY_B, Some(TOKEN_B))));
 
     let code = anna.ctx.invite("Bert", false).await.unwrap();
-    assert!(code.starts_with("LZ1-"));
+    assert!(code.starts_with("LZ2-"));
     assert!(anna.out.take().contains(&code));
-    let verification = bert.ctx.accept("Anna", &code).await.unwrap();
+    bert.ctx.accept("Anna", &code).await.unwrap();
     assert_eq!(bert.contact("Anna").own_relay, url(RELAY_B));
+    // No code before `reveal`.
+    let out = bert.out.take();
+    assert!(out.contains("Warte auf den Prüfcode …"), "{out}");
+    assert!(!out.contains("Prüfcode:"), "{out}");
 
+    let notices: [Notice; 1] = anna.sync().await.try_into().unwrap();
+    let [Notice::Accepted { name, code }] = notices else {
+        panic!("{notices:?}");
+    };
+    assert_eq!(name, "Bert");
+    let out = anna.out.take();
+    assert!(out.contains(r#"[Confirm("Bert")]"#));
+    assert!(out.contains(crate::show::COMPARE_HINT), "{out}");
+    assert!(anna.device().invitations.is_empty());
     assert_eq!(
-        anna.sync().await,
-        vec![Notice::Accepted {
-            name: "Bert".into(),
-            code: verification.clone(),
+        bert.sync().await,
+        vec![Notice::Revealed {
+            name: "Anna".into(),
+            code: code.clone(),
+            paired: false,
         }]
     );
-    assert!(anna.out.take().contains(r#"[Confirm("Bert")]"#));
-    assert!(anna.device().invitations.is_empty());
+    let out = bert.out.take();
+    assert!(
+        out.contains(&code) && out.contains(crate::show::COMPARE_HINT),
+        "{out}"
+    );
     anna.ctx.confirm("Bert").await.unwrap();
 
     assert_eq!(
@@ -343,7 +361,11 @@ async fn voucher_lets_a_device_without_relay_pair() {
     anna.ctx.confirm("Carl").await.unwrap();
     assert!(matches!(
         carl.sync().await.as_slice(),
-        [Notice::Paired { .. }, Notice::Rules { .. }]
+        [
+            Notice::Revealed { paired: false, .. },
+            Notice::Paired { .. },
+            Notice::Rules { .. }
+        ]
     ));
     carl.ctx.request("Anna").await.unwrap();
     let notices = anna.sync().await;
@@ -497,17 +519,36 @@ async fn intercepted_invitation_is_noticed_and_rejected_visibly() {
 
     // Mallory intercepted the code and accepts before Bert does.
     let code = anna.ctx.invite("Bert", false).await.unwrap();
-    let mallory_code = mallory.ctx.accept("Anna", &code).await.unwrap();
-    let bert_code = bert.ctx.accept("Anna", &code).await.unwrap();
-    assert_ne!(mallory_code, bert_code);
+    mallory.ctx.accept("Anna", &code).await.unwrap();
+    bert.ctx.accept("Anna", &code).await.unwrap();
 
-    anna.sync().await;
+    let notices = anna.sync().await;
+    let [
+        Notice::Accepted {
+            code: anna_code, ..
+        },
+        Notice::SecondAcceptance { paired: false, .. },
+    ] = notices.as_slice()
+    else {
+        panic!("{notices:?}");
+    };
     let out = anna.out.take();
-    assert!(out.contains(&mallory_code), "{out}");
     assert!(out.contains("ein weiteres Mal angenommen"), "{out}");
     assert!(out.contains(r#"[Reject("Bert")]"#), "{out}");
 
-    // Anna compares with Bert, the codes differ, she rejects.
+    // Mallory's `hello` came first and gets the `reveal`; Bert's gets none,
+    // so Bert has no code to compare and Anna sees the difference.
+    assert!(matches!(
+        mallory.sync().await.as_slice(),
+        [Notice::Revealed { code, .. }] if code == anna_code
+    ));
+    assert!(bert.sync().await.is_empty());
+    assert_eq!(
+        bert.ctx.overview().unwrap().contacts[0].status,
+        crate::ctx::Status::AwaitingReveal
+    );
+
+    // Anna compares with Bert, he has no code, she rejects.
     anna.ctx.reject("Bert").await.unwrap();
     assert!(anna.device().contacts.is_empty());
     assert!(anna.out.take().contains("abgelehnt"));
@@ -516,16 +557,11 @@ async fn intercepted_invitation_is_noticed_and_rejected_visibly() {
     assert!(mallory.out.take().contains("hat die Kopplung abgelehnt"));
     assert!(mallory.contact("Anna").state.ended);
 
-    // Bert never gets `hello_ok`; he rejects on his side as well.
-    bert.sync().await;
+    // Bert never gets anything; he rejects on his side as well.
     bert.ctx.reject("Anna").await.unwrap();
     assert!(bert.device().contacts.is_empty());
-    // Anna's mailbox is gone, so Bert is not told that she sees it.
     let out = bert.out.take();
-    assert!(
-        out.contains("abgelehnt") && !out.contains("sieht das"),
-        "{out}"
-    );
+    assert!(out.contains("abgelehnt"), "{out}");
 }
 
 #[tokio::test]
