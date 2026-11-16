@@ -8,7 +8,6 @@ mod alert;
 #[cfg(target_os = "linux")]
 mod notify;
 
-use lz_client::i18n::Arg;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -166,7 +165,10 @@ pub fn alert_text(
             .ok_or_else(|| t.text("app-error-request-closed", &[]))?;
         Ok(AlertText {
             lang: t.language().tag(),
-            title: t.text("app-alert-title", &[("name", Arg::Text(&name))]),
+            title: t.text(
+                "app-alert-title",
+                &[("name", lz_client::i18n::Arg::Text(&name))],
+            ),
             hint: t.text("app-alert-hint", &[]),
         })
     }
