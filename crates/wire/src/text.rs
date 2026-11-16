@@ -1,6 +1,6 @@
 //! Short UTF-8 texts with a fixed upper bound, stored without an allocator.
 
-use crate::{Error, MAX_REASON_LEN, MAX_RELAY_URL_LEN};
+use crate::{Error, MAX_CONTACT_NAME_LEN, MAX_DEVICE_NAME_LEN, MAX_REASON_LEN, MAX_RELAY_URL_LEN};
 
 /// UTF-8 text of at most `N` bytes, with `N` at most 255.
 ///
@@ -17,7 +17,23 @@ pub type RelayUrl = BoundedStr<MAX_RELAY_URL_LEN>;
 /// Reason of a reported response, chosen by the person asked.
 pub type Reason = BoundedStr<MAX_REASON_LEN>;
 
+/// Name of a device as shown on the other devices of the person.
+pub type DeviceName = BoundedStr<MAX_DEVICE_NAME_LEN>;
+
+/// Local name of a contact, as carried in a contact record.
+pub type ContactName = BoundedStr<MAX_CONTACT_NAME_LEN>;
+
 impl<const N: usize> BoundedStr<N> {
+    /// Copies as much of the text as fits into `N` bytes, cut at a character
+    /// boundary.
+    pub fn truncated(text: &str) -> Self {
+        let mut end = text.len().min(N);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        Self::new(&text[..end]).expect("cut to fit")
+    }
+
     /// Copies the text, or fails with [`Error::TooLong`] above `N` bytes.
     pub fn new(text: &str) -> Result<Self, Error> {
         const { assert!(N <= u8::MAX as usize) };
@@ -105,6 +121,13 @@ mod tests {
         let text = BoundedStr::<6>::new("schläft").unwrap_err();
         assert_eq!(text, Error::TooLong);
         assert_eq!(BoundedStr::<8>::new("schläft").unwrap().as_str(), "schläft");
+    }
+
+    #[test]
+    fn truncates_at_character_boundary() {
+        assert_eq!(BoundedStr::<5>::truncated("schläft").as_str(), "schl");
+        assert_eq!(BoundedStr::<6>::truncated("schläft").as_str(), "schlä");
+        assert_eq!(BoundedStr::<8>::truncated("schläft").as_str(), "schläft");
     }
 
     #[test]

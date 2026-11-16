@@ -15,9 +15,10 @@ use std::path::{Path, PathBuf};
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 
-use crate::contact::ContactState;
-use crate::pairing::PendingInvitation;
-use crate::wire::{READER_ID_LEN, RelayUrl, Token};
+use crate::contact::{ContactState, Seen};
+use crate::crypto::GroupKey;
+use crate::pairing::{Address, PendingInvitation};
+use crate::wire::{ENVELOPE_LEN, MailboxId, READER_ID_LEN, ReaderId, RelayUrl, Token, TransferId};
 
 /// Version of the stored format. Raised on incompatible changes.
 pub const FORMAT_VERSION: u32 = 1;
@@ -40,6 +41,120 @@ pub struct Device {
     /// Set while some mailbox may still have an older push address.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub push_pending: bool,
+    /// Name of this device, shown on the other devices of the person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Sync mailbox shared with the other own devices, once there are any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<Group>,
+    /// The other devices of the person, without this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<KnownDevice>,
+    /// Envelopes for the sync mailbox the relay has not accepted yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outbox: Vec<Outgoing>,
+    /// Contacts arriving from another own device, not complete yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transfers: Vec<Transfer>,
+    /// Sync messages about contacts this device does not know yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parked: Vec<Parked>,
+}
+
+/// The sync mailbox of the own devices and the group key.
+///
+/// The same JSON form is part of the handover.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Group {
+    pub relay: RelayUrl,
+    #[serde(with = "crate::hex")]
+    pub mailbox: MailboxId,
+    #[serde(with = "crate::hex")]
+    pub read_token: Token,
+    #[serde(with = "crate::hex")]
+    pub send_token: Token,
+    pub key: GroupKey,
+    /// Replay protection for the whole sync mailbox.
+    pub seen: Vec<Seen>,
+}
+
+impl Group {
+    /// A group for a freshly created sync mailbox, with a new group key.
+    pub fn new(
+        address: Address,
+        read_token: Token,
+        rng: &mut impl rand_core::CryptoRngCore,
+    ) -> Self {
+        Self {
+            relay: address.relay,
+            mailbox: address.mailbox,
+            read_token,
+            send_token: address.send_token,
+            key: GroupKey::generate(rng),
+            seen: Vec::new(),
+        }
+    }
+
+    /// Where to deliver into the sync mailbox.
+    pub fn address(&self) -> Address {
+        Address {
+            relay: self.relay,
+            mailbox: self.mailbox,
+            send_token: self.send_token,
+        }
+    }
+}
+
+/// Another device of the person.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnownDevice {
+    #[serde(with = "crate::hex")]
+    pub reader: ReaderId,
+    pub name: String,
+}
+
+/// An envelope waiting for delivery into the sync mailbox.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Outgoing {
+    #[serde(with = "crate::hex")]
+    pub envelope: [u8; ENVELOPE_LEN],
+    /// Dropped 24 hours after this.
+    pub created_at: u64,
+}
+
+/// Parts of one transfer of a contact received so far.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Transfer {
+    #[serde(with = "crate::hex")]
+    pub contact: MailboxId,
+    #[serde(with = "crate::hex")]
+    pub transfer: TransferId,
+    /// Number of parts, as given by the first part.
+    pub count: u8,
+    /// Sorted by index, without repetitions.
+    pub parts: Vec<TransferPart>,
+    /// The transfer is dropped if not complete 24 hours after this.
+    pub first_seen: u64,
+    /// An inconsistent part arrived; later parts are ignored until the
+    /// transfer is dropped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub discarded: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransferPart {
+    pub index: u8,
+    #[serde(with = "crate::hex::bytes")]
+    pub data: Vec<u8>,
+}
+
+/// A sync message about a contact this device does not know yet, kept for
+/// 24 hours in case the contact arrives.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Parked {
+    #[serde(with = "crate::hex")]
+    pub envelope: [u8; ENVELOPE_LEN],
+    pub received_at: u64,
 }
 
 /// Access to a relay.
@@ -90,7 +205,39 @@ impl Device {
             invitations: Vec::new(),
             push_url: None,
             push_pending: false,
+            name: None,
+            group: None,
+            devices: Vec::new(),
+            outbox: Vec::new(),
+            transfers: Vec::new(),
+            parked: Vec::new(),
         }
+    }
+
+    /// The contact whose own mailbox is `mailbox`, the contact identifier
+    /// between own devices.
+    pub fn contact_by_mailbox(&self, mailbox: &MailboxId) -> Option<&StoredContact> {
+        self.contacts
+            .iter()
+            .find(|c| &c.state.contact.own_mailbox == mailbox)
+    }
+
+    pub fn contact_by_mailbox_mut(&mut self, mailbox: &MailboxId) -> Option<&mut StoredContact> {
+        self.contacts
+            .iter_mut()
+            .find(|c| &c.state.contact.own_mailbox == mailbox)
+    }
+
+    /// Whether this device has its relay account or a mailbox of its own on
+    /// `relay`. Tokens of this device go only to such relays.
+    pub fn knows_relay(&self, relay: &RelayUrl) -> bool {
+        self.relay.as_ref().is_some_and(|r| &r.url == relay)
+            || self.group.as_ref().is_some_and(|g| &g.relay == relay)
+            || self.contacts.iter().any(|c| &c.own_relay == relay)
+            || self
+                .invitations
+                .iter()
+                .any(|i| &i.pending.own.relay == relay)
     }
 }
 
@@ -332,6 +479,165 @@ mod tests {
         let device = file.load().unwrap();
         assert_eq!(device.push_url.as_deref(), Some("https://push.example/up"));
         assert!(device.push_pending);
+    }
+
+    /// A state file as written before several devices, with a contact that
+    /// has history, and an invitation.
+    const OLD_FILE: &str = r#"{
+  "format": 1,
+  "reader_id": "01010101010101010101010101010101",
+  "relay": {
+    "url": "https://relay.example",
+    "access_token": null
+  },
+  "contacts": [
+    {
+      "name": "Anna",
+      "own_relay": "https://relay.example",
+      "read_token": "0909090909090909090909090909090909090909090909090909090909090909",
+      "state": {
+        "contact": {
+          "key": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "peer_key": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "peer": {
+            "relay": "https://other.example",
+            "mailbox": "0303030303030303030303030303030303030303030303030303030303030303",
+            "send_token": "0404040404040404040404040404040404040404040404040404040404040404"
+          },
+          "own_mailbox": "0101010101010101010101010101010101010101010101010101010101010101",
+          "state": "paired"
+        },
+        "own_rules": {
+          "min_interval_minutes": 360,
+          "expiry_minutes": 1440,
+          "weekly_limit": 7
+        },
+        "peer_rules": {
+          "min_interval_minutes": 60,
+          "expiry_minutes": 120,
+          "weekly_limit": 3
+        },
+        "incoming": {
+          "entries": [
+            {
+              "id": "05050505050505050505050505050505",
+              "at": 1794600000,
+              "answered_at": 1794600100,
+              "reported": "schläft"
+            }
+          ],
+          "last_answer": 1794600100
+        },
+        "outgoing": {
+          "entries": [],
+          "last_answer": null
+        },
+        "seen": [
+          {
+            "id": "05050505050505050505050505050505",
+            "at": 1794600000
+          }
+        ],
+        "ended": false
+      }
+    }
+  ],
+  "invitations": [
+    {
+      "name": "Bert",
+      "read_token": "0606060606060606060606060606060606060606060606060606060606060606",
+      "pending": {
+        "key": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+        "own": {
+          "relay": "https://relay.example",
+          "mailbox": "0707070707070707070707070707070707070707070707070707070707070707",
+          "send_token": "0808080808080808080808080808080808080808080808080808080808080808"
+        },
+        "expires_at": 1794600600
+      }
+    }
+  ],
+  "push_url": "https://push.example/up"
+}"#;
+
+    #[test]
+    fn old_file_loads_and_saves_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = JsonFile::new(dir.path().join("device.json"));
+        std::fs::write(file.path(), OLD_FILE).unwrap();
+        let device = file.load().unwrap();
+        assert!(device.group.is_none() && device.devices.is_empty() && device.name.is_none());
+        let state = &device.contacts[0].state;
+        assert_eq!(state.own_rules_stamp, crate::wire::Stamp::default());
+        file.update(|_| Ok::<_, io::Error>(())).unwrap();
+        assert_eq!(std::fs::read_to_string(file.path()).unwrap(), OLD_FILE);
+    }
+
+    #[test]
+    fn several_devices_fields_round_trip() {
+        let (_dir, file) = store();
+        file.update(|device| {
+            device.name = Some("Laptop".into());
+            device.group = Some(super::Group::new(
+                crate::pairing::Address {
+                    relay: RelayUrl::new("https://relay.example").unwrap(),
+                    mailbox: [1; 32],
+                    send_token: [2; 32],
+                },
+                [3; 32],
+                &mut OsRng,
+            ));
+            device.devices.push(super::KnownDevice {
+                reader: [4; 16],
+                name: "Phone".into(),
+            });
+            device.outbox.push(super::Outgoing {
+                envelope: [5; crate::wire::ENVELOPE_LEN],
+                created_at: T,
+            });
+            device.transfers.push(super::Transfer {
+                contact: [6; 32],
+                transfer: [7; 16],
+                count: 2,
+                parts: vec![super::TransferPart {
+                    index: 1,
+                    data: vec![8, 9],
+                }],
+                first_seen: T,
+                discarded: false,
+            });
+            device.parked.push(super::Parked {
+                envelope: [10; crate::wire::ENVELOPE_LEN],
+                received_at: T,
+            });
+            device.contacts.push(StoredContact {
+                name: "Anna".into(),
+                own_relay: RelayUrl::new("https://relay.example").unwrap(),
+                read_token: [0; 32],
+                state: dummy_state(),
+            });
+            device.contacts[0].state.own_rules_stamp = crate::wire::Stamp {
+                at: T,
+                id: [11; 16],
+            };
+            Ok::<_, io::Error>(())
+        })
+        .unwrap();
+        let text = std::fs::read_to_string(file.path()).unwrap();
+        assert!(text.contains("\"data\": \"0809\""));
+        assert!(text.contains("\"own_rules_stamp\""));
+        assert!(!text.contains("\"peer_rules_stamp\""));
+        let device = file.load().unwrap();
+        assert_eq!(device.name.as_deref(), Some("Laptop"));
+        assert_eq!(device.devices[0].name, "Phone");
+        assert_eq!(device.outbox[0].envelope, [5; crate::wire::ENVELOPE_LEN]);
+        assert_eq!(device.transfers[0].parts[0].data, [8, 9]);
+        assert_eq!(device.parked[0].received_at, T);
+        assert_eq!(device.group.unwrap().read_token, [3; 32]);
+        assert_eq!(device.contacts[0].state.own_rules_stamp.id, [11; 16]);
+        // Written again unchanged.
+        file.update(|_| Ok::<_, io::Error>(())).unwrap();
+        assert_eq!(std::fs::read_to_string(file.path()).unwrap(), text);
     }
 
     #[cfg(unix)]

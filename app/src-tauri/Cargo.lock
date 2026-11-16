@@ -2235,6 +2235,7 @@ name = "lz-core"
 version = "0.0.0"
 dependencies = [
  "crypto_box",
+ "crypto_secretbox",
  "lz-wire",
  "rand_core 0.6.4",
  "serde",

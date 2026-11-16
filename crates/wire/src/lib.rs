@@ -10,13 +10,20 @@
 #![no_std]
 
 pub mod base32;
+pub mod device_code;
 pub mod invitation;
 pub mod message;
+pub mod record;
 mod text;
 
+pub use device_code::DeviceCode;
 pub use invitation::Invitation;
-pub use message::{Body, Hello, Message, Response, ResponseKind, Rules};
-pub use text::{BoundedStr, Reason, RelayUrl};
+pub use message::{
+    Body, ContactPart, DeviceAnnounce, Hello, Message, PartData, Requested, Responded, Response,
+    ResponseKind, Rules, RulesSet,
+};
+pub use record::{ContactRecord, Stamp};
+pub use text::{BoundedStr, ContactName, DeviceName, Reason, RelayUrl};
 
 /// Version byte at the start of every envelope and every invitation.
 pub const PROTOCOL_VERSION: u8 = 1;
@@ -64,6 +71,25 @@ pub const MAX_RELAY_URL_LEN: usize = 120;
 /// Longest reason of a reported response in bytes of UTF-8.
 pub const MAX_REASON_LEN: usize = 64;
 
+/// Longest name of a device in `device`, in bytes of UTF-8.
+pub const MAX_DEVICE_NAME_LEN: usize = 32;
+
+/// Longest local name of a contact in a contact record, in bytes of UTF-8.
+pub const MAX_CONTACT_NAME_LEN: usize = 64;
+
+/// Longest data of one `contact_part`.
+pub const MAX_PART_LEN: usize = 178;
+
+/// Longest handover the relay stores, sealed.
+pub const MAX_HANDOVER_LEN: usize = 64 * 1024;
+
+/// Lifetime of a device code; handover slots live as long on the relay.
+pub const DEVICE_CODE_TTL_SECS: u64 = 10 * 60;
+
+/// How long a device keeps sync messages it could not deliver or apply yet,
+/// and incomplete contact transfers.
+pub const SYNC_KEEP_SECS: u64 = 24 * 60 * 60;
+
 /// A message is accepted only if it was sent at most this long ago.
 pub const MAX_MESSAGE_AGE_SECS: u64 = 24 * 60 * 60 + 10 * 60;
 
@@ -88,9 +114,20 @@ pub type Token = [u8; TOKEN_LEN];
 /// Identifier of a message; for a request also the identifier of the request.
 pub type MessageId = [u8; MESSAGE_ID_LEN];
 
+/// Identifier of a device as a reader of mailboxes.
+pub type ReaderId = [u8; READER_ID_LEN];
+
+/// Identifier of one transfer of a contact in `contact_part`.
+pub type TransferId = [u8; 16];
+
+/// SHA-256 value, for example of a token or a handover slot.
+pub type Hash = [u8; 32];
+
 // Checked at compile time: an envelope must fit into one relay message, and
 // the sealed form must have exactly the same length as the ordinary one.
+// The largest `contact_part` must fill the body of the ordinary form exactly.
 const _: () = assert!(ENVELOPE_LEN <= MAX_MESSAGE_BYTES);
+const _: () = assert!(32 + 16 + 3 + MAX_PART_LEN == PADDED_PLAINTEXT_LEN - message::HEADER_LEN);
 const _: () = assert!(ENVELOPE_LEN == 1 + PUBLIC_KEY_LEN + SEALED_PLAINTEXT_LEN + TAG_LEN);
 
 /// Everything that can go wrong while reading or writing the wire format.
@@ -104,7 +141,7 @@ pub enum Error {
     InvalidUtf8,
     /// A field holds a value the format does not define.
     InvalidValue,
-    /// An invitation code is not valid Base32 or lacks its prefix.
+    /// An invitation or device code is not valid Base32 or lacks its prefix.
     InvalidCode,
     /// The version byte is not [`PROTOCOL_VERSION`].
     UnsupportedVersion(u8),

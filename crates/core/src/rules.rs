@@ -85,16 +85,18 @@ impl Ledger {
 
     /// Records a request that was accepted or sent at `at`.
     pub fn record(&mut self, id: MessageId, at: u64) {
-        let pos = self.entries.partition_point(|e| e.at <= at);
-        self.entries.insert(
-            pos,
-            Entry {
-                id,
-                at,
-                answered_at: None,
-                reported: None,
-            },
-        );
+        self.insert(Entry {
+            id,
+            at,
+            answered_at: None,
+            reported: None,
+        });
+    }
+
+    /// Inserts an entry, keeping the entries sorted by time.
+    pub fn insert(&mut self, entry: Entry) {
+        let pos = self.entries.partition_point(|e| e.at <= entry.at);
+        self.entries.insert(pos, entry);
     }
 
     /// Marks a request as manually answered at `at`. Returns `false` for an

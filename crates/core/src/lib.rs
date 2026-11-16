@@ -11,6 +11,8 @@ pub use lz_wire as wire;
 
 pub mod contact;
 pub mod crypto;
+pub mod group;
+pub mod handover;
 mod hex;
 pub mod pairing;
 pub mod rules;
@@ -33,6 +35,14 @@ pub enum Error {
     Ended,
     /// The rules of the other side allow the next request only at this time.
     NotYet(u64),
+    /// A revealed value, challenge or handover does not match when adding a
+    /// device. Show an alarm and stop.
+    Mismatch,
+    /// The handover is not readable.
+    Unreadable,
+    /// The handover has a version this device does not know; the older
+    /// device has to be updated first.
+    UnknownVersion(u32),
 }
 
 impl From<wire::Error> for Error {
@@ -51,6 +61,9 @@ impl std::fmt::Display for Error {
             Self::Unexpected => f.write_str("does not fit the current state"),
             Self::Ended => f.write_str("contact has ended"),
             Self::NotYet(at) => write!(f, "next request possible at {at}"),
+            Self::Mismatch => f.write_str("does not match what was agreed"),
+            Self::Unreadable => f.write_str("not readable"),
+            Self::UnknownVersion(v) => write!(f, "unknown version {v}"),
         }
     }
 }
