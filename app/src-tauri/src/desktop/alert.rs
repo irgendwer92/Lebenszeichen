@@ -1,10 +1,12 @@
-//! Foreground window for an open request, under X11 (see `docs/concept.md`):
+//! Foreground window for an open request, under X11 and on Windows (see
+//! `docs/concept.md`):
 //! above all other windows, on every workspace, and without keyboard focus,
 //! so that a key pressed while typing elsewhere never counts as a sign of
 //! life. A click into the window or closing it answers.
 //!
 //! Under Wayland an app may not bring itself to the front; there requests
-//! come as notifications only.
+//! come as notifications only. On Windows they come as notifications while
+//! Do Not Disturb is on, so that the window respects it.
 
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
@@ -28,13 +30,23 @@ pub fn number(label: &str) -> Option<u32> {
 }
 
 /// Whether the app runs on X11, where a window may put itself in front.
+#[cfg(target_os = "linux")]
 pub fn possible() -> bool {
     let var = |name| std::env::var(name).ok().filter(|v| !v.is_empty());
     on_x11(var("GDK_BACKEND"), var("WAYLAND_DISPLAY"), var("DISPLAY"))
 }
 
+/// Whether Windows accepts notifications right now: not during Do Not
+/// Disturb, a presentation or a full-screen program.
+#[cfg(windows)]
+pub fn possible() -> bool {
+    use windows::Win32::UI::Shell::{QUNS_ACCEPTS_NOTIFICATIONS, SHQueryUserNotificationState};
+    unsafe { SHQueryUserNotificationState() }.is_ok_and(|state| state == QUNS_ACCEPTS_NOTIFICATIONS)
+}
+
 /// GTK picks Wayland if the session offers it, unless `GDK_BACKEND` names
 /// another backend first; XWayland counts as X11 then.
+#[cfg(any(target_os = "linux", test))]
 fn on_x11(backend: Option<String>, wayland: Option<String>, display: Option<String>) -> bool {
     let first = backend
         .as_deref()

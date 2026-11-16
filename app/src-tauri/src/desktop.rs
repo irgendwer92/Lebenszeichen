@@ -3,9 +3,9 @@
 
 use std::path::PathBuf;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod alert;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod notify;
 
 use serde::Serialize;
@@ -27,7 +27,7 @@ pub const HIDDEN_ARG: &str = "--hidden";
 
 /// What only the desktop keeps.
 pub struct Desktop {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     notifier: Option<notify::Notifier>,
     tray: TrayItems,
 }
@@ -57,13 +57,13 @@ pub fn language_changed(app: &AppHandle) {
 
 /// Requests may have come or gone; the notifications follow.
 pub fn poke(app: &AppHandle) {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     if let Some(desktop) = app.try_state::<Desktop>()
         && let Some(notifier) = &desktop.notifier
     {
         notifier.poke();
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     let _ = app;
 }
 
@@ -76,10 +76,10 @@ pub fn setup(app: &mut tauri::App, path: PathBuf) -> Result<(), Box<dyn std::err
     offer_autostart(app, &path);
     app.manage(Desktop {
         tray,
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         notifier: notify::start(app.handle().clone(), path),
     });
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     let _ = path;
     Ok(())
 }
@@ -180,7 +180,7 @@ pub struct AlertText {
 
 /// The request a foreground window shows, from its label. A window can only
 /// ever see and answer its own request.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn alert_of<'a>(
     window: &tauri::WebviewWindow,
     state: &'a tauri::State<'_, Desktop>,
@@ -200,7 +200,7 @@ pub fn alert_text(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, Desktop>,
 ) -> Result<AlertText, String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     {
         let (notifier, number) = alert_of(&window, &state)?;
         let t = lang::texts();
@@ -216,7 +216,7 @@ pub fn alert_text(
             hint: t.text("app-alert-hint", &[]),
         })
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = (window, state);
         Err(lang::texts().text("app-error-no-alert-here", &[]))
@@ -229,13 +229,13 @@ pub fn alert_answer(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, Desktop>,
 ) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     {
         let (notifier, number) = alert_of(&window, &state)?;
         notifier.alert_clicked(number);
         Ok(())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = (window, state);
         Err(lang::texts().text("app-error-no-alert-here", &[]))
