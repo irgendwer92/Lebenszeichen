@@ -77,13 +77,19 @@ There is deliberately **no** delivery or read receipt. A only learns that the re
 
 ### Between own devices
 
-Own devices share a sync mailbox and a symmetric group key.
+Own devices share a sync mailbox and a symmetric group key. Decided on 2026-11-16 for M5; the exact format is in `wire-format.md`.
 
 | Type | Fields | Purpose |
 |---|---|---|
-| `done` | identifier of the request | Withdraw the notification on the other devices |
-| `contact` | added, changed or removed; contact data and rules | Sync the contact list |
-| `counted` | contact, identifier and time of an accepted request | Keep the counters for minimum interval and weekly limit the same on all devices |
+| `device` | reader identifier, name | A new device announces itself |
+| `device_removed` | reader identifier | A device was removed |
+| `requested` | contact, identifier and time of the request | A request of the person's own from another device: disable the button and accept the response |
+| `responded` | contact, identifier of the request, kind, reason, time | Withdraw the display on the other devices and start the minimum interval there |
+| `rules_set` | contact, own rules | Rules changed on one device |
+| `contact_part` | contact, part of its data | A contact paired on one device |
+| `contact_removed` | contact | A contact ended on one device |
+
+The earlier plan had `counted` to keep counters equal. It is not needed: every device reads all mailboxes and counts the same requests.
 
 ## Rules for requests (decided)
 
@@ -112,9 +118,9 @@ Evaluation of responses on the requester's side:
 ## Multiple devices (decided: from the start)
 
 - All devices of a person share contact keys and mailboxes. Contacts cannot see how many devices someone has.
-- A new device is set up by QR code from an existing device and takes over the contact list, rules and group key.
+- A new device is set up by QR code: the new device shows a code with a public key, the existing device seals the contact list, rules and group key to it and hands them over through the relay.
 - Every device is its own reader; the relay holds messages until all readers have acknowledged.
-- If the person reacts on one device, it sends `done` to the others.
+- If the person reacts on one device, it sends `responded` to the others.
 - A status report applies only to the device that received it. That device sends the `reported` response after the waiting time.
 - A device is removed by another device unregistering it as a reader. If a device is lost, the contacts must be paired again, because it knows all contact keys.
 
@@ -162,12 +168,14 @@ Even without content, metadata remains if someone actively observes the relay:
 
 With a self-operated relay, the operator is a trusted person. For a later release with third-party relays, this would be the most important point to sharpen.
 
+- **Several devices (M5):** a sync mailbox is recognizable by its behavior, because its readers also deliver into it. Storing a handover links a mailbox of the person to the network address of the new device. Derived mailboxes cannot be withdrawn by the holder of the access token who issued the voucher.
+
 The push service (ntfy) only sees when a device is woken.
 
 ### Protection against abuse
 
 - Mailboxes only with access token or voucher.
-- At most 8 waiting messages and 20 deliveries per hour per mailbox (decided on 2026-11-14; previously 6, which could block the `end` during normal use through pairing, rule changes and responses). The limit counts all messages because the relay does not know the types; it is not a substitute for the rules for requests.
+- At most 32 waiting messages and 20 deliveries per hour per mailbox (32 since 2026-11-16 for the sync mailbox of several devices; before that 8, decided on 2026-11-14; before that 6, which could block the `end` during normal use through pairing, rule changes and responses). The limit counts all messages because the relay does not know the types; it is not a substitute for the rules for requests.
 - Mailboxes without retrieval for 90 days are deleted.
 
 These limits only protect the relay. The rules for requests are enforced by the requested party's device, because the relay does not know the message types.
