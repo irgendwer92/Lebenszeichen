@@ -12,7 +12,27 @@ pub const MESSAGE_TTL_SECS: i64 = 24 * 60 * 60;
 pub const MAILBOX_IDLE_DAYS: i64 = 90;
 
 /// At most this many messages wait in a mailbox.
-pub const MAX_WAITING_MESSAGES: usize = 8;
+pub const MAX_WAITING_MESSAGES: usize = 32;
+
+/// A mailbox created with a voucher may derive at most this many mailboxes.
+pub const MAX_DERIVED_MAILBOXES: usize = 10;
+
+/// A handover slot (and a reveal reservation) is deleted at the latest this
+/// long after the `PUT` that created it.
+pub const HANDOVER_TTL_SECS: i64 = 10 * 60;
+
+/// Largest handover body.
+pub const MAX_HANDOVER_BYTES: usize = 64 * 1024;
+
+/// Exact length of the body of a reveal slot.
+pub const REVEAL_BYTES: usize = 32;
+
+/// At most this many handover slots on the relay, reserved reveal slots
+/// included.
+pub const MAX_HANDOVERS: usize = 64;
+
+/// At most this many waiting handover slots authorized with the same token.
+pub const MAX_HANDOVERS_PER_TOKEN: usize = 2;
 
 /// At most this many messages are accepted per mailbox within
 /// [`RATE_WINDOW_SECS`].

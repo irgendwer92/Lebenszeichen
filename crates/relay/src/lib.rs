@@ -138,7 +138,8 @@ impl AppState {
         }
     }
 
-    /// Deletes expired messages and vouchers and idle mailboxes, and tells
+    /// Deletes expired messages, vouchers and handover slots and idle
+    /// mailboxes, and tells
     /// subscribed connections about deleted mailboxes.
     pub async fn cleanup(&self) -> Result<store::Cleanup, ApiError> {
         let now = self.now();
@@ -178,6 +179,10 @@ pub fn app(state: AppState) -> Router {
             put(api::put_reader).delete(api::delete_reader),
         )
         .route("/v1/mailboxes/{mailbox}/messages", post(api::post_message))
+        .route(
+            "/v1/handovers/{handover}",
+            put(api::put_handover).get(api::get_handover),
+        )
         .route("/v1/stream", get(stream::stream))
         .with_state(state)
 }
