@@ -182,7 +182,7 @@ The new device **N** and an existing device **E** of the person exchange four th
 
    with the hash of the fetch token from the code and `SHA-256(t)` as reply hash. If the relay answers `409 handover_exists`, E shows an alarm and stops.
 
-3. **N** fetches the challenge slot with its fetch token. Only then it reveals `n`: it stores `n` in the reveal slot that belongs to the challenge slot, authorized with `t`.
+3. **N** fetches the challenge slot with its fetch token. Only then it reveals `n`: it stores `n` in the reveal slot that belongs to the challenge slot, authorized with `t`. N reveals `n` at most once per device code and never accepts a second challenge for it; on any failure it starts over at step 1 with a new handover key, fetch token and `n`.
 
 4. **E** fetches the reveal slot with `t` and checks `n` against the commitment from the device code. If it does not match, E shows an alarm and stops. **Both** now show the **device check code**:
 
@@ -328,7 +328,7 @@ Handover slots carry challenge, revealed value and handover when a device is add
 
 - `PUT` needs a token of this relay, to keep strangers from storing data on it. The read token of any mailbox suffices, so that people without an access token can add devices as well. At most two slots authorized with the same token wait at the same time, at most 64 on the relay.
 - `PUT` names the hash of the fetch token in `Lz-Fetch-Hash`; `GET` needs the fetch token itself. Whoever only sees the device code can therefore neither read nor delete a slot.
-- **Reveal slot:** If a `PUT` also names `Lz-Reply-Hash`, the relay reserves the slot `SHA-256("lebenszeichen-v1-reveal" || slot)`, where `slot` are the 32 bytes of the identifier just stored. The reveal slot accepts exactly one `PUT` of at most 32 bytes, authorized with the reply token instead of a relay token and without `Lz-Fetch-Hash`; `GET` on it also needs the reply token. It expires with the slot that reserved it. This lets the new device answer without a token of the relay.
+- **Reveal slot:** If a `PUT` also names `Lz-Reply-Hash`, the relay reserves the slot `SHA-256("lebenszeichen-v1-reveal" || slot)` in the same step, where `slot` are the 32 bytes of the identifier just stored. If that reveal identifier exists or is reserved already, the whole `PUT` fails with `409`. The reservation lasts 10 minutes from the reserving `PUT`, independent of when the reserving slot is fetched or deleted. The reveal slot accepts exactly one `PUT` of exactly 32 bytes, authorized with the reply token in `Authorization: Bearer` instead of a relay token and without `Lz-Fetch-Hash`; `GET` on it also needs the reply token, and a successful `GET` deletes it. A reserved or filled reveal slot counts towards the limit of 64 slots on the relay, not towards the two per token. This lets the new device answer without a token of the relay.
 - The relay deletes a slot with the first successful `GET`, at the latest 10 minutes after the `PUT`. A second `PUT` to an existing or reserved identifier fails with `409`.
 - The relay does not look into the content: challenge and revealed value are not secret, only unpredictable in advance, and the handover is sealed for the new device.
 - Whoever holds read tokens on the relay can occupy slots up to the limits and thus delay the adding of devices by others; this is a possible disruption, not a leak.
@@ -403,7 +403,7 @@ Decided on 2026-11-16 (E1 to E6 and the relay rule), going beyond `protocol.md`:
 - **Device check code over a commitment of the new device and a challenge of the existing device**, revealed in this order, so that a swapped code cannot be matched by searching; and a **handover check code** from the group key against a planted handover. Both after two crypto reviews on 2026-11-16; the first fix, a challenge alone, could still be matched by an attacker who chooses the challenge the new device sees.
 - **Handover through the relay** as a separate, one-time block of up to 64 KiB, because the state does not fit into a few messages of 256 bytes and the limits per mailbox (32 waiting, 20 per hour) would make the transfer take hours. Fetching needs a fetch token that only the new device knows.
 - **At most 32 waiting messages per mailbox** instead of 8, for all mailboxes: a sync mailbox must not fill up just because one device is offline for a day. Costs about 10 KB per mailbox; the limit of 20 per hour stays.
-- **New contacts as a compact binary record** in 2 to 4 parts with a transfer identifier, instead of their JSON form, which would need about 5 parts.
+- **New contacts as a compact binary record** (at most 535 bytes) in 2 to 4 parts with a transfer identifier, instead of their JSON form, which would need about 5 parts.
 - **Last writer wins** for rules, by sending time and then message identifier; this also applies to `rules` from contacts with several devices.
 - **No `counted` message:** all devices read all mailboxes and count the same requests. Instead `requested`, so that other devices accept the response to a request of the person's own.
 - **Devices offline for more than 24 hours** may deviate; accepted for M5.
