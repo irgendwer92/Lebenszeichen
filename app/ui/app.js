@@ -987,6 +987,7 @@ function addEvent({ step, code, text }) {
       $("add-progress").textContent = "";
       break;
     case "check_handover":
+      $("add-handover-code").textContent = grouped(code);
       showAddPart("wait");
       break;
     case "progress":
