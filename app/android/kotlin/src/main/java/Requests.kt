@@ -62,6 +62,7 @@ object Requests {
                 if (visible[request.name] != request.key) RequestPresenter.show(app, request)
             }
             Store.forgetAnswersExcept(app, open.map { it.key }.toSet())
+            RequestActivity.closeAllExcept(waiting.map { it.key }.toSet())
         }
         ExpiryWorker.schedule(app, open.minOfOrNull { it.expiresAt })
     }
