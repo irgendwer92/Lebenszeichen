@@ -18,6 +18,7 @@ Notation: All numbers are unsigned and big-endian. `b64url` means Base64 with th
 | Message identifier | 16 bytes | Client, random, per message |
 | Group key | 32 bytes, symmetric | Client, random, once per person (M5) |
 | Handover key | X25519, 32 bytes public, 32 bytes secret | New device, random, once per adding of a device (M5) |
+| Fetch token, challenge | 32 bytes each | New device and existing device, random, once per adding of a device (M5) |
 
 Of tokens and vouchers, the relay stores only `SHA-256(value)`.
 
@@ -157,44 +158,89 @@ The sync mailbox and the group key are created by the existing device when the s
 
 ### Adding a device
 
-1. **The new device** creates a handover key and shows the device code as a QR code and as text: `LZD1-`, followed by Base32 like the invitation, over these bytes:
+The new device **N** and an existing device **E** of the person exchange three things through the relay: a random challenge, then the handover. Two six-digit codes are compared on the way; the person confirms the first on E and the second on N.
+
+1. **N** creates a handover key, a fetch token (32 bytes, random) and a reader identifier of its own. It shows the **device code** as a QR code and as text: `LZD1-`, followed by Base32 like the invitation, over these bytes:
 
    | Length | Content |
    |---|---|
    | 1 | Version, `0x01` |
    | 8 | Expiry time, 10 minutes after creation |
    | 32 | Public handover key |
+   | 16 | Reader identifier of N |
+   | 32 | `SHA-256(fetch token)` |
    | 1 | Length of the relay address |
-   | at most 120 | Relay address on which the existing device stores the handover |
+   | at most 120 | Relay address on which E stores challenge and handover |
 
-   Below it, the new device shows the **device check code**:
+2. **E** reads the device code. It refuses expired codes and relay addresses on which it has neither its relay account nor a mailbox of its own; it only ever sends tokens to the relay that issued them. It creates a random **challenge** (32 bytes) and stores it as a handover slot (see [Handover](#handover)) under
 
    ```
-   h    = SHA-256("lebenszeichen-v1-device" || public_handover_key)
+   SHA-256("lebenszeichen-v1-challenge" || public_handover_key)
+   ```
+
+3. **N** fetches the challenge with its fetch token. **Both** now show the **device check code**:
+
+   ```
+   h    = SHA-256("lebenszeichen-v1-device" || public_handover_key || challenge)
    code = (first 4 bytes of h as a number) mod 1000000, with leading zeros
    ```
 
-2. **The existing device** reads the device code, shows the same check code and asks for confirmation that both match. It rejects expired codes and relay addresses on which it cannot store a handover. If there is no group yet, it now creates group key and sync mailbox and registers itself as a reader of it.
-3. It encrypts the handover content with `crypto_box_seal` to the public handover key and stores it on the relay under the handover identifier (see [Handover](#handover)).
-4. **The new device** retrieves the handover every few seconds until it arrives or the code expires, opens it and stores the state with a **new reader identifier of its own**. It registers itself as a reader with its push address on all mailboxes, including the sync mailbox, and then sends `device` to the sync mailbox.
-5. The existing devices show the new device by its name. A device appearing that the person did not add is the sign of a compromised device or code.
+   The person compares both and confirms on E. The challenge is chosen by E only after the public key in the device code is fixed, so whoever swaps the device code cannot search for a key that yields the same digits. The check therefore also protects a device code that was passed on as text.
 
-The device code contains no secret; whoever photographs it learns nothing. Whoever slips their own device code to the person would receive the handover; the device check code protects against that, like the verification code during pairing.
+4. **E** prepares the state. If there is no group yet, it creates group key and sync mailbox and registers itself as a reader of it. It registers the reader identifier of N, without push address, on all mailboxes of the person including the sync mailbox, **before** it takes the snapshot, so that no message reaches only the old devices from then on. Then it seals the handover content with `crypto_box_seal` to the public handover key and stores it under
+
+   ```
+   SHA-256("lebenszeichen-v1-handover" || public_handover_key)
+   ```
+
+   If the relay answers `409 handover_exists`, someone else has stored a handover for this code: E shows this as an alarm, removes the reader identifier of N again and stops.
+
+5. **N** fetches the handover with its fetch token and opens it. It discards it unless the content contains the same challenge. Both devices then show the **handover check code**:
+
+   ```
+   h    = SHA-256("lebenszeichen-v1-handover" || group_key || public_handover_key)
+   code = (first 4 bytes of h as a number) mod 1000000, with leading zeros
+   ```
+
+   The person confirms on N. Only someone who knows the group key can produce matching digits, so a handover planted by a third party is recognized here. After confirming, N stores the state, registers its push address on all mailboxes and sends `device` to the sync mailbox.
+
+6. If E receives no `device` with the reader identifier of N until the expiry time, it removes that reader identifier from all mailboxes again. The other devices show the new device by its name; a device that the person did not add is the sign of a compromised device or code.
 
 **Content of the handover:** a JSON object in UTF-8:
 
 ```json
 {
   "version": 1,
+  "challenge": "<hex>",
   "relay": { "url": "https://…", "access_token": "<hex or null>" },
   "group": { "relay": "https://…", "mailbox": "<hex>", "read_token": "<hex>",
-             "send_token": "<hex>", "key": "<hex>" },
+             "send_token": "<hex>", "key": "<hex>", "seen": [ … ] },
   "devices": [ { "reader": "<hex>", "name": "Phone" } ],
   "contacts": [ … ]
 }
 ```
 
-`contacts` contains the contacts in the same JSON form as in the state file of the existing device; open invitations stay on the device that created them and are not handed over. Reader identifier and push address are device-specific and are not part of the content.
+- `group.seen` is the replay protection of the sync mailbox (message identifiers with their times), so that N discards sync messages that are already reflected in the snapshot.
+- `contacts` contains the contacts in the same JSON form as in the state file of E, including their replay protection and counters. Open invitations stay on the device that created them and are not handed over. Reader identifier and push address of E are device-specific and are not part of the content.
+
+### Contact record
+
+`contact_part` carries a newly paired contact as a compact record, only with what cannot be derived:
+
+| Length | Content |
+|---|---|
+| 32 | Secret contact key |
+| 32 | Public contact key of the contact |
+| 32 | Read token of the own mailbox |
+| 1 + at most 120 | Own relay address (length, address) |
+| 32 | Mailbox identifier of the contact |
+| 32 | Send token for it |
+| 1 + at most 120 | Relay address of the contact (length, address) |
+| 10 | Own rules for this contact, as in `rules` |
+| 10 | Rules of the contact, as in `rules` |
+| 1 + at most 64 | Local name of the contact (length, name in UTF-8) |
+
+The own mailbox identifier is the contact identifier of the message. Replay protection and counters of the new contact start empty on the receiving device.
 
 ### Messages between own devices
 
@@ -207,26 +253,27 @@ Same plaintext header as for contacts, form C, only in the sync mailbox:
 | 66 | `requested` | contact identifier (32), identifier of the request (16), time of the request (8) |
 | 67 | `responded` | contact identifier (32), identifier of the request (16), kind (1) as in `response`, length of the reason (1), reason (at most 64 bytes UTF-8), time of the response (8) |
 | 68 | `rules_set` | contact identifier (32), the person's own rules for this contact as in `rules` (10) |
-| 69 | `contact_part` | contact identifier (32), number of this part (1, from 0), number of parts (1), length (1), data (at most 194 bytes) |
+| 69 | `contact_part` | contact identifier (32), transfer identifier (16, random per transfer), number of this part (1, from 0), number of parts (1), length (1), data (at most 178 bytes) |
 | 70 | `contact_removed` | contact identifier (32) |
 
 - `requested`: another device of the person sent a request to this contact. The recipient shows it as open and accepts the contact's response to it.
 - `responded`: another device answered the request. The recipient withdraws its display and lets the minimum interval start from the time of the response.
-- `contact_part`: a contact paired on another device. The parts, put together in order, are the contact's entry in the JSON form of the handover. The recipient keeps parts for at most 24 hours, adds the contact when all parts are there and registers itself as a reader of its mailbox.
-- If two devices change the same thing, the later sending time wins.
-- A device enters the identifiers of its own messages into its replay protection before sending. It also reads the sync mailbox and thus discards its own messages as duplicates.
-- Replay protection, time window and handling of unknown types are the same as for contacts.
+- `rules_set`: the recipient takes the rules only if they are newer than the last ones it applied for this contact. Newer means: later sending time, or the same sending time and a larger message identifier (bytewise). The same applies to `rules` from a contact: a recipient applies only `rules` with a later sending time than the last applied ones, because two devices of the contact may have sent them.
+- `contact_part`: the parts of one transfer, put together in order of their numbers, are the [contact record](#contact-record). The recipient discards the whole transfer if the number of parts differs between parts, a number is not below the number of parts, a length is larger than 178 or than the rest of the body, the record cannot be read completely, or the transfer is not complete within 24 hours. If the contact already exists, the transfer is ignored. Otherwise the recipient adds the contact and registers itself as a reader of the own mailbox with its push address.
+- `contact_removed`: another device ended the contact; it has already sent `end` and deleted the mailbox. The recipient only deletes the contact locally.
+- A device enters the identifiers of its own messages into the replay protection of the sync mailbox before sending. It also reads the sync mailbox and thus discards its own messages as duplicates.
+- Replay protection, time window and handling of unknown types are the same as for contacts, with one replay protection for the whole sync mailbox.
+- If the relay refuses a message to the sync mailbox with `mailbox_full` or `rate_limited`, the device keeps it and tries again with every later fetch, at the latest every 5 minutes; after 24 hours it drops it.
 
 ### Removing a device
 
 Another device of the person removes the reader identifier of the device from all mailboxes, including the sync mailbox, and sends `device_removed`. If the removed device is still running, the relay answers it with `unknown_reader`; it then shows that it was removed and deletes its state.
 
-Removing a device is not protection against a lost or stolen device: it keeps all contact keys and the group key. In that case, the contacts have to be paired again (`protocol.md`).
+This only works with a device that cooperates. A removed device keeps all read and send tokens, the contact keys and the group key: it could register itself again as a reader and keep sending messages to the sync mailbox. Removing a device is therefore no protection against a lost or stolen device; in that case the contacts have to be paired again (`protocol.md`).
 
 ### Known gaps
 
-- A device that is offline for more than 24 hours misses messages, because the relay deletes them after 24 hours. Its counters and display can deviate until the next message about the same contact.
-- Between the handover and the new device's registration as a reader, the other devices may acknowledge messages that the new device then never receives.
+- A device that is offline for more than 24 hours misses messages, because the relay deletes them after 24 hours. Its counters and display can deviate until the next message about the same contact. A missed `contact_part` is not repeated: the contact stays missing on that device until it is added again. A way to fetch the complete state again is left for later.
 
 ## Relay interface
 
@@ -241,8 +288,8 @@ HTTPS and WebSocket under the path `/v1`. Tokens are in the header `Authorizatio
 | `PUT /v1/mailboxes/{mailbox}/readers/{reader}` | Read token | `{"push_url":"https://…"}` or `{"push_url":null}` | `204` |
 | `DELETE /v1/mailboxes/{mailbox}/readers/{reader}` | Read token | – | `204` |
 | `POST /v1/mailboxes/{mailbox}/messages` | Send token | Body: the 297 bytes of the envelope, `application/octet-stream` | `202` |
-| `PUT /v1/handovers/{handover}` | Access token or read token of any mailbox on this relay (M5) | Body: the sealed handover, at most 64 KiB | `201` |
-| `GET /v1/handovers/{handover}` | – | – | `200` with the sealed handover as body; deleted afterwards |
+| `PUT /v1/handovers/{handover}` | Access token or read token of any mailbox on this relay (M5) | Header `Lz-Fetch-Hash: <hex>`; body: at most 64 KiB, `application/octet-stream` | `201` |
+| `GET /v1/handovers/{handover}` | Fetch token (M5) | – | `200` with the stored bytes as body; deleted afterwards |
 
 Error codes:
 
@@ -255,27 +302,24 @@ Error codes:
 | 404 | `unknown_handover` | No handover under this identifier, or already retrieved or expired |
 | 409 | `handover_exists` | A handover under this identifier exists already |
 | 429 | `mailbox_quota` | The voucher mailbox already has 10 derived mailboxes |
+| 429 | `handovers_quota` | Two handovers authorized with this token are waiting already |
 | 503 | `handovers_full` | 64 handovers are waiting on this relay |
 | 413 | `too_large` | Body longer than 512 bytes, for a handover longer than 64 KiB |
-| 429 | `mailbox_full` | Already 8 waiting messages |
+| 429 | `mailbox_full` | Already 32 waiting messages |
 | 429 | `rate_limited` | More than 20 deliveries in the last hour |
 
 A voucher is valid for 10 minutes and for exactly one mailbox. The relay accepts arbitrary bodies up to 512 bytes and does not check their content.
 
-**Derived mailboxes (M5):** Whoever shows the read token of a mailbox that was created with a voucher may create up to 10 further mailboxes with it. They count as long as they exist; deleting one frees its place. Derived mailboxes cannot create further mailboxes, and neither can mailboxes created with the access token. This lets people without an access token create a sync mailbox for several devices, and later also invite contacts themselves, without letting strangers onto the relay: every derived mailbox goes back to a voucher issued by a holder of the access token.
+**Derived mailboxes (M5):** Whoever shows the read token of a mailbox that was created with a voucher may create up to 10 further mailboxes with it. They count as long as they exist; deleting one frees its place. Derived mailboxes cannot create further mailboxes, and neither can mailboxes created with the access token. The relay checks the count and creates the mailbox in one step, so that simultaneous requests cannot exceed 10. A derived mailbox stays when its voucher mailbox is deleted and then follows only the 90-day rule; it can no longer be used to create further ones, because the voucher mailbox is gone. This lets people without an access token create a sync mailbox for several devices, and later also invite contacts themselves, without letting strangers onto the relay: every derived mailbox goes back to a voucher issued by a holder of the access token. The holder of the access token cannot withdraw such mailboxes; that is the price of the relay not knowing who belongs to whom.
 
 ### Handover
 
-A handover takes the state of a person to a new device (see [Adding a device](#adding-a-device)).
+Handover slots carry the challenge and the handover when a device is added (see [Adding a device](#adding-a-device)). The identifier `{handover}` is the `b64url` of the SHA-256 values given there.
 
-```
-handover = b64url(SHA-256("lebenszeichen-v1-handover" || public_handover_key))
-```
-
-- Only the new device knows the public handover key before the device code is shown, so the identifier cannot be guessed in advance. The content is sealed for the new device; the relay cannot read it.
-- `PUT` needs a token of this relay, to keep strangers from storing data on it. The read token of any mailbox suffices, so that people without an access token can add devices as well.
-- `GET` needs no token: the identifier is the authorization. The relay deletes the handover with the first successful `GET`, at the latest 10 minutes after the `PUT`.
-- At most 64 handovers wait on a relay at the same time.
+- `PUT` needs a token of this relay, to keep strangers from storing data on it. The read token of any mailbox suffices, so that people without an access token can add devices as well. At most two slots authorized with the same token wait at the same time, at most 64 on the relay.
+- `PUT` names the hash of the fetch token from the device code; `GET` needs the fetch token itself. Whoever only sees the device code can therefore neither read nor delete a slot.
+- The relay deletes a slot with the first successful `GET`, at the latest 10 minutes after the `PUT`. A second `PUT` to an existing identifier fails with `409`.
+- The relay does not look into the content: the challenge is not secret, only unpredictable, and the handover is sealed for the new device.
 
 ### Delivery
 
@@ -343,8 +387,12 @@ These points go beyond `protocol.md`. Gone through and confirmed one by one on 2
 
 Decided on 2026-11-16 (E1 to E6 and the relay rule), going beyond `protocol.md`:
 
-- **The new device shows the code**, with a public key only; the existing device seals the state to it. A device check code protects against a swapped code.
-- **Handover through the relay** as a separate, one-time block of up to 64 KiB, because the state does not fit into a few messages of 256 bytes and the limits per mailbox (8 waiting, 20 per hour) would make the transfer take hours.
+- **The new device shows the code**, with a public key only; the existing device seals the state to it.
+- **Device check code with a challenge from the existing device**, so that a swapped code cannot be matched by searching for keys; and a **handover check code** from the group key against a planted handover. Both after the crypto review of 2026-11-16.
+- **Handover through the relay** as a separate, one-time block of up to 64 KiB, because the state does not fit into a few messages of 256 bytes and the limits per mailbox (32 waiting, 20 per hour) would make the transfer take hours. Fetching needs a fetch token that only the new device knows.
+- **At most 32 waiting messages per mailbox** instead of 8, for all mailboxes: a sync mailbox must not fill up just because one device is offline for a day. Costs about 10 KB per mailbox; the limit of 20 per hour stays.
+- **New contacts as a compact binary record** in 2 to 4 parts with a transfer identifier, instead of their JSON form, which would need about 5 parts.
+- **Last writer wins** for rules, by sending time and then message identifier; this also applies to `rules` from contacts with several devices.
 - **No `counted` message:** all devices read all mailboxes and count the same requests. Instead `requested`, so that other devices accept the response to a request of the person's own.
 - **Devices offline for more than 24 hours** may deviate; accepted for M5.
 - **Removing a device is not protection** against a lost device; the contacts are paired again.

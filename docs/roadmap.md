@@ -130,6 +130,7 @@ Scope:
 - Prepared on 2026-11-16: all documentation, CI and configuration comments translated to English; the German documents as of the end of M4 are kept only locally (`docs-de_after-m4/`, ignored by git). Commit messages are English from now on. Planned after M5: the interface in English (default) and German, following the system language and selectable in the settings.
 - Set up a second device via QR code, sync of contacts, counters and completed requests.
 - Remove a device.
+- Open security item from the crypto review of 2026-11-16, to be fixed right after M5: the verification code of the pairing (M2) can be matched by someone who controls the channel an invitation is sent through (a messenger, for example), by searching about a million keys. The fix needs a commitment before the keys are revealed and changes the invitation format. Until then the app should advise passing invitations on in person or by scanning.
 - **Done when:** a response on the phone withdraws the display on the computer and the weekly limit counts across both devices.
 
 ### M6 – Windows

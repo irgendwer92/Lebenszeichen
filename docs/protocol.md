@@ -168,12 +168,14 @@ Even without content, metadata remains if someone actively observes the relay:
 
 With a self-operated relay, the operator is a trusted person. For a later release with third-party relays, this would be the most important point to sharpen.
 
+- **Several devices (M5):** a sync mailbox is recognizable by its behavior, because its readers also deliver into it. Storing a handover links a mailbox of the person to the network address of the new device. Derived mailboxes cannot be withdrawn by the holder of the access token who issued the voucher.
+
 The push service (ntfy) only sees when a device is woken.
 
 ### Protection against abuse
 
 - Mailboxes only with access token or voucher.
-- At most 8 waiting messages and 20 deliveries per hour per mailbox (decided on 2026-11-14; previously 6, which could block the `end` during normal use through pairing, rule changes and responses). The limit counts all messages because the relay does not know the types; it is not a substitute for the rules for requests.
+- At most 32 waiting messages and 20 deliveries per hour per mailbox (32 since 2026-11-16 for the sync mailbox of several devices; before that 8, decided on 2026-11-14; before that 6, which could block the `end` during normal use through pairing, rule changes and responses). The limit counts all messages because the relay does not know the types; it is not a substitute for the rules for requests.
 - Mailboxes without retrieval for 90 days are deleted.
 
 These limits only protect the relay. The rules for requests are enforced by the requested party's device, because the relay does not know the message types.
