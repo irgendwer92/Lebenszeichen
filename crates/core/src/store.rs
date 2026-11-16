@@ -349,6 +349,8 @@ fn sibling(path: &Path, extension: &str) -> PathBuf {
 /// Files readable and writable only by their owner, where the system has
 /// such permissions.
 fn private_options() -> OpenOptions {
+    // Only Unix changes the options; elsewhere they stay as they are.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut options = OpenOptions::new();
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
