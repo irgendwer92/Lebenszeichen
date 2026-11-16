@@ -699,10 +699,10 @@ pub async fn devices(state: tauri::State<'_, AppState>) -> Result<Reply<Vec<Devi
 pub async fn device_remove(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
-    name: String,
+    reader: String,
 ) -> Result<Reply<()>, String> {
     let reply = run(path(&state), async move |ctx| {
-        ctx.remove_device(&name).await
+        ctx.remove_device_by_reader(&reader).await
     })
     .await;
     poke(&app);

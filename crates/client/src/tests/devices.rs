@@ -566,7 +566,16 @@ async fn removed_device_deletes_its_state() {
         "Kein eigenes Gerät",
     );
 
-    phone.ctx.remove_device("Laptop").await.unwrap();
+    // The app removes by reader identifier, because names need not be
+    // unique; this device itself is refused that way as well.
+    let own = phone.ctx.devices().unwrap();
+    let this = own.iter().find(|d| d.this).unwrap().reader.clone();
+    expect_err(
+        phone.ctx.remove_device_by_reader(&this).await,
+        "dieses Gerät",
+    );
+    let other = own.iter().find(|d| !d.this).unwrap().reader.clone();
+    phone.ctx.remove_device_by_reader(&other).await.unwrap();
     assert!(phone.out.take().contains("„Laptop“ entfernt."));
     assert!(phone.device().devices.is_empty());
     assert!(!world.relay.has_reader(RELAY_A, &group.mailbox, &reader));
