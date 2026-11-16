@@ -10,12 +10,14 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 
-use jni::objects::{JByteBuffer, JClass, JObject, JString};
+use jni::objects::{JByteBuffer, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::{JNIEnv, JavaVM};
+use lz_client::i18n::{Arg, Language};
 use serde::Serialize;
 
 use crate::background;
+use crate::lang;
 
 /// Name of the state file in the files directory of the app.
 const STATE_FILE: &str = "device.json";
@@ -45,8 +47,82 @@ fn init_tls(env: &mut JNIEnv<'_>, context: &JObject<'_>) -> Result<(), String> {
     // SAFETY: the reference stays valid for this call; `init_with_env`
     // keeps a global reference of its own.
     let context = unsafe { JObject::from_raw(context.as_raw()) };
-    rustls_platform_verifier::android::init_with_env(env, context)
-        .map_err(|e| format!("Zertifikatsprüfung nicht eingerichtet: {e}"))
+    rustls_platform_verifier::android::init_with_env(env, context).map_err(|e| {
+        lang::texts().text(
+            "app-error-certificates",
+            &[("error", Arg::Text(&e.to_string()))],
+        )
+    })
+}
+
+/// The first locale of the application context as a language tag, such as
+/// `de-DE`: `context.getResources().getConfiguration().getLocales().get(0)
+/// .toLanguageTag()`.
+fn locale_tag(env: &mut JNIEnv<'_>, context: &JObject<'_>) -> Result<String, String> {
+    let result = (|| -> jni::errors::Result<String> {
+        let resources = env
+            .call_method(
+                context,
+                "getResources",
+                "()Landroid/content/res/Resources;",
+                &[],
+            )?
+            .l()?;
+        let configuration = env
+            .call_method(
+                &resources,
+                "getConfiguration",
+                "()Landroid/content/res/Configuration;",
+                &[],
+            )?
+            .l()?;
+        let locales = env
+            .call_method(
+                &configuration,
+                "getLocales",
+                "()Landroid/os/LocaleList;",
+                &[],
+            )?
+            .l()?;
+        let locale = env
+            .call_method(&locales, "get", "(I)Ljava/util/Locale;", &[JValue::Int(0)])?
+            .l()?;
+        let tag = env
+            .call_method(&locale, "toLanguageTag", "()Ljava/lang/String;", &[])?
+            .l()?;
+        Ok(env.get_string(&JString::from(tag))?.into())
+    })();
+    result.map_err(|error| {
+        // A pending Java exception would break the next call.
+        let _ = env.exception_clear();
+        error.to_string()
+    })
+}
+
+/// The language of the system on Android; English if it has no translation
+/// or the locale cannot be read.
+fn system_language(env: &mut JNIEnv<'_>, context: &JObject<'_>) -> Language {
+    locale_tag(env, context)
+        .ok()
+        .and_then(|tag| Language::from_tag(&tag))
+        .unwrap_or_default()
+}
+
+/// The language in effect for the state file at `state`: the setting of this
+/// device, or the one of the system.
+fn effective_language(
+    env: &mut JNIEnv<'_>,
+    context: &JObject<'_>,
+    state: &std::path::Path,
+) -> Language {
+    lang::effective(lang::load(&lang::settings_path(state)), || {
+        system_language(env, context)
+    })
+}
+
+/// The language of the system, for the Tauri side.
+pub fn tauri_system_language() -> Language {
+    with_tauri_context(|env, context| Ok(system_language(env, context))).unwrap_or_default()
 }
 
 /// Runs `with` on the context of the running app that Tao keeps
@@ -86,7 +162,11 @@ fn entry<T: Serialize>(
     run: impl FnOnce(&mut JNIEnv<'_>, PathBuf) -> T,
 ) -> jstring {
     let answer = catch_unwind(AssertUnwindSafe(|| {
-        let path = init_tls(env, context).and_then(|()| state_path(env, context));
+        // The language first, so that the errors of the setup have it too.
+        let path = state_path(env, context).and_then(|path| {
+            lang::set_current(effective_language(env, context, &path));
+            init_tls(env, context).map(|()| path)
+        });
         match path {
             Ok(path) => serde_json::to_string(&run(env, path)),
             Err(error) => serde_json::to_string(&Failure { error }),
@@ -94,10 +174,15 @@ fn entry<T: Serialize>(
     }))
     .unwrap_or_else(|_| {
         serde_json::to_string(&Failure {
-            error: "Interner Fehler im Kern".into(),
+            error: lang::texts().text("app-error-internal", &[]),
         })
     })
-    .unwrap_or_else(|_| r#"{"error":"Antwort nicht lesbar"}"#.into());
+    .unwrap_or_else(|_| {
+        serde_json::to_string(&Failure {
+            error: lang::texts().text("app-error-answer-unreadable", &[]),
+        })
+        .unwrap_or_default()
+    });
     env.new_string(answer)
         .map(|text| text.into_raw())
         .unwrap_or(std::ptr::null_mut())
@@ -168,6 +253,35 @@ pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge
         let url = optional_string(env, &url);
         background::set_push_url(&path, url.as_deref())
     })
+}
+
+/// `CoreBridge.nativeLanguage(context): String?` – the language in effect,
+/// `"en"` or `"de"`: the setting of this device, or for `system` the first
+/// locale of the context; languages without a translation give `"en"`. Used
+/// to localize the notifications and the full-screen display. `null` only if
+/// the files directory cannot be found or on an internal error, like the
+/// other entry points.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge_nativeLanguage<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    context: JObject<'local>,
+) -> jstring {
+    let tag = catch_unwind(AssertUnwindSafe(|| {
+        let path = state_path(&mut env, &context).ok()?;
+        Some(effective_language(&mut env, &context, &path).tag())
+    }))
+    .ok()
+    .flatten();
+    match tag {
+        Some(tag) => env
+            .new_string(tag)
+            .map(|text| text.into_raw())
+            .unwrap_or(std::ptr::null_mut()),
+        None => std::ptr::null_mut(),
+    }
 }
 
 /// `CoreBridge.nativeDecodeQr(buffer, width, height, rowStride): String?`

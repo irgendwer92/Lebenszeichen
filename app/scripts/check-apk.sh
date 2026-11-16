@@ -16,7 +16,7 @@ echo "::group::Native library"
 library="$unpacked/lib/arm64-v8a/liblebenszeichen_lib.so"
 ls -l "$unpacked"/lib/*/
 "$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D --defined-only "$library" > "$work/symbols.txt"
-for symbol in nativeFetch nativeOpenRequests nativeRespond nativeSetPushUrl nativeDecodeQr nativeSetForeground; do
+for symbol in nativeFetch nativeOpenRequests nativeRespond nativeSetPushUrl nativeDecodeQr nativeSetForeground nativeLanguage; do
   grep -F "Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge_$symbol" "$work/symbols.txt" \
     || { echo "missing in the library: $symbol"; exit 1; }
 done

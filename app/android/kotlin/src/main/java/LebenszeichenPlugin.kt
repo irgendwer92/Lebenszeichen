@@ -34,7 +34,8 @@ import org.unifiedpush.android.connector.UnifiedPush
 @TauriPlugin
 class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
     /**
-     * UnifiedPush recommends to renew the registration regularly, so that a
+     * Also renews the notification channel, so its name follows a change of
+     * the language. UnifiedPush recommends to renew the registration regularly, so that a
      * removed distributor is noticed. Done on every start of the interface.
      */
     override fun load(webView: WebView) {
@@ -44,7 +45,7 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
                 UnifiedPush.register(activity, messageForDistributor = MESSAGE_FOR_DISTRIBUTOR)
             }
         } catch (e: Exception) {
-            EventLog.add(activity, Requests.NO_REQUEST, "error", "Registrierung nicht erneuert: $e")
+            EventLog.add(activity, Requests.NO_REQUEST, "error", "registration not renewed: $e")
         }
     }
 
@@ -112,18 +113,18 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
                 else -> distributors.firstOrNull()
             }
         if (chosen == null) {
-            EventLog.add(activity, Requests.NO_REQUEST, "registration-failed", "kein Verteiler installiert")
-            invoke.reject("Kein UnifiedPush-Verteiler gefunden. Bitte die ntfy-App installieren und einmal öffnen.")
+            EventLog.add(activity, Requests.NO_REQUEST, "registration-failed", "no distributor installed")
+            invoke.reject(Texts.get(activity, R.string.lz_error_no_distributor))
             return
         }
         try {
             UnifiedPush.saveDistributor(activity, chosen)
             UnifiedPush.register(activity, messageForDistributor = MESSAGE_FOR_DISTRIBUTOR)
-            EventLog.add(activity, Requests.NO_REQUEST, "register", "Verteiler $chosen")
+            EventLog.add(activity, Requests.NO_REQUEST, "register", "distributor $chosen")
             invoke.resolve()
         } catch (e: Exception) {
             EventLog.add(activity, Requests.NO_REQUEST, "registration-failed", e.toString())
-            invoke.reject("Registrierung fehlgeschlagen: $e")
+            invoke.reject(Texts.get(activity, R.string.lz_error_register_failed, e.toString()))
         }
     }
 
@@ -132,10 +133,10 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
         try {
             UnifiedPush.unregister(activity)
             Store.setEndpoint(activity, "")
-            EventLog.add(activity, Requests.NO_REQUEST, "unregister", "von der App abgemeldet")
+            EventLog.add(activity, Requests.NO_REQUEST, "unregister", "unregistered by the app")
             invoke.resolve()
         } catch (e: Exception) {
-            invoke.reject("Abmelden fehlgeschlagen: $e")
+            invoke.reject(Texts.get(activity, R.string.lz_error_unregister_failed, e.toString()))
         }
     }
 
@@ -181,7 +182,7 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
                 activity.startActivity(appDetails)
                 invoke.resolve()
             } catch (e2: ActivityNotFoundException) {
-                invoke.reject("Die Einstellungen ließen sich nicht öffnen.")
+                invoke.reject(Texts.get(activity, R.string.lz_error_open_settings))
             }
         }
     }
@@ -241,15 +242,15 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
                 .setType("text/plain")
                 .putExtra(Intent.EXTRA_TEXT, text)
         try {
-            val chooser = Intent.createChooser(send, "Teilen")
+            val chooser = Intent.createChooser(send, Texts.get(activity, R.string.lz_share_chooser_title))
             if (activity.isFinishing) {
-                invoke.reject("Das Teilen ließ sich nicht öffnen.")
+                invoke.reject(Texts.get(activity, R.string.lz_error_share_failed))
                 return
             }
             activity.startActivity(chooser)
             invoke.resolve()
         } catch (e: ActivityNotFoundException) {
-            invoke.reject("Das Teilen ließ sich nicht öffnen.")
+            invoke.reject(Texts.get(activity, R.string.lz_error_share_failed))
         }
     }
 
@@ -268,6 +269,7 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
 
     companion object {
         private const val NTFY_PACKAGE = "io.heckel.ntfy"
+        /** The name of the app, as the distributor shows it; not translated. */
         private const val MESSAGE_FOR_DISTRIBUTOR = "Lebenszeichen"
         private const val PERMISSION_REQUEST_CODE = 4711
         private const val MAX_LOG_LINES = 400

@@ -45,7 +45,7 @@ object EventLog {
                 val target = file(context)
                 if (target.exists()) target.readLines().takeLast(maxLines) else emptyList()
             } catch (e: Exception) {
-                listOf("Protokoll nicht lesbar: ${e.message}")
+                listOf(Texts.get(context, R.string.lz_log_unreadable, e.message ?: ""))
             }
         }
 

@@ -1,6 +1,7 @@
 package io.github.irgendwer92.lebenszeichen.droid
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -44,11 +45,19 @@ class ScanActivity : ComponentActivity() {
             if (granted) {
                 startCamera()
             } else {
-                finishOnce { setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, NO_CAMERA_TEXT)) }
+                finishOnce { setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, getString(R.string.lz_scan_error_no_camera))) }
             }
         }
 
     private lateinit var previewView: PreviewView
+
+    /**
+     * Shows the texts in the language chosen in the app. Runs on the main
+     * thread; [CoreBridge.language] only reads a small local file.
+     */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(Texts.localized(newBase))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,7 +66,7 @@ class ScanActivity : ComponentActivity() {
         previewView = PreviewView(this)
         val hint =
             TextView(this).apply {
-                text = "Halte den QR-Code ins Bild"
+                setText(R.string.lz_scan_hint)
                 textSize = 18f
                 gravity = Gravity.CENTER
                 setTextColor(0xFFFFFFFF.toInt())
@@ -66,7 +75,7 @@ class ScanActivity : ComponentActivity() {
             }
         val cancel =
             Button(this).apply {
-                text = "Abbrechen"
+                setText(R.string.lz_scan_cancel)
                 setOnClickListener { cancelScan() }
             }
         val overlay =
@@ -114,7 +123,7 @@ class ScanActivity : ComponentActivity() {
                         future.get()
                     } catch (e: Exception) {
                         finishOnce {
-                            setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, "Die Kamera ließ sich nicht starten."))
+                            setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, getString(R.string.lz_scan_error_camera_start)))
                         }
                         return@addListener
                     }
@@ -131,7 +140,7 @@ class ScanActivity : ComponentActivity() {
                     provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
                 } catch (e: Exception) {
                     finishOnce {
-                        setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, "Die Kamera ließ sich nicht starten."))
+                        setResult(RESULT_CANCELED, Intent().putExtra(EXTRA_ERROR, getString(R.string.lz_scan_error_camera_start)))
                     }
                 }
             },
@@ -177,9 +186,8 @@ class ScanActivity : ComponentActivity() {
         /** The text of the code found, in the result of the activity. */
         const val EXTRA_CODE = "code"
 
-        /** Why the scan is impossible (German, for the user), with `RESULT_CANCELED`. */
+        /** Why the scan is impossible (in the chosen language, for the user), with `RESULT_CANCELED`. */
         const val EXTRA_ERROR = "error"
 
-        private const val NO_CAMERA_TEXT = "Ohne Kamera bitte den Code einfügen."
     }
 }

@@ -32,6 +32,13 @@ jobs:
       - name: Tests
         run: cargo test --workspace --locked
 
+  android-strings:
+    name: Android strings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: app/scripts/check-android-strings.sh
+
   deny:
     name: Dependencies
     runs-on: ubuntu-latest

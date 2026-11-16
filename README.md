@@ -154,7 +154,9 @@ embedded by `crates/client/src/i18n.rs`. `lz` picks the language from
 `LC_ALL`, `LC_MESSAGES` or `LANG`. To add a language, copy
 `locales/en/lebenszeichen.ftl` to `locales/<tag>/`, translate the values, add
 a variant to `Language` and to `Language::ALL` in `i18n.rs`; the tests check
-that the file parses and has every message id of the English one.
+that the file parses and has every message id of the English one. The app
+follows the system language by default; ⚙ → Language sets it per device
+(`settings.json` next to the state file, never synced).
 
 ## License
 

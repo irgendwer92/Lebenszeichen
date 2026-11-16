@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lz_client::ctx::Status;
+use lz_client::i18n::Arg;
 use tauri::{AppHandle, Emitter};
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::Value;
@@ -203,7 +204,7 @@ pub fn start(app: AppHandle, path: PathBuf) -> Option<Notifier> {
                 "org.freedesktop.Notifications",
             )
         })
-        .inspect_err(|error| eprintln!("Keine Benachrichtigungen: {error}"))
+        .inspect_err(|error| eprintln!("No notifications: {error}"))
         .ok();
     let foreground = alert::possible();
     if proxy.is_none() && !foreground {
@@ -251,7 +252,7 @@ where
         let signals = match proxy.receive_signal(signal) {
             Ok(signals) => signals,
             Err(error) => {
-                eprintln!("Signal {signal} nicht verfügbar: {error}");
+                eprintln!("Signal {signal} unavailable: {error}");
                 return;
             }
         };
@@ -298,14 +299,14 @@ impl Shared {
             match alert::open(&self.app, number, stacked, on_close) {
                 Ok(()) => return,
                 Err(error) => {
-                    eprintln!("Vordergrund-Fenster fehlgeschlagen: {error}");
+                    eprintln!("Foreground window failed: {error}");
                     self.screen().not_shown(handle);
                 }
             }
         }
         match self.notify(&key.0) {
             Some(Ok(id)) => self.screen().shown(key, Handle::Notification(id)),
-            Some(Err(error)) => eprintln!("Benachrichtigung fehlgeschlagen: {error}"),
+            Some(Err(error)) => eprintln!("Notification failed: {error}"),
             None => {}
         }
     }
@@ -363,7 +364,10 @@ impl Shared {
         if let Err(error) = outcome {
             let _ = self.app.emit(
                 LINE_EVENT,
-                format!("Lebenszeichen an {name} nicht gesendet: {error}"),
+                crate::lang::texts().text(
+                    "app-error-answer-failed",
+                    &[("name", Arg::Text(&name)), ("error", Arg::Text(&error))],
+                ),
             );
             self.screen().answer_failed(&key);
         }
@@ -378,14 +382,11 @@ impl Shared {
             ("suppress-sound", Value::Bool(true)),
         ]);
         // The summary is plain text, so the name needs no escaping there.
-        let summary = format!("{name} fragt nach einem Lebenszeichen");
-        let body = "Klicken oder Schließen sendet dein Lebenszeichen.";
-        let actions = [
-            "default",
-            "Lebenszeichen senden",
-            RESPOND,
-            "Lebenszeichen senden",
-        ];
+        let t = crate::lang::texts();
+        let summary = t.text("app-alert-title", &[("name", Arg::Text(name))]);
+        let body = t.text("app-alert-hint", &[]);
+        let action = t.text("app-alert-action", &[]);
+        let actions = ["default", action.as_str(), RESPOND, action.as_str()];
         Some(proxy.call(
             "Notify",
             &(
@@ -393,7 +394,7 @@ impl Shared {
                 0u32,
                 "",
                 summary.as_str(),
-                body,
+                body.as_str(),
                 &actions[..],
                 hints,
                 0i32,

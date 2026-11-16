@@ -12,12 +12,14 @@
 
     <!--
       No backup and no transfer to a new device: the state file holds private
-      keys. Plain http only for revocation lists, see the config file.
+      keys. Plain http only for revocation lists, see the config file. The
+      locale config lists the languages of the per-app language setting.
     -->
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/lz_data_extraction_rules"
         android:fullBackupContent="false"
+        android:localeConfig="@xml/lz_locales_config"
         android:networkSecurityConfig="@xml/lz_network_security_config">
         <!-- Receives the UnifiedPush events from the receiver of the connector library. -->
         <service

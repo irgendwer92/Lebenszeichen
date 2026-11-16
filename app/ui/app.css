@@ -220,6 +220,7 @@ button.wide {
 }
 
 input:not([type="checkbox"]),
+select,
 textarea {
   width: 100%;
   font: inherit;
@@ -546,6 +547,7 @@ label.check {
   }
 
   input:not([type="checkbox"]),
+  select,
   textarea,
   textarea.code {
     font-size: 16px;

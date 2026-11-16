@@ -23,9 +23,12 @@ tauri-plugin-lebenszeichen = { path = "../android" }
 lz-core = { path = "../../crates/core" }
 lz-client = { path = "../../crates/client" }
 serde = { version = "1", features = ["derive"] }
+# Answers to the Kotlin layer (jni_bridge.rs) and settings.json (lang.rs).
+serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+sys-locale = "0.3.2"
 tauri = { version = "2.12", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 
@@ -44,8 +47,6 @@ jni = "0.21"
 ndk-context = "0.1"
 # Same version as in lz-client; set up with the context in jni_bridge.rs.
 rustls-platform-verifier = "0.6"
-# Answers to the Kotlin layer (jni_bridge.rs).
-serde_json = "1"
 
 # The prototype is sideloaded as a debug build. Without debug information the
 # library and with it the APK stay small.

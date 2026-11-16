@@ -15,6 +15,7 @@ mod commands;
 mod desktop;
 #[cfg(target_os = "android")]
 mod jni_bridge;
+mod lang;
 
 /// Builds the command handler from the commands both systems share and,
 /// optionally, a few more.
@@ -44,6 +45,8 @@ macro_rules! handler {
             commands::respond,
             commands::remove,
             commands::set_rules,
+            commands::texts,
+            commands::set_language,
             $($extra,)*
         ]
     };

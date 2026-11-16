@@ -81,7 +81,7 @@ object Requests {
         val key = "$name@$since"
         RequestPresenter.cancel(app, name)
         if (!Store.claimAnswer(app, key)) {
-            EventLog.add(app, key, "reaction-ignored", "$reaction, bereits beantwortet")
+            EventLog.add(app, key, "reaction-ignored", "$reaction, already answered")
             return
         }
         EventLog.add(app, key, "reaction", reaction)
