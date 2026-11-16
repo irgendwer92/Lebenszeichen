@@ -14,6 +14,7 @@ pub mod device_code;
 pub mod invitation;
 pub mod message;
 pub mod record;
+pub mod setup_code;
 mod text;
 
 pub use device_code::DeviceCode;
@@ -23,6 +24,7 @@ pub use message::{
     ResponseKind, Rules, RulesSet,
 };
 pub use record::{ContactRecord, Stamp};
+pub use setup_code::{CodeKind, SetupCode};
 pub use text::{BoundedStr, ContactName, DeviceName, Reason, RelayUrl};
 
 /// Version byte at the start of every envelope and every invitation.
