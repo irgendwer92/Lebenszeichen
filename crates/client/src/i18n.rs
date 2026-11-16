@@ -10,6 +10,7 @@
 //! completeness test then checks that the file parses and has the ids of
 //! the English one.
 
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use fluent_bundle::concurrent::FluentBundle;
@@ -82,6 +83,30 @@ impl Language {
         }
     }
 
+    /// The raw patterns of all texts whose id starts with `prefix`, with
+    /// variables as `{ $name }`, for a front end that substitutes them
+    /// itself. Ids that this language lacks come from English. Only plain
+    /// text, string literals and variables are supported; any other
+    /// placeable renders as nothing (a test keeps the `ui-` texts free of
+    /// them).
+    pub fn raw_texts(self, prefix: &str) -> BTreeMap<String, String> {
+        let mut texts = BTreeMap::new();
+        for language in [Language::En, self] {
+            let Ok(resource) = FluentResource::try_new(language.source().to_owned()) else {
+                continue;
+            };
+            for entry in resource.entries() {
+                if let fluent_syntax::ast::Entry::Message(message) = entry
+                    && message.id.name.starts_with(prefix)
+                    && let Some(pattern) = &message.value
+                {
+                    texts.insert(message.id.name.to_owned(), render_raw(pattern));
+                }
+            }
+        }
+        texts
+    }
+
     /// The translator for this language.
     pub fn texts(self) -> Texts {
         Texts(self)
@@ -96,6 +121,26 @@ impl Language {
         };
         cell.get_or_init(|| new_bundle(self))
     }
+}
+
+fn render_raw(pattern: &fluent_syntax::ast::Pattern<&str>) -> String {
+    use fluent_syntax::ast::{Expression, InlineExpression, PatternElement};
+    let mut text = String::new();
+    for element in &pattern.elements {
+        match element {
+            PatternElement::TextElement { value } => text.push_str(value),
+            PatternElement::Placeable { expression } => match expression {
+                Expression::Inline(InlineExpression::StringLiteral { value }) => {
+                    text.push_str(value);
+                }
+                Expression::Inline(InlineExpression::VariableReference { id }) => {
+                    text.push_str(&format!("{{ ${} }}", id.name));
+                }
+                _ => {}
+            },
+        }
+    }
+    text
 }
 
 type Bundle = FluentBundle<FluentResource>;
@@ -263,6 +308,21 @@ mod tests {
         assert_eq!(pick(None, Some("de"), Some("en_US")), Language::De);
         assert_eq!(pick(Some(""), Some(""), Some("de_DE")), Language::De);
         assert_eq!(pick(Some("de_DE@euro"), None, None), Language::De);
+    }
+
+    #[test]
+    fn raw_texts_keep_variables_and_cover_every_ui_id() {
+        for &language in Language::ALL {
+            let texts = language.raw_texts("ui-");
+            let english = Language::En.raw_texts("ui-");
+            assert_eq!(
+                texts.keys().collect::<Vec<_>>(),
+                english.keys().collect::<Vec<_>>()
+            );
+            assert!(texts.values().all(|text| !text.is_empty()));
+        }
+        let hint = Language::En.raw_texts("notice-compare-hint");
+        assert!(hint["notice-compare-hint"].contains("check code"));
     }
 
     #[test]

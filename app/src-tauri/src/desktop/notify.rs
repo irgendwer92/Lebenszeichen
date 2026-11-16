@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lz_client::ctx::Status;
+use lz_client::i18n::Arg;
 use tauri::{AppHandle, Emitter};
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::Value;
@@ -363,7 +364,10 @@ impl Shared {
         if let Err(error) = outcome {
             let _ = self.app.emit(
                 LINE_EVENT,
-                format!("Lebenszeichen an {name} nicht gesendet: {error}"),
+                crate::lang::texts().text(
+                    "app-error-answer-failed",
+                    &[("name", Arg::Text(&name)), ("error", Arg::Text(&error))],
+                ),
             );
             self.screen().answer_failed(&key);
         }
@@ -378,14 +382,11 @@ impl Shared {
             ("suppress-sound", Value::Bool(true)),
         ]);
         // The summary is plain text, so the name needs no escaping there.
-        let summary = format!("{name} fragt nach einem Lebenszeichen");
-        let body = "Klicken oder Schließen sendet dein Lebenszeichen.";
-        let actions = [
-            "default",
-            "Lebenszeichen senden",
-            RESPOND,
-            "Lebenszeichen senden",
-        ];
+        let t = crate::lang::texts();
+        let summary = t.text("app-alert-title", &[("name", Arg::Text(name))]);
+        let body = t.text("app-alert-hint", &[]);
+        let action = t.text("app-alert-action", &[]);
+        let actions = ["default", action.as_str(), RESPOND, action.as_str()];
         Some(proxy.call(
             "Notify",
             &(
@@ -393,7 +394,7 @@ impl Shared {
                 0u32,
                 "",
                 summary.as_str(),
-                body,
+                body.as_str(),
                 &actions[..],
                 hints,
                 0i32,
