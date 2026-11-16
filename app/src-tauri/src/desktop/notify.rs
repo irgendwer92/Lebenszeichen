@@ -204,7 +204,7 @@ pub fn start(app: AppHandle, path: PathBuf) -> Option<Notifier> {
                 "org.freedesktop.Notifications",
             )
         })
-        .inspect_err(|error| eprintln!("Keine Benachrichtigungen: {error}"))
+        .inspect_err(|error| eprintln!("No notifications: {error}"))
         .ok();
     let foreground = alert::possible();
     if proxy.is_none() && !foreground {
@@ -252,7 +252,7 @@ where
         let signals = match proxy.receive_signal(signal) {
             Ok(signals) => signals,
             Err(error) => {
-                eprintln!("Signal {signal} nicht verfügbar: {error}");
+                eprintln!("Signal {signal} unavailable: {error}");
                 return;
             }
         };
@@ -299,14 +299,14 @@ impl Shared {
             match alert::open(&self.app, number, stacked, on_close) {
                 Ok(()) => return,
                 Err(error) => {
-                    eprintln!("Vordergrund-Fenster fehlgeschlagen: {error}");
+                    eprintln!("Foreground window failed: {error}");
                     self.screen().not_shown(handle);
                 }
             }
         }
         match self.notify(&key.0) {
             Some(Ok(id)) => self.screen().shown(key, Handle::Notification(id)),
-            Some(Err(error)) => eprintln!("Benachrichtigung fehlgeschlagen: {error}"),
+            Some(Err(error)) => eprintln!("Notification failed: {error}"),
             None => {}
         }
     }
