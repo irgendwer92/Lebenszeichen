@@ -10,7 +10,7 @@ mod notify;
 
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WindowEvent, Wry};
 
 use tauri_plugin_autostart::ManagerExt;
@@ -130,8 +130,9 @@ pub fn show_window(app: &AppHandle) {
     }
 }
 
-/// Puts the app into the tray. Tray icons on Linux get no clicks, so
-/// everything goes through the menu.
+/// Puts the app into the tray. On Windows a left click shows the window and
+/// the menu stays on the right click; tray icons on Linux get no clicks, so
+/// there everything goes through the menu.
 fn build_tray(app: &tauri::App, path: PathBuf) -> tauri::Result<TrayItems> {
     let t = lang::texts();
     let item = |id, text_id| MenuItem::with_id(app, id, t.text(text_id, &[]), true, None::<&str>);
@@ -142,6 +143,17 @@ fn build_tray(app: &tauri::App, path: PathBuf) -> tauri::Result<TrayItems> {
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("Lebenszeichen")
         .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_window(tray.app_handle());
+            }
+        })
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "show" => show_window(app),
             "sync" => spawn_sync(app.clone(), path.clone()),
