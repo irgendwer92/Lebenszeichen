@@ -1,6 +1,6 @@
 [package]
 name = "lz-wire"
-description = "Nachrichtenhülle und Relay-Schnittstelle von Lebenszeichen"
+description = "Message envelope and relay interface of Lebenszeichen"
 license = "GPL-3.0-or-later"
 version.workspace = true
 edition.workspace = true

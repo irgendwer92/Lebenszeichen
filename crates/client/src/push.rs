@@ -1,7 +1,7 @@
 //! The push address of this device at its own mailboxes.
 //!
 //! The relay wakes a device through the push address of its reader entry
-//! (`docs/drahtformat.md`). Every own mailbox has its own entry, so a new
+//! (`docs/wire-format.md`). Every own mailbox has its own entry, so a new
 //! address goes to all of them. Until every mailbox has it, `push_pending`
 //! stays set and the next fetch tries again.
 

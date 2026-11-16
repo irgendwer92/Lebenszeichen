@@ -1,6 +1,6 @@
 [package]
 name = "lz-core"
-description = "Protokoll, Verschlüsselung, Regelprüfung und Speicher von Lebenszeichen"
+description = "Protocol, encryption, rule checks and storage of Lebenszeichen"
 license = "GPL-3.0-or-later"
 version.workspace = true
 edition.workspace = true

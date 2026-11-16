@@ -1,4 +1,4 @@
-name: Prüfen
+name: Check
 
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Formatierung
+      - name: Formatting
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -33,33 +33,32 @@ jobs:
         run: cargo test --workspace --locked
 
   deny:
-    name: Abhängigkeiten
+    name: Dependencies
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
-      # Die App liegt außerhalb des Workspace und hat ein eigenes Lockfile.
-      # Sicherheitsmeldungen zu ihren GTK-Abhängigkeiten meldet Dependabot;
-      # hier zählen Lizenzen, Quellen und Verbote nach derselben deny.toml.
-      # Die Action reicht weitere Argumente nur als ein einziges weiter,
-      # deshalb hier cargo-deny direkt.
+      # The app lives outside the workspace and has its own lockfile.
+      # Dependabot reports advisories for its GTK dependencies; here count
+      # licenses, sources and bans from the same deny.toml. The action passes
+      # extra arguments only as a single one, hence cargo-deny directly.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
-      - name: Abhängigkeiten der Desktop-App
+      - name: Dependencies of the desktop app
         run: >-
           cargo deny --manifest-path app/src-tauri/Cargo.toml --all-features
           --config deny.toml check licenses bans sources
 
   desktop:
-    name: Desktop-App (Linux)
+    name: Desktop app (Linux)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: app/src-tauri
     steps:
       - uses: actions/checkout@v7
-      - name: GTK und WebKitGTK installieren
+      - name: Install GTK and WebKitGTK
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
@@ -69,7 +68,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app/src-tauri
-      - name: Formatierung
+      - name: Formatting
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings

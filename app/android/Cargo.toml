@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-lebenszeichen"
-description = "Kotlin-Schicht von Lebenszeichen für Android, eingebunden als lokales Tauri-Plugin"
+description = "Kotlin layer of Lebenszeichen for Android, included as a local Tauri plugin"
 version = "0.1.0"
 license = "GPL-3.0-or-later"
 edition = "2024"

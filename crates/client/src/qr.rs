@@ -1,7 +1,7 @@
 //! Invitation codes as QR codes, and reading them back from a camera.
 //!
 //! `LZ1-` with Base32 in capitals fits the alphanumeric mode of QR codes
-//! (see `docs/drahtformat.md`); an invitation becomes version 8 to 12.
+//! (see `docs/wire-format.md`); an invitation becomes version 8 to 12.
 
 use qrcode::render::unicode::Dense1x2;
 use qrcode::{Color, EcLevel, QrCode};

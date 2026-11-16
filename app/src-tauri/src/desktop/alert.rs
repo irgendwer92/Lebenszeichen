@@ -1,4 +1,4 @@
-//! Foreground window for an open request, under X11 (see `docs/konzept.md`):
+//! Foreground window for an open request, under X11 (see `docs/concept.md`):
 //! above all other windows, on every workspace, and without keyboard focus,
 //! so that a key pressed while typing elsewhere never counts as a sign of
 //! life. A click into the window or closing it answers.

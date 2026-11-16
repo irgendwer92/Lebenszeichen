@@ -6,3 +6,6 @@
 *.keystore
 *.jks
 .env
+
+# German documentation as of the end of M4, kept locally for reference only.
+/docs-de_after-m4/
