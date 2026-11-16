@@ -89,6 +89,7 @@ In form A the body may be at most 229 bytes long, in form B at most 221.
 | 4 | `request` | empty; the message identifier is the identifier of the request |
 | 5 | `response` | identifier of the request (16), kind (1): `1` `manual`, `2` `reported`; length of the reason (1), reason (at most 64 bytes UTF-8, only for kind 2, otherwise length 0) |
 | 6 | `end` | empty |
+| 7 | `reveal` | the inviter's secret value `n` (32) |
 | 64–70 | between own devices, only in form C | see [Messages between own devices](#messages-between-own-devices) |
 | 71–127 | reserved for further messages between own devices | – |
 
@@ -102,34 +103,58 @@ A recipient accepts a message only if its time is at most 24 hours and 10 minute
 
 ## Invitation
 
-The invitation is passed on as a QR code or as text: the characters `LZ1-`, followed by Base32 (RFC 4648, uppercase, without padding) over these bytes:
+The invitation is passed on as a QR code or as text: the characters `LZ2-`, followed by Base32 (RFC 4648, uppercase, without padding) over these bytes:
 
 | Length | Content |
 |---|---|
-| 1 | Version, `0x01` |
+| 1 | Version, `0x02` |
 | 1 | Flags; bit 0: voucher present |
 | 8 | Expiry time of the invitation |
 | 32 | Mailbox identifier of the inviter |
 | 32 | Send token for it |
 | 32 | Public contact key of the inviter |
+| 32 | Commitment `SHA-256("lebenszeichen-v2-invite-commit" \|\| n)` to the inviter's secret value `n` |
 | 32 | Voucher, only if bit 0 is set |
 | 1 | Length of the relay address |
 | at most 120 | Relay address |
 
 Base32 in uppercase fits the alphanumeric mode of QR codes and remains typable as text. When reading it in, lowercase letters, spaces and line breaks must be tolerated.
 
+`n` is 32 random bytes that the inviter creates with the invitation and keeps secret until it has received the `hello`. Invitations of version 1 (`LZ1-`, without commitment) are refused with a hint to ask for a new invitation (decided on 2026-11-16); contacts paired with them stay as they are. An invitation with prefix `LZ2-` but another version byte is refused as well. After the update, open invitations of version 1 are deleted together with their mailbox. All prefixes in this document are ASCII bytes without a terminator.
+
 The inviter accepts exactly one `hello` per invitation, and only if it was sent before the expiry time (default: 10 minutes after creation). What counts is the sending time in the `hello`, not the time of retrieval; the inviter can retrieve it as long as the replay protection window allows, that is, until a little over 24 hours after the expiry time. Only after that does it delete the invitation and mailbox.
 
 ### Verification code
 
-Both sides show six digits:
+The verification code is derived from both public contact keys and the inviter's secret value `n`, which reaches the accepting side only after its `hello` is fixed:
+
+1. The accepting side sends `hello` as before.
+2. The inviter, on receiving the `hello`, sends `reveal` with `n` right away, without waiting for the person; in form A, because it now knows the contact key of the accepting side.
+3. The accepting side checks `n` against the commitment from the invitation. If it does not match, it shows an alarm, sends `end` and deletes its mailbox.
+4. Both sides show six digits:
 
 ```
-h    = SHA-256("lebenszeichen-v1-code" || smaller_key || larger_key)
+h    = SHA-256("lebenszeichen-v2-code" || key_of_inviter || key_of_accepter || n)
 code = (first 4 bytes of h as a number) mod 1000000, with leading zeros
 ```
 
-"Smaller" and "larger" refer to the bytewise comparison of the two public contact keys.
+Whoever swaps an invitation in transit and poses as the accepting side towards the inviter must fix its key before the inviter reveals `n`; towards the accepting side, it is bound by the commitment in its own invitation, and the accepting side's key is new. Neither side leaves anything to search for, so matching digits are a coincidence of one in a million. The first version derived the code from the two keys alone; someone who controls the channel of an invitation could match it by searching about a million keys (crypto review of 2026-11-16).
+
+**Accepting side:**
+
+- It generates its contact key after reading the invitation, new for each accepted invitation, also when retrying, and never shows or sends it before the `hello`. This fresh key is its unpredictable contribution; it adds no value of its own.
+- It stores its pending state (secret key, commitment, own mailbox) before sending `hello`.
+- Until a valid `reveal` has arrived, it shows no code and is not paired; a `hello_ok` received before that is kept and applied only after a valid `reveal`. It accepts only the first `reveal` that matches the commitment; any `reveal` that does not match triggers step 3. There is no code of version 1 on either side.
+- If no valid `reveal` arrives within 24 hours and 10 minutes after the `hello` was sent, it shows "Kopplung fehlgeschlagen", sends `end` and deletes its mailbox.
+
+**Inviter:**
+
+- It sends `reveal` only for a `hello` that is accepted, that is, sent before the expiry time of the invitation. A `hello` that fails this check gets nothing and does not use up the invitation.
+- It records the accepted key and stores the contact before sending `reveal`, in one step, so that two `hello`s fetched together never both get a `reveal`.
+- A `hello` repeated with the same key as the first gets the same `reveal` again, which recovers from a lost `reveal`. A `hello` with a different key gets none and is shown as a warning, as before.
+- It keeps `n` with the contact until the person confirms or rejects the pairing, so that the code survives a restart, and deletes it then. Only the inviting device holds `n`; other devices of the person learn about the contact only after the pairing is complete.
+
+**People:** The digits must be compared over another channel than the one the invitation took: in person, on the phone, or through another messenger. If invitation and comparison both go through a channel that someone controls, that someone can pass the digits on as well. Interfaces say so next to the code.
 
 ### Setup code
 
@@ -142,7 +167,7 @@ A holder of the access token can show a setup code to set up another person's de
 | 1 | Length of the relay address |
 | at most 120 | Relay address |
 
-The setup code carries the access token itself and therefore does not expire: whoever sees it can create mailboxes on the relay until the operator changes the token. It is only shown directly, never sent. Interfaces recognize the kind of a code by its prefix: `LZ1-` invitation, `LZD1-` device code, `LZS1-` setup code.
+The setup code carries the access token itself and therefore does not expire: whoever sees it can create mailboxes on the relay until the operator changes the token. It is only shown directly, never sent. Interfaces recognize the kind of a code by its prefix: `LZ2-` invitation (`LZ1-` is recognized only to refuse it), `LZD1-` device code, `LZS1-` setup code.
 
 ## Rules for requests
 
@@ -397,8 +422,8 @@ These points go beyond `protocol.md`. Gone through and confirmed one by one on 2
 - **Fixed binary format** instead of JSON or CBOR in the plaintext: small, no parser needed and simple on microcontrollers.
 - **Sealed form for `hello`**, because the recipient does not yet know the sender.
 - **Authentication tag before the ciphertext**, as libsodium outputs it. The first version of this document had it after; corrected on 2026-11-14, before code was built on it.
-- **Invitation as Base32 with prefix `LZ1-`**; this answers the open question on the format from `protocol.md`.
-- **Verification code via SHA-256.**
+- **Invitation as Base32 with prefix `LZ1-`**; this answers the open question on the format from `protocol.md`. Since 2026-11-16 `LZ2-`, see the decisions for the pairing fix.
+- **Verification code via SHA-256.** Replaced on 2026-11-16 by the version with commitment and `reveal` (see the decisions for the pairing fix).
 - **The minimum interval counts from the manual response**; a reported response does not close the request.
 - **Acceptance of an invitation is judged by the sending time of the `hello`**, so that the inviter does not have to retrieve within 10 minutes. Price: the sender sets the sending time itself. Whoever intercepts a code can send a backdated `hello`; an intercepted code thus remains usable for a little over 24 hours instead of 10 minutes. It is still valid only once, and the verification code shows that the wrong contact was accepted.
 - **The time of a request is its sending time**, limited by the recipient's clock; late-arriving requests and responses sent in time are judged by it.
@@ -425,6 +450,15 @@ Decided on 2026-11-16 (E1 to E6 and the relay rule), going beyond `protocol.md`:
 - **Derived mailboxes:** up to 10 per voucher mailbox, not chainable, so that several devices also work without an access token.
 - **Content of the handover as JSON** in the form of the state file, instead of a fixed binary format. Simple and extensible; the fixed binary format of the messages is meant for microcontrollers, which are not expected to add other devices.
 - **`responded` instead of `done`**, with kind and time of the response, so that other devices start the minimum interval at the right time.
+
+### Decisions for the pairing fix
+
+Decided on 2026-11-16, after the crypto review of M5 found that the verification code of version 1 can be matched by someone who controls the channel of an invitation:
+
+- **Commitment in the invitation, `reveal` after the `hello`.** The inviter commits to a secret value in the invitation and reveals it only after the `hello` has arrived; the code covers both keys and that value. `hello` stays unchanged: the accepting side's fresh key serves as its unpredictable part, and `hello` has no room for more (217 of 221 bytes).
+- **Invitation version 2 with prefix `LZ2-`.** Version 1 is refused; contacts paired with it stay as they are.
+- **The accepting side sees the code only after `reveal`.** When pairing in person this takes seconds; the inviter's device is woken for the `hello` and answers without the person.
+- **After the crypto review of the fix (2026-11-16):** no pairing without a valid `reveal`; a lost `reveal` is sent again for the same key; 24 hours without `reveal` ends the attempt; state is stored before sending, on both sides; the accepting side's key is new for every invitation; open version-1 invitations are deleted with the update; the codes are compared over another channel than the invitation's, and interfaces say so.
 
 Clarifications made during the implementation of the relay (`crates/relay`). They are implementation details and were not confirmed one by one:
 
