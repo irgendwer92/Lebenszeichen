@@ -131,6 +131,19 @@ code = (first 4 bytes of h as a number) mod 1000000, with leading zeros
 
 "Smaller" and "larger" refer to the bytewise comparison of the two public contact keys.
 
+### Setup code
+
+A holder of the access token can show a setup code to set up another person's device on the same relay without typing: `LZS1-`, followed by Base32 like the invitation, over these bytes:
+
+| Length | Content |
+|---|---|
+| 1 | Version, `0x01` |
+| 32 | Access token |
+| 1 | Length of the relay address |
+| at most 120 | Relay address |
+
+The setup code carries the access token itself and therefore does not expire: whoever sees it can create mailboxes on the relay until the operator changes the token. It is only shown directly, never sent. Interfaces recognize the kind of a code by its prefix: `LZ1-` invitation, `LZD1-` device code, `LZS1-` setup code.
+
 ## Rules for requests
 
 The requested party checks every incoming `request` against its rules for this contact, in this order. If a condition applies, the request is silently discarded.
@@ -429,4 +442,23 @@ Clarifications made during the implementation of the relay (`crates/relay`). The
 - **WebSocket errors:** `code` is one of the error codes above (`bad_request`, `unauthorized`, `unknown_mailbox`, `unknown_reader`, `internal`). For an unreadable frame, the field `mailbox` is missing. `ack` for a mailbox that this connection has not subscribed to results in `bad_request`. If a subscribed mailbox is deleted or the reader is unregistered, the relay sends `unknown_mailbox` or `unknown_reader` respectively and ends the subscription. A repeated `subscribe` on the same connection to the same mailbox replaces the old subscription. At most 256 mailboxes per connection, frames at most 4 KiB.
 - **Derived mailboxes and handovers (M5):** The read token of a mailbox created with the access token or derived results in `401` on `POST /v1/mailboxes`, like an unknown token. Mailboxes that existed before the update count as created with a voucher. In `PUT /v1/handovers/{handover}`, a missing `Lz-Fetch-Hash` means a reveal slot; `Lz-Reply-Hash` then results in `400`. For a handover slot the relay token is checked first (`401`), then the body (`413`, an empty body `400`), then whether the identifier or its reveal identifier is taken or reserved (`409`), then the limit per token (`429`), then the limit of the relay (`503`), which a `PUT` with `Lz-Reply-Hash` needs two places of. For a reveal slot: not reserved `404 unknown_handover`, filled already or an ordinary slot `409`, wrong token `401`, not exactly 32 bytes `400`. A reserved reveal slot that is not filled yet reports `404` on `GET`; a filled one expires with its reservation, 10 minutes after the reserving `PUT`. Malformed hex in the headers results in `400`.
 
-Not specified: the messages between own devices (M5) and the behavior when changing the relay.
+Clarifications made during the implementation of the client and core (M5). They are implementation details and were not confirmed one by one:
+
+- **Device list in the handover** includes the existing device E with its name, so that N knows all other devices; N drops its own entry if present.
+- **`relay` is `null`** in the handover if E has no relay account.
+- **Part count 0** in `contact_part` discards the transfer; counts above 4 are accepted as long as the parts fit together into a readable record.
+- **`responded` before its request:** If `responded` arrives before the request itself, the request is recorded as answered at the time of the response; when the request arrives later it gets its real time and is not shown as open.
+- **Rule stamps strictly increase per device:** A device's next `rules` has a later sending time or, in the same second, a larger identifier than its previous one, so that two changes in the same second are applied in order.
+- **Device name:** At most 32 bytes, not empty. E sets its own name when adding a device (`lz device add … --name`); if the name changes while a group exists, E sends `device` again with the new name.
+- **Sync mailbox without access token:** E tries the read tokens of its contact mailboxes one by one as authorisation (a voucher mailbox works, others give `401`, a full one `429 mailbox_quota`); if none works, adding fails with a clear message before anything is registered.
+- **Token for handover slots:** E uses the access token of its relay account if the slots' relay is that relay, otherwise the read token of its sync mailbox, of a contact mailbox or of an open invitation on that relay, in this order.
+- **Rollback when adding fails:** If adding fails after E created the group for it (handover slot taken, no `device` in time, relay unreachable), E removes the reader of N again and also deletes the sync mailbox and the group, so that nothing is left over. A crash of E while waiting leaves the reader of N registered; it is not repeated after a restart.
+- **Polling:** Both devices look at the slots every 3 seconds until the expiry time of the device code; an unreachable relay is retried in that time. N on `401` when fetching a slot (the slot exists with another fetch hash) shows an alarm and starts over.
+- **N's sequence after confirming:** N writes its state, sends its push address and then `device`; if `device` is not accepted before the expiry time, N deletes its state again.
+- **Removal is detected** by `unknown_reader` for the sync mailbox on subscribing, or by `device_removed` naming this device; the device then deletes its state file and lock file. `unknown_reader` for contact mailboxes alone does not delete anything.
+- **Order of fetching:** The sync mailbox is subscribed first, so that `requested` usually arrives before the contact's response to it. A response that arrives before `requested` is still discarded as a response to an unknown request; this is not specified further.
+- **Which device:** Sync messages do not name their sender. A device shows the name of the other device only if there is exactly one.
+- **Outbox:** Sending is retried at the start of every fetch, every 10 seconds while listening, and right after each own action; delivery stops at the first refusal to keep the order.
+- **Removing a device** unregisters its reader on all own mailboxes including invitations and the sync mailbox; `device_removed` is sent only if all of them succeeded (an unknown reader or mailbox counts as success), otherwise the command can be repeated.
+
+Not specified: the behavior when changing the relay.

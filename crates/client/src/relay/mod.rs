@@ -9,7 +9,7 @@ use std::fmt;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use lz_core::wire::{MailboxId, READER_ID_LEN, RelayUrl, Token};
+use lz_core::wire::{Hash, MailboxId, READER_ID_LEN, RelayUrl, Token};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
@@ -29,6 +29,13 @@ pub enum RelayError {
     /// The mailbox does not exist (anymore). For a mailbox of a contact this
     /// means the contact has removed this side.
     UnknownMailbox,
+    /// `404 unknown_handover`: nothing (yet) in this handover slot, or it
+    /// was fetched or has expired.
+    UnknownHandover,
+    /// `409 handover_exists`: the slot or its reveal slot is taken already.
+    /// When adding a device this means someone else knows the device code,
+    /// and triggers an alarm.
+    HandoverExists,
     /// The relay answered with an error code.
     Refused { status: u16, code: String },
     /// The relay could not be reached or answered something unreadable.
@@ -39,6 +46,8 @@ impl fmt::Display for RelayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownMailbox => f.write_str("das Postfach gibt es nicht mehr"),
+            Self::UnknownHandover => f.write_str("keine Übergabe unter dieser Kennung"),
+            Self::HandoverExists => f.write_str("unter dieser Kennung liegt schon eine Übergabe"),
             Self::Refused { status, code } => write!(f, "Relay lehnt ab: {code} ({status})"),
             Self::Transport(detail) => write!(f, "Relay nicht erreichbar: {detail}"),
         }
@@ -131,6 +140,48 @@ pub trait Relay {
         push_url: Option<&str>,
     ) -> Result<(), RelayError>;
 
+    /// Unregisters a reader of the mailbox. A reader that is not registered
+    /// gives `Refused { status: 404, code: "unknown_reader" }`.
+    async fn delete_reader(
+        &self,
+        relay: &RelayUrl,
+        mailbox: &MailboxId,
+        read_token: &Token,
+        reader: &ReaderId,
+    ) -> Result<(), RelayError>;
+
+    /// Stores a handover slot, authorised by the access token or any read
+    /// token of this relay. With `reply_hash`, the relay also reserves the
+    /// reveal slot that belongs to `slot`.
+    async fn put_slot(
+        &self,
+        relay: &RelayUrl,
+        slot: &Hash,
+        authorisation: &Token,
+        fetch_hash: &Hash,
+        reply_hash: Option<&Hash>,
+        data: &[u8],
+    ) -> Result<(), RelayError>;
+
+    /// Fills a reserved reveal slot with the reply token.
+    async fn put_reveal(
+        &self,
+        relay: &RelayUrl,
+        slot: &Hash,
+        reply_token: &Token,
+        value: &[u8; 32],
+    ) -> Result<(), RelayError>;
+
+    /// Fetches a handover slot with its fetch token (for a reveal slot the
+    /// reply token); the relay deletes it then. Fails with
+    /// [`RelayError::UnknownHandover`] while it is empty.
+    async fn get_slot(
+        &self,
+        relay: &RelayUrl,
+        slot: &Hash,
+        token: &Token,
+    ) -> Result<Vec<u8>, RelayError>;
+
     /// Delivers an envelope. Fails with [`RelayError::UnknownMailbox`] if
     /// the mailbox is gone.
     async fn deliver(
@@ -159,12 +210,14 @@ pub fn from_b64<const N: usize>(text: &str) -> Option<[u8; N]> {
     URL_SAFE_NO_PAD.decode(text.trim()).ok()?.try_into().ok()
 }
 
+/// Bytes as lowercase hex.
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// SHA-256 of a token as lowercase hex, as the relay expects it.
 pub fn token_hash(token: &Token) -> String {
-    Sha256::digest(token)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hex(&Sha256::digest(token))
 }
 
 #[cfg(test)]

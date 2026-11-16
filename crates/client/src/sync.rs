@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use lz_core::contact::{ContactState, Event};
+use lz_core::group::{SyncEvent, SyncIgnored};
 use lz_core::pairing::Address;
 use lz_core::store::{Device, Store, StoredContact};
 use lz_core::wire::{ENVELOPE_LEN, MailboxId, RelayUrl, Token};
@@ -50,11 +51,38 @@ enum FollowUp {
         mailbox: MailboxId,
         token: Token,
     },
+    /// A contact arrived from another own device: register this device as
+    /// a reader of its own mailbox.
+    Register {
+        relay: RelayUrl,
+        mailbox: MailboxId,
+        token: Token,
+    },
+    /// This device was removed.
+    Removed,
 }
 
-/// Own mailboxes grouped by relay, with their read tokens.
+/// How [`Ctx::fetch`] runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// Fetch what is waiting, then end.
+    Sync,
+    /// Stay connected.
+    Listen,
+    /// Like `Sync`, without saying that nothing came. Used while waiting
+    /// for a new device.
+    Quiet,
+}
+
+/// Own mailboxes grouped by relay, with their read tokens: the sync mailbox
+/// first, then those of contacts and open invitations.
 pub(crate) fn own_mailboxes(device: &Device) -> HashMap<RelayUrl, Vec<(MailboxId, Token)>> {
     let mut map: HashMap<RelayUrl, Vec<(MailboxId, Token)>> = HashMap::new();
+    if let Some(group) = &device.group {
+        map.entry(group.relay)
+            .or_default()
+            .push((group.mailbox, group.read_token));
+    }
     for contact in device.contacts.iter().filter(|c| !c.state.ended) {
         map.entry(contact.own_relay)
             .or_default()
@@ -87,24 +115,26 @@ fn name_of(device: &Device, relay: &RelayUrl, mailbox: &MailboxId) -> Option<Str
 impl<R: Relay> Ctx<R> {
     /// Fetches everything waiting and returns what happened.
     pub async fn sync(&mut self) -> Result<Vec<Notice>> {
-        self.fetch(false).await
+        self.fetch(Mode::Sync).await
     }
 
     /// Stays connected and shows events as they come. Returns only on
-    /// errors with the state file.
+    /// errors with the state file, or when this device was removed.
     pub async fn listen(&mut self) -> Result<()> {
-        self.fetch(true).await.map(drop)
+        self.fetch(Mode::Listen).await.map(drop)
     }
 
-    async fn fetch(&mut self, listen: bool) -> Result<Vec<Notice>> {
+    pub(crate) async fn fetch(&mut self, mode: Mode) -> Result<Vec<Notice>> {
+        let listen = mode == Mode::Listen;
         let (deliveries, mut incoming) = mpsc::unbounded_channel();
         let mut live: HashMap<RelayUrl, Live> = HashMap::new();
         let mut notices = Vec::new();
         self.retry_push_url().await?;
+        self.flush_outbox().await?;
         self.reconcile(&mut live, &deliveries, &mut notices).await?;
         if live.is_empty() && !listen {
             self.clean_invitations().await?;
-            if notices.is_empty() {
+            if notices.is_empty() && mode == Mode::Sync {
                 self.say("Keine Postfächer zum Abrufen.");
             }
             return Ok(notices);
@@ -128,6 +158,7 @@ impl<R: Relay> Ctx<R> {
                 tokio::select! {
                     delivery = incoming.recv() => delivery,
                     _ = tick.tick() => {
+                        self.flush_outbox().await?;
                         self.reconcile(&mut live, &deliveries, &mut notices).await?;
                         self.clean_invitations().await?;
                         continue;
@@ -156,9 +187,18 @@ impl<R: Relay> Ctx<R> {
                         l.awaiting.remove(&mailbox);
                     }
                     let device = self.store.load()?;
+                    let sync_mailbox = device
+                        .group
+                        .as_ref()
+                        .is_some_and(|g| g.relay == relay && Some(g.mailbox) == mailbox);
+                    if sync_mailbox && code == "unknown_reader" {
+                        self.removed(&mut notices)?;
+                        return Ok(notices);
+                    }
                     // Mailboxes of ended contacts and of withdrawn invitations
                     // are deleted on purpose, possibly by another command.
                     let deleted_on_purpose = code == "unknown_mailbox"
+                        && !sync_mailbox
                         && mailbox.is_some_and(|m| {
                             name_of(&device, &relay, &m).is_none()
                                 || device.contacts.iter().any(|c| {
@@ -170,25 +210,48 @@ impl<R: Relay> Ctx<R> {
                     if deleted_on_purpose {
                         continue;
                     }
-                    let whose = mailbox
-                        .and_then(|m| name_of(&device, &relay, &m))
-                        .map_or_else(String::new, |name| format!(" (Postfach für {name})"));
+                    let whose = if sync_mailbox {
+                        " (Postfach der eigenen Geräte)".to_owned()
+                    } else {
+                        mailbox
+                            .and_then(|m| name_of(&device, &relay, &m))
+                            .map_or_else(String::new, |name| format!(" (Postfach für {name})"))
+                    };
                     let notice =
                         Notice::Problem(format!("Fehler vom Relay {relay}{whose}: {code}"));
                     self.show(&notice);
                     notices.push(notice);
                 }
                 ServerFrame::Message { mailbox, seq, data } => {
-                    let (notice, follow_up) = self.receive(&relay, &mailbox, &data)?;
+                    let (received, follow_ups, queued) = self.receive(&relay, &mailbox, &data)?;
                     if let Some(l) = live.get_mut(&relay) {
                         // A lost acknowledgement only means the message comes again.
                         let _ = l.connection.ack(&mailbox, seq);
                     }
-                    self.show(&notice);
-                    notices.push(notice);
-                    if let Some(notice) = self.follow_up(follow_up).await? {
+                    for notice in received {
                         self.show(&notice);
                         notices.push(notice);
+                    }
+                    let mut subscribe = false;
+                    for follow_up in follow_ups {
+                        match follow_up {
+                            FollowUp::Removed => {
+                                self.removed(&mut notices)?;
+                                return Ok(notices);
+                            }
+                            FollowUp::Register { .. } => subscribe = true,
+                            _ => {}
+                        }
+                        if let Some(notice) = self.follow_up(follow_up).await? {
+                            self.show(&notice);
+                            notices.push(notice);
+                        }
+                    }
+                    if queued {
+                        self.flush_outbox().await?;
+                    }
+                    if subscribe {
+                        self.reconcile(&mut live, &deliveries, &mut notices).await?;
                     }
                 }
                 ServerFrame::Closed => {
@@ -204,10 +267,19 @@ impl<R: Relay> Ctx<R> {
             }
         }
         self.clean_invitations().await?;
-        if !listen && notices.iter().all(Notice::is_dropped) {
+        if mode == Mode::Sync && notices.iter().all(Notice::is_dropped) {
             self.say("Keine neuen Nachrichten.");
         }
         Ok(notices)
+    }
+
+    /// This device was removed by another one: says so and deletes the
+    /// state.
+    fn removed(&mut self, notices: &mut Vec<Notice>) -> Result<()> {
+        let notice = Notice::Removed;
+        self.show(&notice);
+        notices.push(notice);
+        self.delete_state()
     }
 
     fn show(&mut self, notice: &Notice) {
@@ -226,7 +298,12 @@ impl<R: Relay> Ctx<R> {
         notices: &mut Vec<Notice>,
     ) -> Result<()> {
         let device = self.store.load()?;
-        for (relay, mailboxes) in own_mailboxes(&device) {
+        let mut relays: Vec<_> = own_mailboxes(&device).into_iter().collect();
+        // The sync mailbox first, so that what another own device did
+        // tends to arrive before the messages of contacts about it.
+        let group_relay = device.group.as_ref().map(|g| g.relay);
+        relays.sort_by_key(|(relay, _)| Some(*relay) != group_relay);
+        for (relay, mailboxes) in relays {
             let l = match live.entry(relay) {
                 Entry::Occupied(slot) => slot.into_mut(),
                 Entry::Vacant(slot) => match self.relay.connect(&relay, deliveries.clone()).await {
@@ -265,51 +342,12 @@ impl<R: Relay> Ctx<R> {
         relay: &RelayUrl,
         mailbox: &MailboxId,
         data: &[u8],
-    ) -> Result<(Notice, FollowUp)> {
+    ) -> Result<(Vec<Notice>, Vec<FollowUp>, bool)> {
         let now = self.now();
         self.store.update(|device| {
-            if let Some(contact) = device
-                .contacts
-                .iter_mut()
-                .find(|c| c.own_relay == *relay && c.state.contact.own_mailbox == *mailbox)
-            {
-                return Ok(receive_for_contact(contact, data, now));
-            }
-            let Some(index) = device
-                .invitations
-                .iter()
-                .position(|i| i.pending.own.relay == *relay && i.pending.own.mailbox == *mailbox)
-            else {
-                return Ok((
-                    Notice::Dropped {
-                        name: None,
-                        why: "unbekanntes Postfach".into(),
-                    },
-                    FollowUp::None,
-                ));
-            };
-            let invitation = &device.invitations[index];
-            let name = invitation.name.clone();
-            match invitation.pending.receive_hello(data, now) {
-                Ok(contact) => {
-                    let invitation = device.invitations.remove(index);
-                    let code = contact.verification_code();
-                    device.contacts.push(StoredContact {
-                        name: name.clone(),
-                        own_relay: invitation.pending.own.relay,
-                        read_token: invitation.read_token,
-                        state: ContactState::new(contact),
-                    });
-                    Ok::<_, Fail>((Notice::Accepted { name, code }, FollowUp::None))
-                }
-                Err(error) => Ok((
-                    Notice::Dropped {
-                        name: Some(name),
-                        why: error.to_string(),
-                    },
-                    FollowUp::None,
-                )),
-            }
+            let queued = device.outbox.len();
+            let (notices, follow_ups) = receive_into(device, relay, mailbox, data, now)?;
+            Ok((notices, follow_ups, device.outbox.len() > queued))
         })
     }
 
@@ -317,7 +355,33 @@ impl<R: Relay> Ctx<R> {
     /// contact turned out to be gone.
     async fn follow_up(&mut self, follow_up: FollowUp) -> Result<Option<Notice>> {
         match follow_up {
-            FollowUp::None => Ok(None),
+            FollowUp::None | FollowUp::Removed => Ok(None),
+            FollowUp::Register {
+                relay,
+                mailbox,
+                token,
+            } => {
+                let device = self.store.load()?;
+                match self
+                    .relay
+                    .put_reader(
+                        &relay,
+                        &mailbox,
+                        &token,
+                        &device.reader_id,
+                        device.push_url.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(()) => Ok(None),
+                    Err(error) => {
+                        let name = name_of(&device, &relay, &mailbox).unwrap_or_default();
+                        Ok(Some(Notice::Problem(format!(
+                            "Dieses Gerät ist für {name} noch nicht eingetragen: {error}"
+                        ))))
+                    }
+                }
+            }
             FollowUp::DeleteOwn {
                 relay,
                 mailbox,
@@ -367,6 +431,174 @@ impl<R: Relay> Ctx<R> {
             ));
         }
         Ok(())
+    }
+}
+
+/// Applies one message to the state of the device.
+fn receive_into(
+    device: &mut Device,
+    relay: &RelayUrl,
+    mailbox: &MailboxId,
+    data: &[u8],
+    now: u64,
+) -> Result<(Vec<Notice>, Vec<FollowUp>)> {
+    if device
+        .group
+        .as_ref()
+        .is_some_and(|g| g.relay == *relay && g.mailbox == *mailbox)
+    {
+        return Ok(receive_sync(device, data, now));
+    }
+    if let Some(contact) = device
+        .contacts
+        .iter_mut()
+        .find(|c| c.own_relay == *relay && c.state.contact.own_mailbox == *mailbox)
+    {
+        let own_mailbox = contact.state.contact.own_mailbox;
+        let (notice, follow_up) = receive_for_contact(contact, data, now);
+        if let Notice::Paired { name } = &notice {
+            // `receive_for_contact` has announced the rules, so the
+            // record carries their stamp.
+            if let Err(error) = device.sync_contact_added(&own_mailbox, now, &mut OsRng) {
+                let problem = Notice::Problem(format!(
+                    "{name} nicht an die eigenen Geräte übergeben: {error}"
+                ));
+                return Ok((vec![notice, problem], vec![follow_up]));
+            }
+        }
+        return Ok((vec![notice], vec![follow_up]));
+    }
+    let Some(index) = device
+        .invitations
+        .iter()
+        .position(|i| i.pending.own.relay == *relay && i.pending.own.mailbox == *mailbox)
+    else {
+        return Ok((
+            vec![Notice::Dropped {
+                name: None,
+                why: "unbekanntes Postfach".into(),
+            }],
+            vec![],
+        ));
+    };
+    let invitation = &device.invitations[index];
+    let name = invitation.name.clone();
+    match invitation.pending.receive_hello(data, now) {
+        Ok(contact) => {
+            let invitation = device.invitations.remove(index);
+            let code = contact.verification_code();
+            device.contacts.push(StoredContact {
+                name: name.clone(),
+                own_relay: invitation.pending.own.relay,
+                read_token: invitation.read_token,
+                state: ContactState::new(contact),
+            });
+            Ok::<_, Fail>((vec![Notice::Accepted { name, code }], vec![]))
+        }
+        Err(error) => Ok((
+            vec![Notice::Dropped {
+                name: Some(name),
+                why: error.to_string(),
+            }],
+            vec![],
+        )),
+    }
+}
+
+/// Applies a message from the sync mailbox.
+fn receive_sync(device: &mut Device, data: &[u8], now: u64) -> (Vec<Notice>, Vec<FollowUp>) {
+    let before = device.devices.clone();
+    // Sync messages do not say which device sent them; with only one other
+    // device it is that one.
+    let other = match before.as_slice() {
+        [only] => Some(only.name.clone()),
+        _ => None,
+    };
+    let events = match device.receive_sync(data, now) {
+        Ok(events) => events,
+        Err(error) => {
+            return (
+                vec![Notice::Dropped {
+                    name: None,
+                    why: format!("eigene Geräte: {error}"),
+                }],
+                vec![],
+            );
+        }
+    };
+    let name = |device: &Device, contact: &MailboxId| {
+        device
+            .contact_by_mailbox(contact)
+            .map(|c| c.name.clone())
+            .unwrap_or_default()
+    };
+    let mut notices = Vec::new();
+    let mut follow_ups = Vec::new();
+    for event in events {
+        let notice = match event {
+            SyncEvent::DeviceAdded { name, .. } => Notice::DeviceAdded { name },
+            SyncEvent::DeviceRemoved { reader } => Notice::DeviceRemoved {
+                name: before
+                    .iter()
+                    .find(|d| d.reader == reader)
+                    .map(|d| d.name.clone()),
+            },
+            SyncEvent::Removed => {
+                follow_ups.push(FollowUp::Removed);
+                continue;
+            }
+            SyncEvent::Requested { contact, .. } => Notice::OwnRequested {
+                name: name(device, &contact),
+                device: other.clone(),
+            },
+            SyncEvent::Responded { contact, kind, .. } => Notice::OwnResponded {
+                name: name(device, &contact),
+                device: other.clone(),
+                kind,
+            },
+            SyncEvent::RulesSet { contact, rules } => Notice::OwnRules {
+                name: name(device, &contact),
+                device: other.clone(),
+                rules,
+            },
+            SyncEvent::ContactAdded {
+                contact,
+                relay,
+                read_token,
+            } => {
+                follow_ups.push(FollowUp::Register {
+                    relay,
+                    mailbox: contact,
+                    token: read_token,
+                });
+                Notice::OwnContactAdded {
+                    name: name(device, &contact),
+                    device: other.clone(),
+                }
+            }
+            SyncEvent::ContactRemoved { name, .. } => Notice::OwnContactRemoved {
+                name,
+                device: other.clone(),
+            },
+            SyncEvent::PartStored | SyncEvent::Parked => continue,
+            SyncEvent::Ignored(why) => Notice::Dropped {
+                name: None,
+                why: format!("eigene Geräte: {}", ignored(why)),
+            },
+        };
+        notices.push(notice);
+    }
+    (notices, follow_ups)
+}
+
+fn ignored(why: SyncIgnored) -> &'static str {
+    match why {
+        SyncIgnored::Duplicate => "schon gesehen",
+        SyncIgnored::NotExpected => "unerwarteter Typ",
+        SyncIgnored::UnknownType => "unbekannter Typ",
+        SyncIgnored::Outdated => "ältere Regeln",
+        SyncIgnored::Known => "schon bekannt",
+        SyncIgnored::Discarded => "unvollständiger Kontakt verworfen",
     }
 }
 

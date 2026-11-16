@@ -19,7 +19,9 @@ use lz_core::contact::ContactState;
 use lz_core::pairing::{Address, PairingState, PendingInvitation, accept};
 use lz_core::store::{Device, JsonFile, RelayAccount, Store, StoredContact, StoredInvitation};
 use lz_core::wire::invitation::MAX_TEXT_LEN;
-use lz_core::wire::{ENVELOPE_LEN, Invitation, MailboxId, Reason, RelayUrl, Rules, Token};
+use lz_core::wire::{
+    ENVELOPE_LEN, Invitation, MailboxId, Reason, RelayUrl, ResponseKind, Rules, Token,
+};
 use rand_core::{OsRng, RngCore};
 use serde::Serialize;
 
@@ -157,7 +159,7 @@ pub fn relay_url(text: &str) -> Result<RelayUrl> {
 }
 
 /// A hint to append to a sentence, with a leading space, or nothing.
-fn inline(hints: Hints, hint: Hint<'_>) -> String {
+pub(crate) fn inline(hints: Hints, hint: Hint<'_>) -> String {
     hints(&hint).map_or_else(String::new, |text| format!(" {text}"))
 }
 
@@ -166,7 +168,7 @@ pub(crate) fn say(out: &mut dyn Write, text: &str) {
     let _ = writeln!(out, "{text}");
 }
 
-fn random_token() -> Token {
+pub(crate) fn random_token() -> Token {
     let mut token = [0; 32];
     OsRng.fill_bytes(&mut token);
     token
@@ -224,7 +226,7 @@ fn check_active(name: &str, state: &ContactState) -> Result<()> {
     }
 }
 
-fn core(error: lz_core::Error) -> Fail {
+pub(crate) fn core(error: lz_core::Error) -> Fail {
     fail!("{error}")
 }
 
@@ -237,7 +239,7 @@ impl<R: Relay> Ctx<R> {
         say(&mut self.out, text);
     }
 
-    fn load(&self) -> Result<Device> {
+    pub(crate) fn load(&self) -> Result<Device> {
         self.store.load().map_err(|error| match error.kind() {
             io::ErrorKind::NotFound => fail!(
                 "Kein Gerät unter {}.{}",
@@ -452,40 +454,52 @@ impl<R: Relay> Ctx<R> {
         })
         .await?;
         self.say(&format!("{name} ist jetzt gekoppelt."));
-        Ok(())
+        // `confirm` has announced the rules, so the record carries their
+        // stamp.
+        let mailbox = self.own_mailbox_of(name)?;
+        self.tell_devices(|device, now| device.sync_contact_added(&mailbox, now, &mut OsRng))
+            .await
     }
 
     /// Asks a contact for a sign of life.
     pub async fn request(&mut self, name: &str) -> Result<()> {
-        self.change_and_send(name, |state, now| {
-            check_active(name, state)?;
-            match state.request(now, &mut OsRng) {
-                Ok((_, envelope)) => Ok(((), vec![envelope])),
-                Err(lz_core::Error::NotYet(at)) => Err(fail!(
-                    "Anfrage an {name} erst wieder möglich ab {}.",
-                    when(at, now)
-                )),
-                Err(error) => Err(core(error)),
-            }
-        })
-        .await?;
+        let (id, at) = self
+            .change_and_send(name, |state, now| {
+                check_active(name, state)?;
+                match state.request(now, &mut OsRng) {
+                    Ok((id, envelope)) => Ok(((id, now), vec![envelope])),
+                    Err(lz_core::Error::NotYet(at)) => Err(fail!(
+                        "Anfrage an {name} erst wieder möglich ab {}.",
+                        when(at, now)
+                    )),
+                    Err(error) => Err(core(error)),
+                }
+            })
+            .await?;
         self.say(&format!("Anfrage an {name} gesendet."));
-        Ok(())
+        let mailbox = self.own_mailbox_of(name)?;
+        self.tell_devices(|device, now| device.sync_requested(&mailbox, id, at, now, &mut OsRng))
+            .await
     }
 
     /// Answers the open request of a contact.
     pub async fn respond(&mut self, name: &str) -> Result<()> {
-        self.change_and_send(name, |state, now| {
-            check_active(name, state)?;
-            let id = state
-                .open_request(now)
-                .ok_or_else(|| fail!("Keine offene Anfrage von {name}."))?;
-            let envelope = state.respond(&id, now, &mut OsRng).map_err(core)?;
-            Ok(((), vec![envelope]))
-        })
-        .await?;
+        let (id, at) = self
+            .change_and_send(name, |state, now| {
+                check_active(name, state)?;
+                let id = state
+                    .open_request(now)
+                    .ok_or_else(|| fail!("Keine offene Anfrage von {name}."))?;
+                let envelope = state.respond(&id, now, &mut OsRng).map_err(core)?;
+                Ok(((id, now), vec![envelope]))
+            })
+            .await?;
         self.say(&format!("Lebenszeichen an {name} gesendet ✓"));
-        Ok(())
+        let mailbox = self.own_mailbox_of(name)?;
+        self.tell_devices(|device, now| {
+            device.sync_responded(&mailbox, id, ResponseKind::Manual, at, now, &mut OsRng)
+        })
+        .await
     }
 
     /// Sends a reported state for the open request of a contact.
@@ -495,20 +509,21 @@ impl<R: Relay> Ctx<R> {
         if reason.is_empty() {
             return Err(fail!("Der Grund darf nicht leer sein."));
         }
-        self.change_and_send(name, |state, now| {
-            check_active(name, state)?;
-            let id = state
-                .open_request(now)
-                .ok_or_else(|| fail!("Keine offene Anfrage von {name}."))?;
-            match state.report(&id, reason, now, &mut OsRng) {
-                Ok(envelope) => Ok(((), vec![envelope])),
-                Err(lz_core::Error::Unexpected) => {
-                    Err(fail!("Zu dieser Anfrage ist schon ein Zustand gemeldet."))
+        let (id, at) = self
+            .change_and_send(name, |state, now| {
+                check_active(name, state)?;
+                let id = state
+                    .open_request(now)
+                    .ok_or_else(|| fail!("Keine offene Anfrage von {name}."))?;
+                match state.report(&id, reason, now, &mut OsRng) {
+                    Ok(envelope) => Ok(((id, now), vec![envelope])),
+                    Err(lz_core::Error::Unexpected) => {
+                        Err(fail!("Zu dieser Anfrage ist schon ein Zustand gemeldet."))
+                    }
+                    Err(error) => Err(core(error)),
                 }
-                Err(error) => Err(core(error)),
-            }
-        })
-        .await?;
+            })
+            .await?;
         let text = with_hints(
             format!(
                 "An {name} gemeldet: {}. Die Anfrage bleibt offen, bis du antwortest.",
@@ -518,7 +533,12 @@ impl<R: Relay> Ctx<R> {
             &[Hint::Respond(name)],
         );
         self.say(&text);
-        Ok(())
+        let mailbox = self.own_mailbox_of(name)?;
+        self.tell_devices(|device, now| {
+            let kind = ResponseKind::Reported(reason);
+            device.sync_responded(&mailbox, id, kind, at, now, &mut OsRng)
+        })
+        .await
     }
 
     /// Shows or changes how often a contact may ask.
@@ -554,7 +574,10 @@ impl<R: Relay> Ctx<R> {
             })
             .await?;
         self.say(&format!("Neue Regeln für {name}: {}", show::rules(&rules)));
-        Ok(())
+        // Same stamp as the `rules` just sent to the contact.
+        let mailbox = self.own_mailbox_of(name)?;
+        self.tell_devices(|device, now| device.sync_rules_set(&mailbox, now, &mut OsRng))
+            .await
     }
 
     /// Ends a contact or withdraws an invitation.
@@ -631,6 +654,8 @@ impl<R: Relay> Ctx<R> {
             contact.state.contact.own_mailbox,
             contact.read_token,
         );
+        // Only paired contacts are known to the other own devices.
+        let known_elsewhere = contact.state.is_paired();
         let mut delivered = false;
         if !contact.state.ended {
             let now = self.now();
@@ -663,10 +688,28 @@ impl<R: Relay> Ctx<R> {
             device.contacts.retain(|c| c.name != name);
             Ok::<_, Fail>(())
         })?;
+        if known_elsewhere {
+            self.tell_devices(|device, now| {
+                device.sync_contact_removed(&own_mailbox, now, &mut OsRng)
+            })
+            .await?;
+        }
         Ok(delivered)
     }
 
-    fn warn_unless_gone(&mut self, error: &RelayError) {
+    /// Identifier of the own mailbox for a contact, the contact identifier
+    /// between own devices.
+    fn own_mailbox_of(&self, name: &str) -> Result<MailboxId> {
+        let device = self.load()?;
+        let contact = device
+            .contacts
+            .iter()
+            .find(|c| c.name == name)
+            .ok_or_else(|| fail!("Keinen Kontakt namens {name} gefunden."))?;
+        Ok(contact.state.contact.own_mailbox)
+    }
+
+    pub(crate) fn warn_unless_gone(&mut self, error: &RelayError) {
         if *error != RelayError::UnknownMailbox {
             self.say(&format!(
                 "Warnung: eigenes Postfach nicht gelöscht ({error}). Das Relay räumt es nach 90 Tagen auf."

@@ -14,7 +14,7 @@ use crate::sync::own_mailboxes;
 /// Most bytes of a push address that the relay accepts.
 const MAX_PUSH_URL_LEN: usize = 1024;
 
-fn check(url: &str) -> Result<()> {
+pub(crate) fn check(url: &str) -> Result<()> {
     if !url.starts_with("https://") {
         return Err(fail!("Die Push-Adresse muss mit https:// beginnen."));
     }
@@ -55,7 +55,7 @@ impl<R: Relay> Ctx<R> {
     /// Sends the stored push address again if some mailbox may still have an
     /// older one. Failures only produce a line of output; fetching goes on.
     pub(crate) async fn retry_push_url(&mut self) -> Result<()> {
-        if !self.store.load()?.push_pending {
+        if !self.load()?.push_pending {
             return Ok(());
         }
         if let Err(error) = self.send_push_url().await {

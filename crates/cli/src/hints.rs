@@ -15,5 +15,8 @@ pub fn cli(hint: &Hint<'_>) -> Option<String> {
         Hint::Remove(name) => format!("Entfernen mit: lz remove {name}"),
         Hint::Invite(name) => format!("Einladen mit: lz invite {name}"),
         Hint::InviteSomeone => "Einladen mit: lz invite <name>".into(),
+        Hint::AddDevice => "Dort eingeben: lz device add <code> --name <name>".into(),
+        Hint::JoinAgain => "Neu beginnen mit: lz device join --relay … --name …".into(),
+        Hint::JoinSomeDevice => "Auf dem neuen Gerät: lz device join --relay … --name …".into(),
     })
 }

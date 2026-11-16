@@ -93,6 +93,12 @@ pub enum Hint<'a> {
     Invite(&'a str),
     /// Invite someone; there are no contacts yet.
     InviteSomeone,
+    /// Enter the shown device code on an existing device.
+    AddDevice,
+    /// Start adding this device again.
+    JoinAgain,
+    /// Add a further device to this one.
+    JoinSomeDevice,
 }
 
 /// Turns a hint into the wording of a client, or into nothing.
@@ -156,6 +162,53 @@ pub enum Notice {
     },
     /// A problem with a relay or mailbox that the person should know about.
     Problem(String),
+    /// Another own device sent a request to this contact. `device` is its
+    /// name if there is only one other device.
+    OwnRequested {
+        name: String,
+        device: Option<String>,
+    },
+    /// Another own device answered or reported on a request of this
+    /// contact.
+    OwnResponded {
+        name: String,
+        device: Option<String>,
+        kind: ResponseKind,
+    },
+    /// Another own device changed how often this contact may ask.
+    OwnRules {
+        name: String,
+        device: Option<String>,
+        rules: Rules,
+    },
+    /// A contact paired on another own device arrived here.
+    OwnContactAdded {
+        name: String,
+        device: Option<String>,
+    },
+    /// Another own device ended this contact; it is gone here as well.
+    OwnContactRemoved {
+        name: String,
+        device: Option<String>,
+    },
+    /// Another own device announced itself, or changed its name.
+    DeviceAdded {
+        name: String,
+    },
+    /// Another own device was removed.
+    DeviceRemoved {
+        name: Option<String>,
+    },
+    /// This device was removed by another one; its state is deleted.
+    Removed,
+}
+
+/// "auf „Handy“", or "auf einem anderen Gerät" if it is not known which.
+fn on(device: &Option<String>) -> String {
+    match device {
+        Some(name) => format!("auf „{name}“"),
+        None => "auf einem anderen Gerät".into(),
+    }
 }
 
 impl Notice {
@@ -224,6 +277,42 @@ impl Notice {
                 None => format!("(verworfen: {why})"),
             },
             Self::Problem(text) => text.clone(),
+            Self::OwnRequested { name, device } => {
+                format!("Anfrage an {name} {} gesendet.", on(device))
+            }
+            Self::OwnResponded { name, device, kind } => match kind {
+                ResponseKind::Manual => {
+                    format!("Anfrage von {name} {} beantwortet.", on(device))
+                }
+                ResponseKind::Reported(reason) => format!(
+                    "Zur Anfrage von {name} {} gemeldet: {}",
+                    on(device),
+                    reported(reason)
+                ),
+            },
+            Self::OwnRules {
+                name,
+                device,
+                rules: r,
+            } => format!("Regeln für {name} {} geändert: {}", on(device), rules(r)),
+            Self::OwnContactAdded { name, device } => {
+                format!(
+                    "{name} wurde {} gekoppelt und ist jetzt auch hier.",
+                    on(device)
+                )
+            }
+            Self::OwnContactRemoved { name, device } => {
+                format!("{name} wurde {} entfernt.", on(device))
+            }
+            Self::DeviceAdded { name } => format!(
+                "Eigenes Gerät „{name}“ ist dabei. Hast du es nicht selbst hinzugefügt, \
+                 entferne es und kopple deine Kontakte neu."
+            ),
+            Self::DeviceRemoved { name } => match name {
+                Some(name) => format!("Eigenes Gerät „{name}“ wurde entfernt."),
+                None => "Ein eigenes Gerät wurde entfernt.".into(),
+            },
+            Self::Removed => "Dieses Gerät wurde entfernt.".into(),
         }
     }
 }
