@@ -25,16 +25,16 @@ class AnswerWorker(context: Context, params: WorkerParameters) : Worker(context,
         val outcome = CoreBridge.respond(app, name, since)
         return when {
             outcome.optBoolean("ok") -> {
-                EventLog.add(app, key, "answer-sent", "Versuch $attempt")
+                EventLog.add(app, key, "answer-sent", "attempt $attempt")
                 Requests.refresh(app, "answer")
                 Result.success()
             }
             outcome.optBoolean("retry") && attempt < MAX_ATTEMPTS -> {
-                EventLog.add(app, key, "answer-retry", "${outcome.errorText()}, Versuch $attempt")
+                EventLog.add(app, key, "answer-retry", "${outcome.errorText()}, attempt $attempt")
                 Result.retry()
             }
             else -> {
-                EventLog.add(app, key, "answer-failed", "${outcome.errorText()}, Versuch $attempt")
+                EventLog.add(app, key, "answer-failed", "${outcome.errorText()}, attempt $attempt")
                 Store.releaseAnswer(app, key)
                 Requests.refresh(app, "answer-failed")
                 Result.failure()

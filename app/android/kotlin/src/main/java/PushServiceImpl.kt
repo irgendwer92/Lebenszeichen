@@ -15,7 +15,7 @@ class PushServiceImpl : PushService() {
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {
         val changed = Store.endpoint(this) != endpoint.url
         Store.setEndpoint(this, endpoint.url)
-        EventLog.add(this, Requests.NO_REQUEST, "endpoint", if (changed) "neu" else "unverändert")
+        EventLog.add(this, Requests.NO_REQUEST, "endpoint", if (changed) "new" else "unchanged")
         // Also when unchanged: the core sends nothing then, unless a mailbox still lacks it.
         PushUrlWorker.enqueue(this, endpoint.url)
     }
@@ -31,7 +31,7 @@ class PushServiceImpl : PushService() {
 
     override fun onUnregistered(instance: String) {
         Store.setEndpoint(this, "")
-        EventLog.add(this, Requests.NO_REQUEST, "unregistered", "vom Verteiler abgemeldet")
+        EventLog.add(this, Requests.NO_REQUEST, "unregistered", "unregistered by the distributor")
         PushUrlWorker.enqueue(this, null)
     }
 }

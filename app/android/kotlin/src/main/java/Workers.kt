@@ -100,7 +100,7 @@ class PushUrlWorker(context: Context, params: WorkerParameters) : Worker(context
         val app = applicationContext
         val url = inputData.getString(KEY_URL)?.takeIf { it.isNotEmpty() }
         val outcome = CoreBridge.setPushUrl(app, url)
-        val detail = if (url == null) "entfernt" else "eingetragen"
+        val detail = if (url == null) "removed" else "set"
         if (outcome.optBoolean("ok")) {
             EventLog.add(app, Requests.NO_REQUEST, "push-url", detail)
         } else {

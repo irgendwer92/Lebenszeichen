@@ -30,8 +30,6 @@ object RequestPresenter {
      */
     private val OLD_CHANNELS = listOf("requests_silent_v1")
 
-    /** Shown on the lock screen instead of the name of the contact. */
-    const val NEUTRAL_TITLE = "Lebenszeichen?"
     const val EXTRA_NAME = "io.github.irgendwer92.lebenszeichen.NAME"
     const val EXTRA_SINCE = "io.github.irgendwer92.lebenszeichen.SINCE"
     const val EXTRA_TITLE = "io.github.irgendwer92.lebenszeichen.TITLE"
@@ -39,9 +37,6 @@ object RequestPresenter {
 
     /** Stored in the notification, so that [visible] knows which request it shows. */
     private const val EXTRA_KEY = "io.github.irgendwer92.lebenszeichen.KEY"
-
-    /** Hint under the title, here and in the full-screen display. */
-    const val HINT = "Antippen oder Wegwischen sendet dein Lebenszeichen."
 
     /** All requests share this id and differ by tag: the name of the contact. */
     private const val NOTIFICATION_ID = 1
@@ -51,14 +46,21 @@ object RequestPresenter {
 
     /**
      * High importance is required for the full-screen intent and the banner;
-     * sound and vibration are switched off on the channel instead.
+     * sound and vibration are switched off on the channel instead. Name and
+     * description follow the language chosen in the app; creating the channel
+     * again with the same id only updates them.
      */
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
+        val texts = Texts.localized(context)
         OLD_CHANNELS.forEach { manager(context).deleteNotificationChannel(it) }
         val channel =
-            NotificationChannel(CHANNEL_ID, "Anfragen", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Anfragen nach einem Lebenszeichen. Standardmäßig ohne Ton und Vibration."
+            NotificationChannel(
+                CHANNEL_ID,
+                texts.getString(R.string.notification_channel_name),
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = texts.getString(R.string.notification_channel_description)
                 setSound(null, null)
                 enableVibration(false)
                 enableLights(false)
@@ -81,17 +83,18 @@ object RequestPresenter {
         val app = context.applicationContext
         ensureChannel(app)
         val key = request.key
+        val texts = Texts.localized(app)
 
         val notificationsAllowed = NotificationManagerCompat.from(app).areNotificationsEnabled()
         val fullScreenAllowed = canUseFullScreenIntent(app)
         val power = app.getSystemService(Context.POWER_SERVICE) as PowerManager
         val keyguard = app.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
         val state =
-            "Benachrichtigungen=$notificationsAllowed, Vollbild erlaubt=$fullScreenAllowed, " +
-                "Bildschirm an=${power.isInteractive}, gesperrt=${keyguard.isKeyguardLocked}"
+            "notifications=$notificationsAllowed, full screen allowed=$fullScreenAllowed, " +
+                "screen on=${power.isInteractive}, locked=${keyguard.isKeyguardLocked}"
 
         if (!notificationsAllowed) {
-            EventLog.add(app, key, "not-shown", "Benachrichtigungen sind nicht erlaubt. $state")
+            EventLog.add(app, key, "not-shown", "notifications are not allowed. $state")
             return
         }
 
@@ -114,7 +117,7 @@ object RequestPresenter {
             NotificationCompat.Builder(app, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_lz_request)
                 .setContentTitle(request.title)
-                .setContentText(HINT)
+                .setContentText(texts.getString(R.string.notification_hint))
                 .addExtras(android.os.Bundle().apply { putString(EXTRA_KEY, key) })
                 // A reminder is held back by "do not disturb" unless the user allows reminders.
                 .setCategory(NotificationCompat.CATEGORY_REMINDER)
@@ -129,8 +132,8 @@ object RequestPresenter {
                 .setPublicVersion(
                     NotificationCompat.Builder(app, CHANNEL_ID)
                         .setSmallIcon(R.drawable.ic_lz_request)
-                        .setContentTitle(NEUTRAL_TITLE)
-                        .setContentText(HINT)
+                        .setContentTitle(texts.getString(R.string.neutral_title))
+                        .setContentText(texts.getString(R.string.notification_hint))
                         .setCategory(NotificationCompat.CATEGORY_REMINDER)
                         .build(),
                 )

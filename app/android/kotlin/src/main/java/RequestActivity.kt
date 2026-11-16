@@ -27,7 +27,7 @@ import androidx.core.content.ContextCompat
  */
 class RequestActivity : ComponentActivity() {
     private var name: String = ""
-    private var titleText: String = RequestPresenter.NEUTRAL_TITLE
+    private var titleText: String = ""
     private var titleView: TextView? = null
 
     /** Unlocking while the display is open: now the name may show. */
@@ -39,6 +39,14 @@ class RequestActivity : ComponentActivity() {
         }
     private var since: Long = -1
     private val key: String get() = "$name@$since"
+
+    /**
+     * Shows the texts in the language chosen in the app. Runs on the main
+     * thread; [CoreBridge.language] only reads a small local file.
+     */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(Texts.localized(newBase))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,7 +63,7 @@ class RequestActivity : ComponentActivity() {
 
         name = intent.getStringExtra(RequestPresenter.EXTRA_NAME) ?: ""
         since = intent.getLongExtra(RequestPresenter.EXTRA_SINCE, -1)
-        titleText = intent.getStringExtra(RequestPresenter.EXTRA_TITLE) ?: RequestPresenter.NEUTRAL_TITLE
+        titleText = intent.getStringExtra(RequestPresenter.EXTRA_TITLE) ?: getString(R.string.neutral_title)
         if (name.isEmpty() || since < 0 || Store.isAnswered(this, key)) {
             finish()
             return
@@ -77,7 +85,7 @@ class RequestActivity : ComponentActivity() {
         )
         val hint =
             TextView(this).apply {
-                text = "Antippen oder Schließen sendet dein Lebenszeichen."
+                setText(R.string.fullscreen_hint)
                 textSize = 18f
                 gravity = Gravity.CENTER
                 setPadding(0, padding / 2, 0, 0)
@@ -109,7 +117,7 @@ class RequestActivity : ComponentActivity() {
     /** The name of the contact only when the device is unlocked. */
     private fun showTitle() {
         val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-        titleView?.text = if (keyguard.isKeyguardLocked) RequestPresenter.NEUTRAL_TITLE else titleText
+        titleView?.text = if (keyguard.isKeyguardLocked) getString(R.string.neutral_title) else titleText
     }
 
     override fun onDestroy() {

@@ -22,7 +22,7 @@ class ReactionReceiver : BroadcastReceiver() {
             try {
                 Requests.react(app, name, since, reaction)
             } catch (e: Exception) {
-                EventLog.add(app, "$name@$since", "error", "Reaktion nicht verarbeitet: $e")
+                EventLog.add(app, "$name@$since", "error", "reaction not processed: $e")
             } finally {
                 pending.finish()
             }

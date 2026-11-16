@@ -14,6 +14,7 @@ import org.json.JSONObject
  * `app/src-tauri/src/jni_bridge.rs` and answer with JSON.
  *
  * Every call may block on the network; never call from the main thread.
+ * The one exception is [language], which only reads a small local file.
  */
 object CoreBridge {
     private const val LIBRARY = "lebenszeichen_lib"
@@ -35,6 +36,29 @@ object CoreBridge {
     @JvmStatic private external fun nativeSetPushUrl(context: Context, url: String?): String?
 
     @JvmStatic private external fun nativeSetForeground(on: Boolean)
+
+    @JvmStatic private external fun nativeLanguage(context: Context): String?
+
+    /**
+     * The language of the texts: `"de"` or `"en"`, as the user chose it in
+     * the app ("System" is resolved by the core from the locale). Without
+     * the core, or if it answers nothing, the language of [context] decides.
+     *
+     * Safe on the main thread: it reads a small local file and never
+     * touches the network. [RequestActivity], [ScanActivity] and the
+     * plugin commands call it there, through [Texts].
+     */
+    fun language(context: Context): String {
+        if (loadError == null) {
+            try {
+                nativeLanguage(context.applicationContext)?.let { if (it == "de" || it == "en") return it }
+            } catch (e: UnsatisfiedLinkError) {
+                // Falls back to the language of the system below.
+            }
+        }
+        val system = context.resources.configuration.locales[0].language
+        return if (system == "de") "de" else "en"
+    }
 
     /**
      * Tells the core whether the app is in the foreground. Only then the
@@ -68,27 +92,28 @@ object CoreBridge {
     }
 
     /** Fetches from the relays, then lists the open requests. */
-    fun fetch(context: Context): JSONObject = call { nativeFetch(context.applicationContext) }
+    fun fetch(context: Context): JSONObject = call(context) { nativeFetch(context.applicationContext) }
 
     /** The open requests as stored, without the network. */
-    fun openRequests(context: Context): JSONObject = call { nativeOpenRequests(context.applicationContext) }
+    fun openRequests(context: Context): JSONObject = call(context) { nativeOpenRequests(context.applicationContext) }
 
     /** Answers the request of [name] sent at [since]; see `background::Outcome`. */
     fun respond(context: Context, name: String, since: Long): JSONObject =
-        call { nativeRespond(context.applicationContext, name, since) }
+        call(context) { nativeRespond(context.applicationContext, name, since) }
 
     /** Sets the push address, or removes it with `null`. */
-    fun setPushUrl(context: Context, url: String?): JSONObject = call { nativeSetPushUrl(context.applicationContext, url) }
+    fun setPushUrl(context: Context, url: String?): JSONObject =
+        call(context) { nativeSetPushUrl(context.applicationContext, url) }
 
-    /** Turns every way of failing into an answer with `error`. */
-    private fun call(native: () -> String?): JSONObject {
-        loadError?.let { return failure("Rust-Kern nicht geladen: $it") }
+    /** Turns every way of failing into an answer with `error`, in the chosen language. */
+    private fun call(context: Context, native: () -> String?): JSONObject {
+        loadError?.let { return failure(Texts.get(context, R.string.core_not_loaded, it)) }
         return try {
-            native()?.let { JSONObject(it) } ?: failure("Rust-Kern lieferte nichts")
+            native()?.let { JSONObject(it) } ?: failure(Texts.get(context, R.string.core_empty))
         } catch (e: UnsatisfiedLinkError) {
-            failure("Rust-Kern nicht erreichbar: ${e.message}")
+            failure(Texts.get(context, R.string.core_unreachable, e.message ?: ""))
         } catch (e: org.json.JSONException) {
-            failure("Antwort des Rust-Kerns nicht lesbar: ${e.message}")
+            failure(Texts.get(context, R.string.core_bad_answer, e.message ?: ""))
         }
     }
 
