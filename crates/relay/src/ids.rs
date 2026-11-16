@@ -16,6 +16,9 @@ pub type ReaderId = [u8; READER_ID_LEN];
 /// A bearer token or voucher.
 pub type Token = [u8; TOKEN_LEN];
 
+/// A handover slot identifier.
+pub type HandoverId = [u8; 32];
+
 /// A `SHA-256` hash.
 pub type Hash = [u8; 32];
 
@@ -50,6 +53,16 @@ pub fn decode_hex_hash(text: &str) -> Option<Hash> {
 /// `SHA-256` of a byte string.
 pub fn sha256(bytes: &[u8]) -> Hash {
     Sha256::digest(bytes).into()
+}
+
+/// The reveal slot that belongs to the handover slot `slot`:
+/// `SHA-256("lebenszeichen-v1-reveal" || slot)`.
+pub fn reveal_slot(slot: &HandoverId) -> HandoverId {
+    Sha256::new()
+        .chain_update(b"lebenszeichen-v1-reveal")
+        .chain_update(slot)
+        .finalize()
+        .into()
 }
 
 /// Checks a presented token against a stored hash in constant time.

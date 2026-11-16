@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use super::{Connection, Delivery, ReaderId, Relay, RelayError, ServerFrame, token_hash};
 
 /// Most messages waiting in one mailbox.
-const MAX_WAITING: usize = 8;
+const MAX_WAITING: usize = 32;
 
 /// Any number of fake relays, reachable by their base address.
 #[derive(Clone, Default)]

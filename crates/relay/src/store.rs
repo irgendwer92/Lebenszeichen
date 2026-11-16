@@ -1,20 +1,25 @@
 //! SQLite storage of the relay.
 //!
-//! Stored are mailboxes with token hashes, readers with push URL and last
-//! acknowledgement, waiting messages with their arrival time and open
-//! vouchers (hash only). Nothing else: no history, no addresses, no names.
+//! Stored are mailboxes with token hashes, how they were created, readers
+//! with push URL and last acknowledgement, waiting messages with their
+//! arrival time, open vouchers (hash only) and handover slots. Nothing else:
+//! no history, no addresses, no names.
 
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
-use crate::ids::{Hash, MailboxId, ReaderId};
+use crate::ids::{self, HandoverId, Hash, MailboxId, ReaderId, Token};
 use crate::limits::{
-    MAILBOX_IDLE_DAYS, MAX_READERS_PER_MAILBOX, MAX_WAITING_MESSAGES, MESSAGE_TTL_SECS,
+    HANDOVER_TTL_SECS, MAILBOX_IDLE_DAYS, MAX_DERIVED_MAILBOXES, MAX_HANDOVERS,
+    MAX_HANDOVERS_PER_TOKEN, MAX_READERS_PER_MAILBOX, MAX_WAITING_MESSAGES, MESSAGE_TTL_SECS,
+    REVEAL_BYTES,
 };
 
-const SCHEMA: &str = "
+/// Schema version 0, as created before `user_version` was used. A database
+/// at version 0 may already contain these tables.
+const SCHEMA_V0: &str = "
 CREATE TABLE IF NOT EXISTS mailboxes (
     id              BLOB PRIMARY KEY,
     read_token_hash BLOB NOT NULL,
@@ -43,6 +48,36 @@ CREATE TABLE IF NOT EXISTS vouchers (
 ) WITHOUT ROWID;
 ";
 
+/// Version 0 to 1 (M5): origin of mailboxes, derived mailboxes, handovers.
+///
+/// Mailboxes from before the migration count as voucher mailboxes, so people
+/// invited before the update can derive mailboxes; that is all the default of
+/// `origin` is for, inserts always name it. `parent` is the voucher mailbox of
+/// a derived one and deliberately no foreign key: a derived mailbox outlives
+/// its parent.
+///
+/// A handover slot holds `data` and the hash of the token that fetches it. A
+/// reveal slot (`reveal` = 1) is reserved with `data` NULL and its token is
+/// the reply token, for `PUT` and `GET`; it has no `auth_hash`, so it does not
+/// count towards the limit per token.
+const MIGRATION_V1: &str = "
+ALTER TABLE mailboxes ADD COLUMN origin INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE mailboxes ADD COLUMN parent BLOB;
+CREATE INDEX mailboxes_read_token_hash ON mailboxes(read_token_hash);
+CREATE INDEX mailboxes_parent ON mailboxes(parent);
+CREATE TABLE handovers (
+    id         BLOB PRIMARY KEY,
+    data       BLOB,
+    fetch_hash BLOB NOT NULL,
+    auth_hash  BLOB,
+    expires_at INTEGER NOT NULL,
+    reveal     INTEGER NOT NULL
+) WITHOUT ROWID;
+";
+
+/// The schema version this code works with.
+pub const SCHEMA_VERSION: i64 = 1;
+
 /// Day number used for "day of last use": whole days since the Unix epoch.
 pub fn day_of(now: i64) -> i64 {
     now.div_euclid(86_400)
@@ -55,6 +90,90 @@ pub struct MailboxAuth {
     pub read_token_hash: Hash,
     /// `SHA-256` of the send token.
     pub send_token_hash: Hash,
+}
+
+/// How a mailbox was created, as stored in `mailboxes.origin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// With the access token.
+    AccessToken = 0,
+    /// With a voucher; may derive mailboxes.
+    Voucher = 1,
+    /// With the read token of a voucher mailbox.
+    Derived = 2,
+}
+
+/// What authorizes the creation of a mailbox.
+#[derive(Debug, Clone, Copy)]
+pub enum Grant {
+    /// The access token of the relay.
+    AccessToken,
+    /// `SHA-256` of another bearer token: a voucher, or else the read token of
+    /// a voucher mailbox.
+    Token(Hash),
+}
+
+/// Result of creating a mailbox.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CreateMailbox {
+    /// Created with this origin.
+    Created(Origin),
+    /// Neither a valid voucher nor the read token of a voucher mailbox.
+    Unauthorized,
+    /// The voucher mailbox has derived the maximum number of mailboxes.
+    Quota,
+}
+
+/// A handover slot to store with `PUT`.
+#[derive(Debug, Clone, Copy)]
+pub struct NewHandover<'a> {
+    /// The content.
+    pub data: &'a [u8],
+    /// `SHA-256` of the fetch token.
+    pub fetch_hash: Hash,
+    /// `SHA-256` of the token that authorized the `PUT`.
+    pub auth_hash: Hash,
+    /// `SHA-256` of the reply token; reserves the reveal slot.
+    pub reply_hash: Option<Hash>,
+}
+
+/// Result of storing a handover slot.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PutHandover {
+    /// Stored, with the reveal slot reserved if asked for.
+    Stored,
+    /// The identifier, or its reveal identifier, is taken or reserved.
+    Exists,
+    /// The authorizing token already has the maximum of waiting slots.
+    Quota,
+    /// The relay already has the maximum of slots.
+    Full,
+}
+
+/// Result of filling a reveal slot.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PutReveal {
+    /// Stored.
+    Stored,
+    /// Neither reserved nor stored.
+    Unknown,
+    /// Already filled, or not a reveal slot.
+    Exists,
+    /// The token is not the reply token.
+    Unauthorized,
+    /// The body is not exactly [`REVEAL_BYTES`] long.
+    BadLength,
+}
+
+/// Result of fetching a handover slot.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TakeHandover {
+    /// The content; the slot is deleted.
+    Data(Vec<u8>),
+    /// No content under this identifier.
+    Unknown,
+    /// The token is not the one for this slot.
+    Unauthorized,
 }
 
 /// Result of registering or updating a reader.
@@ -97,6 +216,8 @@ pub struct Cleanup {
     pub messages: usize,
     /// Number of expired vouchers deleted.
     pub vouchers: usize,
+    /// Number of expired handover slots and reservations deleted.
+    pub handovers: usize,
 }
 
 /// The relay's database. All methods are blocking; call them from
@@ -116,14 +237,14 @@ impl Store {
         Self::init(Connection::open_in_memory()?)
     }
 
-    fn init(conn: Connection) -> rusqlite::Result<Self> {
+    fn init(mut conn: Connection) -> rusqlite::Result<Self> {
         // `secure_delete` overwrites deleted content, so delivered messages
         // do not linger in free pages of the file.
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "secure_delete", "ON")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.execute_batch(SCHEMA)?;
+        migrate(&mut conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -150,38 +271,213 @@ impl Store {
         })
     }
 
-    /// Creates a mailbox under `id`. With `voucher`, the voucher is redeemed in
-    /// the same transaction; returns `false` if it is unknown or expired.
+    /// Creates a mailbox under `id`. A [`Grant::Token`] is tried as a voucher
+    /// first, which is then redeemed, and else as the read token of a voucher
+    /// mailbox, whose derived mailboxes are counted; all in one transaction.
     pub fn create_mailbox(
         &self,
         id: &MailboxId,
         auth: &MailboxAuth,
-        voucher: Option<&Hash>,
+        grant: Grant,
         now: i64,
-    ) -> rusqlite::Result<bool> {
+    ) -> rusqlite::Result<CreateMailbox> {
         self.with(|c| {
-            let tx = c.transaction()?;
-            if let Some(voucher) = voucher {
-                let redeemed = tx.execute(
-                    "DELETE FROM vouchers WHERE hash = ?1 AND expires_at > ?2",
-                    params![&voucher[..], now],
-                )?;
-                if redeemed != 1 {
-                    return Ok(false);
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let (origin, parent) = match grant {
+                Grant::AccessToken => (Origin::AccessToken, None),
+                Grant::Token(hash) => {
+                    let redeemed = tx.execute(
+                        "DELETE FROM vouchers WHERE hash = ?1 AND expires_at > ?2",
+                        params![&hash[..], now],
+                    )?;
+                    if redeemed == 1 {
+                        (Origin::Voucher, None)
+                    } else {
+                        let Some(parent) = tx
+                            .query_row(
+                                "SELECT id FROM mailboxes WHERE read_token_hash = ?1 AND origin = ?2
+                                 ORDER BY id LIMIT 1",
+                                params![&hash[..], Origin::Voucher as i64],
+                                |row| row.get::<_, Vec<u8>>(0),
+                            )
+                            .optional()?
+                        else {
+                            return Ok(CreateMailbox::Unauthorized);
+                        };
+                        let derived: i64 = tx.query_row(
+                            "SELECT COUNT(*) FROM mailboxes WHERE parent = ?1",
+                            params![&parent],
+                            |row| row.get(0),
+                        )?;
+                        if derived >= MAX_DERIVED_MAILBOXES as i64 {
+                            return Ok(CreateMailbox::Quota);
+                        }
+                        (Origin::Derived, Some(parent))
+                    }
                 }
-            }
+            };
             tx.execute(
-                "INSERT INTO mailboxes (id, read_token_hash, send_token_hash, next_seq, last_used_day)
-                 VALUES (?1, ?2, ?3, 1, ?4)",
+                "INSERT INTO mailboxes
+                   (id, read_token_hash, send_token_hash, next_seq, last_used_day, origin, parent)
+                 VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)",
                 params![
                     &id[..],
                     &auth.read_token_hash[..],
                     &auth.send_token_hash[..],
-                    day_of(now)
+                    day_of(now),
+                    origin as i64,
+                    parent
                 ],
             )?;
             tx.commit()?;
-            Ok(true)
+            Ok(CreateMailbox::Created(origin))
+        })
+    }
+
+    /// Whether `hash` is the read token hash of any mailbox.
+    pub fn is_read_token(&self, hash: &Hash) -> rusqlite::Result<bool> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT EXISTS (SELECT 1 FROM mailboxes WHERE read_token_hash = ?1)",
+                params![&hash[..]],
+                |row| row.get(0),
+            )
+        })
+    }
+
+    /// Stores a handover slot and, with a reply hash, reserves its reveal
+    /// slot in the same transaction.
+    pub fn put_handover(
+        &self,
+        id: &HandoverId,
+        slot: &NewHandover<'_>,
+        now: i64,
+    ) -> rusqlite::Result<PutHandover> {
+        self.with(|c| {
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            purge_handovers(&tx, now)?;
+            let reveal = slot.reply_hash.map(|hash| (ids::reveal_slot(id), hash));
+            if handover_exists(&tx, id)?
+                || reveal
+                    .as_ref()
+                    .map(|(reveal_id, _)| handover_exists(&tx, reveal_id))
+                    .transpose()?
+                    .unwrap_or(false)
+            {
+                return Ok(PutHandover::Exists);
+            }
+            let per_token: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM handovers WHERE auth_hash = ?1",
+                params![&slot.auth_hash[..]],
+                |row| row.get(0),
+            )?;
+            if per_token >= MAX_HANDOVERS_PER_TOKEN as i64 {
+                return Ok(PutHandover::Quota);
+            }
+            let total: i64 =
+                tx.query_row("SELECT COUNT(*) FROM handovers", [], |row| row.get(0))?;
+            let needed = 1 + i64::from(reveal.is_some());
+            if total + needed > MAX_HANDOVERS as i64 {
+                return Ok(PutHandover::Full);
+            }
+            let expires_at = now + HANDOVER_TTL_SECS;
+            tx.execute(
+                "INSERT INTO handovers (id, data, fetch_hash, auth_hash, expires_at, reveal)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+                params![
+                    &id[..],
+                    slot.data,
+                    &slot.fetch_hash[..],
+                    &slot.auth_hash[..],
+                    expires_at
+                ],
+            )?;
+            if let Some((reveal_id, reply_hash)) = reveal {
+                tx.execute(
+                    "INSERT INTO handovers (id, data, fetch_hash, auth_hash, expires_at, reveal)
+                     VALUES (?1, NULL, ?2, NULL, ?3, 1)",
+                    params![&reveal_id[..], &reply_hash[..], expires_at],
+                )?;
+            }
+            tx.commit()?;
+            Ok(PutHandover::Stored)
+        })
+    }
+
+    /// Fills a reserved reveal slot, once, with exactly [`REVEAL_BYTES`]
+    /// bytes. `data` is `None` if the body was longer. The expiry of the
+    /// reservation stays.
+    pub fn put_reveal(
+        &self,
+        id: &HandoverId,
+        token: &Token,
+        data: Option<&[u8]>,
+        now: i64,
+    ) -> rusqlite::Result<PutReveal> {
+        self.with(|c| {
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            purge_handovers(&tx, now)?;
+            let Some((filled, reveal, fetch_hash)) = tx
+                .query_row(
+                    "SELECT data IS NOT NULL, reveal, fetch_hash FROM handovers WHERE id = ?1",
+                    params![&id[..]],
+                    |row| {
+                        Ok((
+                            row.get::<_, bool>(0)?,
+                            row.get::<_, bool>(1)?,
+                            row.get::<_, Vec<u8>>(2)?,
+                        ))
+                    },
+                )
+                .optional()?
+            else {
+                return Ok(PutReveal::Unknown);
+            };
+            if filled || !reveal {
+                return Ok(PutReveal::Exists);
+            }
+            if !hash_matches(token, &fetch_hash) {
+                return Ok(PutReveal::Unauthorized);
+            }
+            let Some(data) = data.filter(|d| d.len() == REVEAL_BYTES) else {
+                return Ok(PutReveal::BadLength);
+            };
+            tx.execute(
+                "UPDATE handovers SET data = ?2 WHERE id = ?1",
+                params![&id[..], data],
+            )?;
+            tx.commit()?;
+            Ok(PutReveal::Stored)
+        })
+    }
+
+    /// Returns the content of a handover slot and deletes it, if `token` is
+    /// the one for it. A reserved reveal slot without content is unknown.
+    pub fn take_handover(
+        &self,
+        id: &HandoverId,
+        token: &Token,
+        now: i64,
+    ) -> rusqlite::Result<TakeHandover> {
+        self.with(|c| {
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            purge_handovers(&tx, now)?;
+            let Some((data, fetch_hash)) = tx
+                .query_row(
+                    "SELECT data, fetch_hash FROM handovers WHERE id = ?1 AND data IS NOT NULL",
+                    params![&id[..]],
+                    |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                )
+                .optional()?
+            else {
+                return Ok(TakeHandover::Unknown);
+            };
+            if !hash_matches(token, &fetch_hash) {
+                return Ok(TakeHandover::Unauthorized);
+            }
+            tx.execute("DELETE FROM handovers WHERE id = ?1", params![&id[..]])?;
+            tx.commit()?;
+            Ok(TakeHandover::Data(data))
         })
     }
 
@@ -414,7 +710,8 @@ impl Store {
         })
     }
 
-    /// Deletes expired messages and vouchers and mailboxes that were not used
+    /// Deletes expired messages, vouchers and handover slots and mailboxes
+    /// that were not used
     /// for [`MAILBOX_IDLE_DAYS`] days.
     pub fn cleanup(&self, now: i64) -> rusqlite::Result<Cleanup> {
         self.with(|c| {
@@ -425,6 +722,7 @@ impl Store {
             )?;
             let vouchers =
                 tx.execute("DELETE FROM vouchers WHERE expires_at <= ?1", params![now])?;
+            let handovers = purge_handovers(&tx, now)?;
             let oldest_day = day_of(now) - MAILBOX_IDLE_DAYS;
             let mut mailboxes = Vec::new();
             {
@@ -445,6 +743,7 @@ impl Store {
                 mailboxes,
                 messages,
                 vouchers,
+                handovers,
             })
         })
     }
@@ -460,4 +759,47 @@ fn purge_acknowledged(conn: &Connection, mailbox: &MailboxId) -> rusqlite::Resul
         params![&mailbox[..]],
     )?;
     Ok(())
+}
+
+/// Brings the schema to [`SCHEMA_VERSION`], each step exactly once and in one
+/// transaction. A fresh database takes the same steps as an old one, so both
+/// end up identical.
+fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let version: i64 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > SCHEMA_VERSION {
+        return Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISMATCH),
+            Some(format!(
+                "Schemaversion {version} ist neuer als {SCHEMA_VERSION}"
+            )),
+        ));
+    }
+    if version < 1 {
+        tx.execute_batch(SCHEMA_V0)?;
+        tx.execute_batch(MIGRATION_V1)?;
+    }
+    if version < SCHEMA_VERSION {
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    }
+    tx.commit()
+}
+
+/// Deletes expired handover slots and reservations.
+fn purge_handovers(tx: &Transaction<'_>, now: i64) -> rusqlite::Result<usize> {
+    tx.execute("DELETE FROM handovers WHERE expires_at <= ?1", params![now])
+}
+
+/// Whether a handover slot or reservation exists under `id`.
+fn handover_exists(tx: &Transaction<'_>, id: &HandoverId) -> rusqlite::Result<bool> {
+    tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM handovers WHERE id = ?1)",
+        params![&id[..]],
+        |row| row.get(0),
+    )
+}
+
+/// Checks a presented token against a stored hash of unchecked length.
+fn hash_matches(token: &Token, stored: &[u8]) -> bool {
+    Hash::try_from(stored).is_ok_and(|hash| ids::token_matches(token, &hash))
 }

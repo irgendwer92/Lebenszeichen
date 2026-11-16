@@ -9,9 +9,18 @@ use serde::Deserialize;
 use subtle::ConstantTimeEq;
 
 use crate::hub::Event;
-use crate::ids::{self, Hash, MailboxId, ReaderId, Token};
-use crate::limits::{MAX_JSON_BODY, VOUCHER_TTL_SECS};
-use crate::store::{MailboxAuth, PostMessage, PutReader};
+use crate::ids::{self, HandoverId, Hash, MailboxId, ReaderId, Token};
+use crate::limits::{MAX_HANDOVER_BYTES, MAX_JSON_BODY, REVEAL_BYTES, VOUCHER_TTL_SECS};
+use crate::store::{
+    CreateMailbox as Created, Grant, MailboxAuth, NewHandover, PostMessage, PutHandover, PutReader,
+    PutReveal, TakeHandover,
+};
+
+/// Header with the hash of the fetch token of a handover slot.
+const FETCH_HASH: &str = "lz-fetch-hash";
+
+/// Header with the hash of the reply token; reserves the reveal slot.
+const REPLY_HASH: &str = "lz-reply-hash";
 use crate::{ApiError, AppState};
 
 /// `GET /v1/health`
@@ -49,7 +58,8 @@ struct CreateMailbox {
     send_token_hash: String,
 }
 
-/// `POST /v1/mailboxes`, with the access token or a voucher.
+/// `POST /v1/mailboxes`, with the access token, a voucher or the read token
+/// of a voucher mailbox, tried in this order.
 pub async fn create_mailbox(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -63,14 +73,20 @@ pub async fn create_mailbox(
         send_token_hash: ids::decode_hex_hash(&request.send_token_hash)
             .ok_or(ApiError::BadRequest)?,
     };
-    let voucher = (!is_access_token(&state, &token)).then(|| ids::sha256(&token));
+    let grant = if is_access_token(&state, &token) {
+        Grant::AccessToken
+    } else {
+        Grant::Token(ids::sha256(&token))
+    };
     let id: MailboxId = ids::random();
     let now = state.now();
-    let created = state
-        .db(move |s| s.create_mailbox(&id, &auth, voucher.as_ref(), now))
-        .await?;
-    if !created {
-        return Err(ApiError::Unauthorized);
+    match state
+        .db(move |s| s.create_mailbox(&id, &auth, grant, now))
+        .await?
+    {
+        Created::Created(_) => {}
+        Created::Unauthorized => return Err(ApiError::Unauthorized),
+        Created::Quota => return Err(ApiError::MailboxQuota),
     }
     Ok((
         StatusCode::CREATED,
@@ -185,6 +201,87 @@ pub async fn post_message(
     Ok(StatusCode::ACCEPTED)
 }
 
+/// `PUT /v1/handovers/{handover}`: a handover slot with the access token or
+/// any read token of this relay, or, without `Lz-Fetch-Hash`, a reserved
+/// reveal slot with the reply token.
+pub async fn put_handover(
+    State(state): State<AppState>,
+    Path(handover): Path<String>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<StatusCode, ApiError> {
+    let id = parse_handover(&handover)?;
+    let token = bearer(&headers)?;
+    let fetch_hash = hash_header(&headers, FETCH_HASH)?;
+    let reply_hash = hash_header(&headers, REPLY_HASH)?;
+    let now = state.now();
+
+    let Some(fetch_hash) = fetch_hash else {
+        if reply_hash.is_some() {
+            return Err(ApiError::BadRequest);
+        }
+        // A longer body is reported only after the token check.
+        let data = axum::body::to_bytes(body, REVEAL_BYTES).await.ok();
+        let outcome = state
+            .db(move |s| s.put_reveal(&id, &token, data.as_deref(), now))
+            .await?;
+        return match outcome {
+            PutReveal::Stored => Ok(StatusCode::CREATED),
+            PutReveal::Unknown => Err(ApiError::UnknownHandover),
+            PutReveal::Exists => Err(ApiError::HandoverExists),
+            PutReveal::Unauthorized => Err(ApiError::Unauthorized),
+            PutReveal::BadLength => Err(ApiError::BadRequest),
+        };
+    };
+
+    let auth_hash = ids::sha256(&token);
+    if !is_access_token(&state, &token) && !state.db(move |s| s.is_read_token(&auth_hash)).await? {
+        return Err(ApiError::Unauthorized);
+    }
+    let data = axum::body::to_bytes(body, MAX_HANDOVER_BYTES)
+        .await
+        .map_err(|_| ApiError::TooLarge)?;
+    if data.is_empty() {
+        return Err(ApiError::BadRequest);
+    }
+    let outcome = state
+        .db(move |s| {
+            let slot = NewHandover {
+                data: &data,
+                fetch_hash,
+                auth_hash,
+                reply_hash,
+            };
+            s.put_handover(&id, &slot, now)
+        })
+        .await?;
+    match outcome {
+        PutHandover::Stored => Ok(StatusCode::CREATED),
+        PutHandover::Exists => Err(ApiError::HandoverExists),
+        PutHandover::Quota => Err(ApiError::HandoversQuota),
+        PutHandover::Full => Err(ApiError::HandoversFull),
+    }
+}
+
+/// `GET /v1/handovers/{handover}`, with the fetch token, for a reveal slot
+/// the reply token. The slot is deleted on success.
+pub async fn get_handover(
+    State(state): State<AppState>,
+    Path(handover): Path<String>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let id = parse_handover(&handover)?;
+    let token = bearer(&headers)?;
+    let now = state.now();
+    match state.db(move |s| s.take_handover(&id, &token, now)).await? {
+        TakeHandover::Data(data) => {
+            Ok(([(header::CONTENT_TYPE, "application/octet-stream")], data))
+        }
+        TakeHandover::Unknown => Err(ApiError::UnknownHandover),
+        TakeHandover::Unauthorized => Err(ApiError::Unauthorized),
+    }
+}
+
 /// Sends a wake signal to every reader with a push URL that has no open
 /// subscription to the mailbox.
 async fn wake_readers(state: &AppState, mailbox: MailboxId) {
@@ -241,6 +338,24 @@ async fn authorize(
 
 fn parse_mailbox(text: &str) -> Result<MailboxId, ApiError> {
     ids::decode(text).ok_or(ApiError::BadRequest)
+}
+
+fn parse_handover(text: &str) -> Result<HandoverId, ApiError> {
+    ids::decode(text).ok_or(ApiError::BadRequest)
+}
+
+/// Reads an optional header with 64 hex digits.
+fn hash_header(headers: &HeaderMap, name: &str) -> Result<Option<Hash>, ApiError> {
+    headers
+        .get(name)
+        .map(|value| {
+            value
+                .to_str()
+                .ok()
+                .and_then(|text| ids::decode_hex_hash(text.trim()))
+                .ok_or(ApiError::BadRequest)
+        })
+        .transpose()
 }
 
 fn parse_reader(text: &str) -> Result<ReaderId, ApiError> {

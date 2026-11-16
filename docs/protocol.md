@@ -132,12 +132,13 @@ Disadvantage: if one device is compromised, all contact keys are affected.
 
 | Call | Authorization | Effect |
 |---|---|---|
-| Create mailbox | Access token of the relay or voucher | Returns mailbox identifier; the client passes the hashes of read token and send token |
+| Create mailbox | Access token of the relay, voucher, or read token of a voucher mailbox (M5) | Returns mailbox identifier; the client passes the hashes of read token and send token. A voucher mailbox may derive up to 10 further mailboxes. |
 | Create voucher | Access token | Valid once, for exactly one mailbox |
 | Deliver message | Send token | At most 512 bytes; clearly reports if the mailbox no longer exists |
 | Register, change or unregister reader | Read token | Reader identifier and push address |
 | Retrieve messages (WebSocket) | Read token, multiple mailboxes per connection | Delivery; the reader acknowledges each message |
 | Delete mailbox | Read token | Immediately, including contents |
+| Store and fetch a handover slot (M5) | Storing: access token or any read token of the relay, for a reveal slot the reply token; fetching: fetch token | One-time block for adding a device, at most 64 KiB, at most 10 minutes |
 
 When a new message arrives, the relay sends a contentless wake signal (UnifiedPush) to the push address of each reader. The device then connects itself and fetches the message.
 
@@ -150,6 +151,8 @@ When a new message arrives, the relay sends a contentless wake signal (UnifiedPu
 | Messages: ciphertext and arrival time | until all readers have acknowledged, at most 24 hours |
 | Open vouchers (hash) | until redeemed, at most 10 minutes |
 | Day of last use per mailbox | for the cleanup rule |
+| How a mailbox was created and, for a derived one, its voucher mailbox (M5) | until the mailbox is deleted |
+| Handover slots: content, hash of fetch or reply token, hash of the authorizing token | until fetched, at most 10 minutes |
 
 ### What the relay does not store
 
@@ -174,7 +177,8 @@ The push service (ntfy) only sees when a device is woken.
 
 ### Protection against abuse
 
-- Mailboxes only with access token or voucher.
+- Mailboxes only with access token, voucher, or derived from a voucher mailbox (at most 10 each, not chainable).
+- At most 64 handover slots on the relay and two per authorizing token.
 - At most 32 waiting messages and 20 deliveries per hour per mailbox (32 since 2026-11-16 for the sync mailbox of several devices; before that 8, decided on 2026-11-14; before that 6, which could block the `end` during normal use through pairing, rule changes and responses). The limit counts all messages because the relay does not know the types; it is not a substitute for the rules for requests.
 - Mailboxes without retrieval for 90 days are deleted.
 
