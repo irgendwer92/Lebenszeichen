@@ -53,10 +53,11 @@ lz init --relay https://relay.example.org --access-token <b64url>
 
 # Anna invites Bert and gives him the code (valid for 10 minutes).
 lz invite Bert              # with --voucher Bert may create a mailbox on Anna's relay
-# Bert accepts and sees a six-digit verification code.
-lz accept Anna LZ1-…
-# Anna picks up the acceptance, compares the verification code and confirms.
-lz sync
+# Bert accepts; the six-digit verification code follows once Anna's device answers.
+lz accept Anna LZ2-…
+# Anna picks up the acceptance; her device answers right away, Bert picks up the code.
+lz sync                     # on both devices
+# Both compare the code in person or on the phone, then Anna confirms.
 lz confirm Bert             # if the verification code does not match: lz reject Bert
 # Bert picks up the confirmation and Anna's rules.
 lz sync

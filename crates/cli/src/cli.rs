@@ -73,11 +73,11 @@ enum Command {
         #[arg(long)]
         qr: bool,
     },
-    /// Nimmt eine Einladung an und zeigt den Prüfcode
+    /// Nimmt eine Einladung an; der Prüfcode folgt beim Abholen
     Accept {
         /// Name, unter dem der Kontakt bei dir erscheint
         name: String,
-        /// Einladungscode LZ1-…
+        /// Einladungscode LZ2-…
         code: String,
     },
     /// Bestätigt einen Kontakt, der die eigene Einladung angenommen hat
@@ -247,7 +247,7 @@ pub async fn run() -> Result<()> {
                 println!("\n{}", lz_client::qr::terminal(&code));
             }
         }),
-        Command::Accept { name, code } => ctx.accept(&name, &code).await.map(drop),
+        Command::Accept { name, code } => ctx.accept(&name, &code).await,
         Command::Confirm { name } => ctx.confirm(&name).await,
         Command::Reject { name } => ctx.reject(&name).await,
         Command::Sync => ctx.sync().await.map(drop),

@@ -460,6 +460,18 @@ Decided on 2026-11-16, after the crypto review of M5 found that the verification
 - **The accepting side sees the code only after `reveal`.** When pairing in person this takes seconds; the inviter's device is woken for the `hello` and answers without the person.
 - **After the crypto review of the fix (2026-11-16):** no pairing without a valid `reveal`; a lost `reveal` is sent again for the same key; 24 hours without `reveal` ends the attempt; state is stored before sending, on both sides; the accepting side's key is new for every invitation; open version-1 invitations are deleted with the update; the codes are compared over another channel than the invitation's, and interfaces say so.
 
+Clarifications made during the implementation of the pairing fix. They are implementation details and were not confirmed one by one:
+
+- **Repeating `hello`:** While waiting for `reveal`, the accepting side sends the stored `hello` again unchanged, 5 minutes after the first sending and then each time the time since the first sending has passed once more (5, 10, 20, … minutes), until `reveal` arrives or the 24 hours and 10 minutes are over. If the inviter's mailbox is gone, the pairing has failed.
+- **Answering a repeated `hello`:** The inviter answers every `hello` with the contact's key, even one whose identifier it has seen, with a new `reveal` message carrying the same `n`, as long as the person has not confirmed. A repeated `hello` with another key is dropped as seen; only its first arrival is shown as a warning.
+- **Further `reveal`s:** After the first valid one, a `reveal` with the same `n` is ignored, one with another `n` triggers the alarm. After pairing, `reveal` is ignored.
+- **`hello_ok` kept back:** If it completes the pairing together with `reveal`, the accepting side still shows the code, with the hint to remove the contact if it does not match.
+- **After an alarm or a failed pairing** the contact stays on the accepting side as ended, like after a rejection, until the person removes it.
+- **Pairings in progress from version 1** (no `n` stored) are ended at the next fetch like a pairing without `reveal`: `end`, mailbox deleted, "Kopplung fehlgeschlagen".
+- **Several devices:** The handover and the reader registration of a new device leave out pairings in progress; they reach the other devices with `contact_part` once complete.
+- **State file:** `n` is stored as `secret` (hex) in the pending invitation and in the contact, the accepting side's waiting state as `awaiting_reveal`; both are left out when empty, so stored paired contacts are unchanged. Pending invitations without `secret` are those of version 1.
+- **Version byte:** An `LZ2-` invitation with version byte 1 gets the same hint as `LZ1-`; one with a higher version byte asks the person to update.
+
 Clarifications made during the implementation of the relay (`crates/relay`). They are implementation details and were not confirmed one by one:
 
 - **Order of checks:** If the token is missing or is not `b64url` of 32 bytes, the result is `401`. Then the mailbox is looked up; an unknown mailbox reports `404 unknown_mailbox` even if the token would not match, so that a removed client recognizes this reliably. Only then is the token compared (`401`).

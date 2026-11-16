@@ -8,8 +8,8 @@
 //! [`SEALED_PLAINTEXT_LEN`]: crate::SEALED_PLAINTEXT_LEN
 
 use crate::{
-    DeviceName, Error, MAX_PART_LEN, MailboxId, MessageId, PublicKey, Reader, ReaderId, Reason,
-    RelayUrl, Token, TransferId, Writer,
+    DeviceName, Error, Hash, MAX_PART_LEN, MailboxId, MessageId, PublicKey, Reader, ReaderId,
+    Reason, RelayUrl, Token, TransferId, Writer,
 };
 
 /// Length of the header in front of every body: type, identifier, time,
@@ -24,6 +24,7 @@ pub mod kind {
     pub const REQUEST: u8 = 4;
     pub const RESPONSE: u8 = 5;
     pub const END: u8 = 6;
+    pub const REVEAL: u8 = 7;
     // Between own devices, only in the group form.
     pub const DEVICE: u8 = 64;
     pub const DEVICE_REMOVED: u8 = 65;
@@ -53,6 +54,8 @@ pub enum Body {
     Request,
     Response(Response),
     End,
+    /// The inviting side reveals its secret value `n` after the `hello`.
+    Reveal(Hash),
     /// A new device of the person announces itself.
     Device(DeviceAnnounce),
     /// A device of the person was removed.
@@ -274,6 +277,7 @@ impl Body {
             Self::Request => kind::REQUEST,
             Self::Response(_) => kind::RESPONSE,
             Self::End => kind::END,
+            Self::Reveal(_) => kind::REVEAL,
             Self::Device(_) => kind::DEVICE,
             Self::DeviceRemoved(_) => kind::DEVICE_REMOVED,
             Self::Requested(_) => kind::REQUESTED,
@@ -317,6 +321,7 @@ impl Body {
                 response.kind.write(w)
             }
             Self::HelloOk | Self::Request | Self::End => Ok(()),
+            Self::Reveal(secret) => w.put(secret),
             Self::Device(device) => {
                 w.put(&device.reader)?;
                 w.text(&device.name)
@@ -364,6 +369,7 @@ impl Body {
                 kind: ResponseKind::read(r)?,
             }),
             kind::END => Self::End,
+            kind::REVEAL => Self::Reveal(r.array()?),
             kind::DEVICE => Self::Device(DeviceAnnounce {
                 reader: r.array()?,
                 name: r.text()?,
@@ -533,9 +539,23 @@ mod tests {
                 kind: ResponseKind::Reported(Reason::new(&"g".repeat(MAX_REASON_LEN)).unwrap()),
             }),
             Body::End,
+            Body::Reveal([8; 32]),
         ] {
             round_trip(body, PADDED_PLAINTEXT_LEN);
         }
+    }
+
+    #[test]
+    fn reveal_layout_matches_documentation() {
+        let buf = round_trip(Body::Reveal([8; 32]), PADDED_PLAINTEXT_LEN);
+        assert_eq!(buf[0], 7);
+        assert_eq!(&buf[25..27], &[0, 32]);
+        assert_eq!(&buf[27..59], &[8; 32]);
+        assert!(buf[59..].iter().all(|&b| b == 0));
+        assert!(!Body::Reveal([8; 32]).is_sync());
+        let mut short = buf;
+        short[25..27].copy_from_slice(&31u16.to_be_bytes());
+        assert_eq!(Message::decode(&short), Err(Error::Truncated));
     }
 
     #[test]

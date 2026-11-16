@@ -338,7 +338,8 @@ pub struct Handover {
     pub group: Group,
     /// All devices of the person except the new one, E included.
     pub devices: Vec<KnownDevice>,
-    /// In the form of the state file; open invitations stay on E.
+    /// In the form of the state file; open invitations and pairings that
+    /// are not complete stay on E.
     pub contacts: Vec<StoredContact>,
 }
 
@@ -377,7 +378,14 @@ impl Device {
             relay: self.relay.clone(),
             group,
             devices,
-            contacts: self.contacts.clone(),
+            // Only the device that paired holds the secret value of a
+            // pairing; the others learn of the contact once it is complete.
+            contacts: self
+                .contacts
+                .iter()
+                .filter(|c| c.state.is_paired())
+                .cloned()
+                .collect(),
         })
     }
 
@@ -540,6 +548,33 @@ mod tests {
         // Contacts in their stored form.
         let stored = serde_json::to_value(&e.contacts).unwrap();
         assert_eq!(json["contacts"], stored);
+    }
+
+    #[test]
+    fn pairings_in_progress_are_not_handed_over() {
+        let (mut e, _) = existing();
+        let address = |fill| crate::pairing::Address {
+            relay: RelayUrl::new("https://relay.example").unwrap(),
+            mailbox: [fill; 32],
+            send_token: [fill; 32],
+        };
+        let (pending, invitation) =
+            crate::pairing::PendingInvitation::create(address(20), None, T, &mut OsRng);
+        let (_, hello) = crate::pairing::accept(&invitation, address(21), T, &mut OsRng).unwrap();
+        let mut waiting = e.contacts[0].clone();
+        waiting.name = "Bert".into();
+        waiting.state =
+            crate::contact::ContactState::new(pending.receive_hello(&hello, T).unwrap());
+        assert!(waiting.state.contact.secret.is_some());
+        e.contacts.push(waiting);
+        let handover = e.handover([3; 32]).unwrap();
+        assert_eq!(handover.contacts.len(), 1);
+        assert_eq!(handover.contacts[0].name, "Anna");
+        assert!(
+            !String::from_utf8(handover.to_json())
+                .unwrap()
+                .contains("secret")
+        );
     }
 
     #[test]

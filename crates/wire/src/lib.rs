@@ -27,7 +27,8 @@ pub use record::{ContactRecord, Stamp};
 pub use setup_code::{CodeKind, SetupCode};
 pub use text::{BoundedStr, ContactName, DeviceName, Reason, RelayUrl};
 
-/// Version byte at the start of every envelope and every invitation.
+/// Version byte at the start of every envelope, device code and setup code.
+/// Invitations have their own, [`invitation::VERSION`].
 pub const PROTOCOL_VERSION: u8 = 1;
 
 /// Every plaintext of an ordinary envelope is padded to this length before
@@ -145,8 +146,11 @@ pub enum Error {
     InvalidValue,
     /// An invitation or device code is not valid Base32 or lacks its prefix.
     InvalidCode,
-    /// The version byte is not [`PROTOCOL_VERSION`].
+    /// The version byte is not the one this format expects.
     UnsupportedVersion(u8),
+    /// An invitation of version 1 (`LZ1-`), which is no longer accepted;
+    /// the person should ask for a new one.
+    OldInvitation,
 }
 
 impl core::fmt::Display for Error {
@@ -158,6 +162,7 @@ impl core::fmt::Display for Error {
             Self::InvalidValue => f.write_str("undefined field value"),
             Self::InvalidCode => f.write_str("not a valid invitation code"),
             Self::UnsupportedVersion(v) => write!(f, "unsupported protocol version {v}"),
+            Self::OldInvitation => f.write_str("invitation of version 1"),
         }
     }
 }

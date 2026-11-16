@@ -398,6 +398,8 @@ mod tests {
         let (a, hello) = accept(&invitation, address(3), T, &mut OsRng).unwrap();
         let mut b = ContactState::new(pending.receive_hello(&hello, T).unwrap());
         let mut a = ContactState::new(a);
+        a.receive(&b.contact.reveal(T, &mut OsRng).unwrap(), T)
+            .unwrap();
         let [hello_ok, _] = b.confirm(T, &mut OsRng).unwrap();
         a.receive(&hello_ok, T).unwrap();
         let (_, request) = a.request(T, &mut OsRng).unwrap();
@@ -569,6 +571,9 @@ mod tests {
         assert!(device.group.is_none() && device.devices.is_empty() && device.name.is_none());
         let state = &device.contacts[0].state;
         assert_eq!(state.own_rules_stamp, crate::wire::Stamp::default());
+        assert!(state.is_paired() && state.contact.secret.is_none());
+        // The open invitation has no secret value: version 1, to be deleted.
+        assert!(device.invitations[0].pending.is_outdated());
         file.update(|_| Ok::<_, io::Error>(())).unwrap();
         assert_eq!(std::fs::read_to_string(file.path()).unwrap(), OLD_FILE);
     }

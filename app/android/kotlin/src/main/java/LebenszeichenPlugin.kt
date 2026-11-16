@@ -226,7 +226,8 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
         return when {
             text.startsWith("LZD1-") -> "device"
             text.startsWith("LZS1-") -> "setup"
-            text.startsWith("LZ1-") -> "invitation"
+            text.startsWith("LZ2-") -> "invitation"
+            text.startsWith("LZ1-") -> "old_invitation"
             else -> null
         }
     }

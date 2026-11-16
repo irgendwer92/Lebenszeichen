@@ -20,7 +20,8 @@ use lz_core::pairing::{Address, PairingState, PendingInvitation, accept};
 use lz_core::store::{Device, JsonFile, RelayAccount, Store, StoredContact, StoredInvitation};
 use lz_core::wire::invitation::MAX_TEXT_LEN;
 use lz_core::wire::{
-    ENVELOPE_LEN, Invitation, MailboxId, Reason, RelayUrl, ResponseKind, Rules, Token,
+    ENVELOPE_LEN, Error as WireError, Invitation, MailboxId, Reason, RelayUrl, ResponseKind, Rules,
+    Token,
 };
 use rand_core::{OsRng, RngCore};
 use serde::Serialize;
@@ -329,11 +330,19 @@ impl<R: Relay> Ctx<R> {
         Ok(code)
     }
 
-    /// Accepts an invitation, sends `hello` and returns the verification
-    /// code.
-    pub async fn accept(&mut self, name: &str, code: &str) -> Result<String> {
-        let invitation = Invitation::from_text(code)
-            .map_err(|_| fail!("Das ist kein gültiger Einladungscode."))?;
+    /// Accepts an invitation and sends `hello`. The verification code
+    /// follows once the inviting side has answered with `reveal`, as a
+    /// notice while fetching.
+    pub async fn accept(&mut self, name: &str, code: &str) -> Result<()> {
+        let invitation = Invitation::from_text(code).map_err(|error| match error {
+            WireError::OldInvitation | WireError::UnsupportedVersion(..=1) => {
+                fail!("{}", show::OLD_INVITATION)
+            }
+            WireError::UnsupportedVersion(_) => fail!(
+                "Diese Einladung stammt aus einer neueren Version; bitte aktualisiere Lebenszeichen."
+            ),
+            _ => fail!("Das ist kein gültiger Einladungscode."),
+        })?;
         if self.now() > invitation.expires_at {
             return Err(fail!("Die Einladung ist abgelaufen."));
         }
@@ -369,6 +378,7 @@ impl<R: Relay> Ctx<R> {
             mailbox,
             send_token,
         };
+        let mut stored = false;
         let result = async {
             self.relay
                 .put_reader(
@@ -379,21 +389,11 @@ impl<R: Relay> Ctx<R> {
                     device.push_url.as_deref(),
                 )
                 .await?;
+            // A new contact key for every acceptance, also when retrying.
             let (contact, hello) =
                 accept(&invitation, own, self.now(), &mut OsRng).map_err(core)?;
-            self.relay
-                .deliver(
-                    &invitation.relay,
-                    &invitation.mailbox,
-                    &invitation.send_token,
-                    &hello,
-                )
-                .await
-                .map_err(|error| match error {
-                    RelayError::UnknownMailbox => fail!("Die Einladung gilt nicht mehr."),
-                    other => other.into(),
-                })?;
-            let code = contact.verification_code();
+            // Key, commitment and own mailbox are stored before `hello`
+            // goes out, so that the `reveal` answering it can be checked.
             self.store.update(|device| {
                 name_is_free(device, name)?;
                 already_accepted(device, &invitation)?;
@@ -405,31 +405,48 @@ impl<R: Relay> Ctx<R> {
                 });
                 Ok::<_, Fail>(())
             })?;
-            Ok::<_, Fail>(code)
+            stored = true;
+            self.relay
+                .deliver(
+                    &invitation.relay,
+                    &invitation.mailbox,
+                    &invitation.send_token,
+                    &hello,
+                )
+                .await
+                .map_err(|error| match error {
+                    RelayError::UnknownMailbox => fail!("Die Einladung gilt nicht mehr."),
+                    other => other.into(),
+                })
         }
         .await;
-        let code = match result {
-            Ok(code) => code,
-            Err(error) => {
-                let _ = self
-                    .relay
-                    .delete_mailbox(&own_relay, &mailbox, &read_token)
-                    .await;
-                return Err(error);
+        if let Err(error) = result {
+            if stored {
+                self.store.update(|device| {
+                    device
+                        .contacts
+                        .retain(|c| !(c.name == name && c.state.contact.own_mailbox == mailbox));
+                    Ok::<_, Fail>(())
+                })?;
             }
-        };
-        self.say(&format!("Einladung angenommen. Prüfcode: {code}"));
+            let _ = self
+                .relay
+                .delete_mailbox(&own_relay, &mailbox, &read_token)
+                .await;
+            return Err(error);
+        }
+        self.say("Einladung angenommen. Warte auf den Prüfcode …");
         let text = with_hints(
             format!(
-                "Vergleiche ihn mit dem Prüfcode bei {name}. Gekoppelt seid ihr, sobald {name} \
-                 bestätigt hat.{}",
+                "Der Prüfcode kommt, sobald das Gerät von {name} die Annahme abgeholt hat. \
+                 Gekoppelt seid ihr, sobald {name} bestätigt hat.{}",
                 inline(self.hints, Hint::Fetch)
             ),
             self.hints,
             &[Hint::Reject(name)],
         );
         self.say(&text);
-        Ok(code)
+        Ok(())
     }
 
     /// Confirms a contact that accepted an own invitation.
@@ -441,7 +458,7 @@ impl<R: Relay> Ctx<R> {
             }
             match state.contact.state {
                 PairingState::AwaitingConfirmation => {}
-                PairingState::AwaitingHelloOk => {
+                PairingState::AwaitingReveal | PairingState::AwaitingHelloOk => {
                     return Err(fail!(
                         "{name} muss bestätigen, nicht du.{}",
                         inline(hints, Hint::Fetch)
@@ -627,7 +644,9 @@ impl<R: Relay> Ctx<R> {
                 self.hints,
                 &[Hint::Invite(name)],
             ),
-            PairingState::AwaitingHelloOk => format!("Bitte {name} um eine neue Einladung."),
+            PairingState::AwaitingReveal | PairingState::AwaitingHelloOk => {
+                format!("Bitte {name} um eine neue Einladung.")
+            }
         };
         // Delivered means the relay took it; whether the device on the
         // other side can read it, this side cannot know.
@@ -751,12 +770,19 @@ impl<R: Relay> Ctx<R> {
             let name = &contact.name;
             let status = match &contact.status {
                 Status::Ended => format!("beendet.{}", inline(self.hints, Hint::Remove(name))),
+                Status::AwaitingReveal => format!(
+                    "Einladung angenommen, warte auf den Prüfcode …{}{}",
+                    inline(self.hints, Hint::Fetch),
+                    inline(self.hints, Hint::Reject(name))
+                ),
                 Status::AwaitingHelloOk { code } => format!(
-                    "wartet auf die Bestätigung durch {name}, Prüfcode {code}.{}",
+                    "wartet auf die Bestätigung durch {name}, Prüfcode {code}. {}{}",
+                    show::COMPARE_HINT,
                     inline(self.hints, Hint::Reject(name))
                 ),
                 Status::AwaitingConfirmation { code } => format!(
-                    "hat angenommen, Prüfcode {code}.{}{}",
+                    "hat angenommen, Prüfcode {code}. {}{}{}",
+                    show::COMPARE_HINT,
                     inline(self.hints, Hint::Confirm(name)),
                     inline(self.hints, Hint::Reject(name))
                 ),
@@ -923,6 +949,9 @@ pub struct ContactView {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Status {
+    /// Accepted an invitation; waiting for the inviting side's `reveal`.
+    /// There is no code to show yet.
+    AwaitingReveal,
     /// Accepted an invitation; waiting for the other side to confirm.
     AwaitingHelloOk {
         code: String,
@@ -961,14 +990,19 @@ pub struct InvitationView {
 
 fn contact_view(contact: &StoredContact, now: u64) -> ContactView {
     let state = &contact.state;
-    let code = || state.contact.verification_code();
+    let code = state.contact.verification_code();
     let status = if state.ended {
         Status::Ended
     } else {
-        match state.contact.state {
-            PairingState::AwaitingHelloOk => Status::AwaitingHelloOk { code: code() },
-            PairingState::AwaitingConfirmation => Status::AwaitingConfirmation { code: code() },
-            PairingState::Paired => Status::Paired,
+        // Without a code (a pairing begun with version 1) the pairing waits
+        // to be ended as failed by the next fetch.
+        match (state.contact.state, code) {
+            (PairingState::Paired, _) => Status::Paired,
+            (PairingState::AwaitingHelloOk, Some(code)) => Status::AwaitingHelloOk { code },
+            (PairingState::AwaitingConfirmation, Some(code)) => {
+                Status::AwaitingConfirmation { code }
+            }
+            _ => Status::AwaitingReveal,
         }
     };
     let incoming = state.open_request(now).and_then(|id| {

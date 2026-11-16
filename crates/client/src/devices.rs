@@ -148,13 +148,18 @@ fn slot_token(device: &Device, relay: &RelayUrl) -> Option<Token> {
 }
 
 /// The mailboxes a new device is registered on: the sync mailbox and those
-/// of the contacts, not those of open invitations.
+/// of the paired contacts, not those of open invitations or pairings in
+/// progress, which the handover leaves out as well.
 fn mailboxes_for_new_device(device: &Device) -> Vec<(RelayUrl, MailboxId, Token)> {
     let mut list = Vec::new();
     if let Some(group) = &device.group {
         list.push((group.relay, group.mailbox, group.read_token));
     }
-    for contact in device.contacts.iter().filter(|c| !c.state.ended) {
+    for contact in device
+        .contacts
+        .iter()
+        .filter(|c| !c.state.ended && c.state.is_paired())
+    {
         list.push((
             contact.own_relay,
             contact.state.contact.own_mailbox,

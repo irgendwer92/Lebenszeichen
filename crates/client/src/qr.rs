@@ -1,7 +1,7 @@
 //! Codes of Lebenszeichen as QR codes, and reading them back from a camera.
 //!
-//! Invitations, device codes and setup codes are all of this kind. `LZ1-` with Base32 in capitals fits the alphanumeric mode of QR codes
-//! (see `docs/wire-format.md`); an invitation becomes version 8 to 12.
+//! Invitations, device codes and setup codes are all of this kind. `LZ2-` with Base32 in capitals fits the alphanumeric mode of QR codes
+//! (see `docs/wire-format.md`); an invitation becomes version 10 to 13.
 
 use lz_core::wire::CodeKind;
 use qrcode::render::unicode::Dense1x2;
@@ -22,7 +22,7 @@ pub struct Qr {
 
 fn encode(text: &str) -> QrCode {
     // Level M survives a bit of glare on a screen. Every invitation fits:
-    // at most 419 characters, and version 40 takes far more.
+    // at most 470 characters, and version 40 takes far more.
     QrCode::with_error_correction_level(text, EcLevel::M)
         .expect("an invitation always fits into a QR code")
 }
@@ -82,7 +82,7 @@ mod tests {
 
     /// An invitation of typical length: no voucher, short relay address.
     fn invitation() -> String {
-        format!("LZ1-{}", "A".repeat(220))
+        format!("LZ2-{}", "A".repeat(263))
     }
 
     /// Reads a code back, with the quiet zone a scanner needs.
@@ -108,17 +108,18 @@ mod tests {
         let text = invitation();
         let qr = modules(&text);
         assert_eq!(qr.dark.len(), qr.width * qr.width);
-        // Alphanumeric mode keeps it small: version 9 at level M.
-        assert_eq!(qr.width, 53);
+        // Alphanumeric mode keeps it small: version 10 at level M.
+        assert_eq!(qr.width, 57);
         assert_eq!(decode(qr.width, |x, y| qr.dark[y * qr.width + x]), text);
     }
 
     #[test]
     fn longest_invitation_still_fits() {
-        // Voucher and a relay address of 120 characters: 419 characters.
-        let text = format!("LZ1-{}", "A".repeat(415));
+        // Voucher and a relay address of 120 characters: 470 characters.
+        let text = format!("LZ2-{}", "A".repeat(466));
+        assert_eq!(text.len(), lz_core::wire::invitation::MAX_TEXT_LEN);
         let qr = modules(&text);
-        assert_eq!(qr.width, 65); // version 12
+        assert_eq!(qr.width, 69); // version 13
         assert_eq!(decode(qr.width, |x, y| qr.dark[y * qr.width + x]), text);
     }
 

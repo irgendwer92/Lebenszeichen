@@ -297,9 +297,13 @@ tauri.core.invoke("platform").then((platform) => {
 /// need here".
 const KIND_TEXT = {
   invitation: "eine Einladung",
+  old_invitation: "eine Einladung aus einer älteren Version",
   device: "ein Gerätecode",
   setup: "ein Einrichtungscode",
 };
+
+/// Same text as `show::OLD_INVITATION` in the client.
+const OLD_INVITATION = "Diese Einladung stammt aus einer älteren Version; bitte um eine neue.";
 
 /// Opens the camera. Returns the code if it is of the wanted kind; else
 /// tells the person what it is and returns null.
@@ -313,6 +317,10 @@ async function scanCode(kind, wanted) {
     return null;
   }
   if (!result?.code) return null;
+  if (result.kind === "old_invitation" && kind === "invitation") {
+    showError(OLD_INVITATION);
+    return null;
+  }
   if (result.kind !== kind) {
     const what = KIND_TEXT[result.kind] ?? "etwas anderes";
     showError(`Das ist ${what}, ${wanted}.`);
@@ -456,6 +464,7 @@ function contactCard(contact) {
         el("h3", "", name),
         el("p", "", `${name} hat deine Einladung angenommen. Vergleicht den Prüfcode:`),
         el("p", "verification", grouped(contact.code)),
+        el("p", "note", contact.compare_hint),
         row(
           button("Prüfcode stimmt: bestätigen", () => call("confirm", { name }), "primary"),
           button("Stimmt nicht: ablehnen", () => call("reject", { name }), "quiet"),
@@ -469,7 +478,22 @@ function contactCard(contact) {
         el("h3", "", name),
         el("p", "", `Wartet auf die Bestätigung durch ${name}. Vergleicht den Prüfcode:`),
         el("p", "verification", grouped(contact.code)),
+        el("p", "note", contact.compare_hint),
         row(button("Stimmt nicht: ablehnen", () => call("reject", { name }), "quiet")),
+      );
+      return item;
+
+    case "awaiting_reveal":
+      item.classList.add("pairing");
+      item.append(
+        el("h3", "", name),
+        el(
+          "p",
+          "",
+          `Einladung angenommen. Warte auf den Prüfcode … Er erscheint hier, sobald das ` +
+            `Gerät von ${name} die Annahme abgeholt hat.`,
+        ),
+        row(button("Abbrechen", () => call("reject", { name }), "quiet")),
       );
       return item;
 
@@ -688,10 +712,12 @@ onSubmit("accept-form", async (data, form) => {
   const name = data.get("name").trim();
   const result = $("accept-result");
   result.hidden = true;
-  const code = await call("accept", { name, code: data.get("code") });
+  // A pasted invitation of version 1 is refused by the core with the same
+  // text as OLD_INVITATION.
+  await call("accept", { name, code: data.get("code") });
   result.textContent =
-    `Angenommen. Prüfcode: ${grouped(code)}. Vergleiche ihn mit dem Prüfcode bei ` +
-    `${name}; gekoppelt seid ihr, sobald ${name} bestätigt hat.`;
+    `Angenommen. Warte auf den Prüfcode … Er erscheint bei ${name} in der Liste, sobald das ` +
+    `Gerät von ${name} die Annahme abgeholt hat.`;
   result.hidden = false;
   form.reset();
 });

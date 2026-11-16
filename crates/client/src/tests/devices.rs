@@ -488,7 +488,11 @@ async fn contact_paired_on_one_device_arrives_on_the_other() {
     );
     assert!(matches!(
         carl.sync().await.as_slice(),
-        [Notice::Paired { .. }, Notice::Rules { .. }]
+        [
+            Notice::Revealed { .. },
+            Notice::Paired { .. },
+            Notice::Rules { .. }
+        ]
     ));
     carl.ctx.request("Anna").await.unwrap();
     let request = Notice::Request {
@@ -512,7 +516,11 @@ async fn contact_paired_on_one_device_arrives_on_the_other() {
     dora.ctx.confirm("Anna").await.unwrap();
     assert!(matches!(
         phone.sync().await.as_slice(),
-        [Notice::Paired { .. }, Notice::Rules { .. }]
+        [
+            Notice::Revealed { .. },
+            Notice::Paired { .. },
+            Notice::Rules { .. }
+        ]
     ));
     let notices = laptop.sync().await;
     assert!(
@@ -530,6 +538,69 @@ async fn contact_paired_on_one_device_arrives_on_the_other() {
     assert!(laptop.sync().await.contains(&Notice::Request {
         name: "Dora".into()
     }));
+}
+
+#[tokio::test]
+async fn only_the_inviting_device_holds_the_secret_value() {
+    let world = World::new();
+    let (mut phone, mut laptop, _bert) = family(&world).await;
+    let mut carl = world.person(Some((RELAY_B, Some(TOKEN_B))));
+    let code = laptop.ctx.invite("Carl", false).await.unwrap();
+    carl.ctx.accept("Anna", &code).await.unwrap();
+    assert!(matches!(
+        laptop.sync().await.as_slice(),
+        [Notice::Accepted { .. }]
+    ));
+    assert!(laptop.contact("Carl").state.contact.secret.is_some());
+    assert!(matches!(
+        carl.sync().await.as_slice(),
+        [Notice::Revealed { .. }]
+    ));
+    // Until the pairing is complete, the phone knows nothing of Carl.
+    assert!(phone.sync().await.is_empty());
+    assert!(phone.device().contacts.iter().all(|c| c.name != "Carl"));
+    let text = std::fs::read_to_string(phone.ctx.store.path()).unwrap();
+    assert!(!text.contains("secret"), "{text}");
+
+    laptop.ctx.confirm("Carl").await.unwrap();
+    assert_eq!(laptop.contact("Carl").state.contact.secret, None);
+    assert_eq!(
+        phone.sync().await,
+        vec![Notice::OwnContactAdded {
+            name: "Carl".into(),
+            device: Some("Laptop".into()),
+        }]
+    );
+    let on_phone = phone.contact("Carl").state;
+    assert!(on_phone.is_paired());
+    assert_eq!(on_phone.contact.secret, None);
+    assert!(on_phone.contact.awaiting_reveal.is_none());
+
+    // On the accepting side, too: the phone accepts Dora's invitation and
+    // the laptop learns of her only after `hello_ok`.
+    let mut dora = world.person(Some((RELAY_B, Some(TOKEN_B))));
+    let code = dora.ctx.invite("Anna", false).await.unwrap();
+    phone.ctx.accept("Dora", &code).await.unwrap();
+    dora.sync().await;
+    assert!(matches!(
+        phone.sync().await.as_slice(),
+        [Notice::Revealed { .. }]
+    ));
+    assert!(phone.contact("Dora").state.contact.secret.is_some());
+    let notices = laptop.sync().await;
+    assert!(
+        !notices
+            .iter()
+            .any(|n| matches!(n, Notice::OwnContactAdded { name, .. } if name == "Dora")),
+        "{notices:?}"
+    );
+    dora.ctx.confirm("Anna").await.unwrap();
+    phone.sync().await;
+    assert!(laptop.sync().await.contains(&Notice::OwnContactAdded {
+        name: "Dora".into(),
+        device: Some("Handy".into()),
+    }));
+    assert_eq!(laptop.contact("Dora").state.contact.secret, None);
 }
 
 #[tokio::test]

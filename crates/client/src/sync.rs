@@ -38,12 +38,12 @@ struct Live {
 
 /// Something to do after a message was stored and acknowledged.
 enum FollowUp {
-    None,
     /// Deliver an envelope to the contact.
     Send {
         name: String,
         peer: Address,
         envelope: Box<[u8; ENVELOPE_LEN]>,
+        what: Sent,
     },
     /// The contact ended; delete the own mailbox.
     DeleteOwn {
@@ -60,6 +60,15 @@ enum FollowUp {
     },
     /// This device was removed.
     Removed,
+}
+
+/// What a [`FollowUp::Send`] delivers, for the text if it fails.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sent {
+    Rules,
+    Reveal,
+    /// `end` after a failed pairing; a missing mailbox is no news then.
+    End,
 }
 
 /// How [`Ctx::fetch`] runs.
@@ -131,6 +140,7 @@ impl<R: Relay> Ctx<R> {
         let mut notices = Vec::new();
         self.retry_push_url().await?;
         self.flush_outbox().await?;
+        self.check_pairings(&mut notices).await?;
         self.reconcile(&mut live, &deliveries, &mut notices).await?;
         if live.is_empty() && !listen {
             self.clean_invitations().await?;
@@ -159,6 +169,7 @@ impl<R: Relay> Ctx<R> {
                     delivery = incoming.recv() => delivery,
                     _ = tick.tick() => {
                         self.flush_outbox().await?;
+                        self.check_pairings(&mut notices).await?;
                         self.reconcile(&mut live, &deliveries, &mut notices).await?;
                         self.clean_invitations().await?;
                         continue;
@@ -355,7 +366,7 @@ impl<R: Relay> Ctx<R> {
     /// contact turned out to be gone.
     async fn follow_up(&mut self, follow_up: FollowUp) -> Result<Option<Notice>> {
         match follow_up {
-            FollowUp::None | FollowUp::Removed => Ok(None),
+            FollowUp::Removed => Ok(None),
             FollowUp::Register {
                 relay,
                 mailbox,
@@ -394,30 +405,107 @@ impl<R: Relay> Ctx<R> {
                 name,
                 peer,
                 envelope,
+                what,
             } => match self
                 .relay
                 .deliver(&peer.relay, &peer.mailbox, &peer.send_token, &envelope[..])
                 .await
             {
                 Ok(()) => Ok(None),
+                Err(RelayError::UnknownMailbox) if what == Sent::End => Ok(None),
                 Err(RelayError::UnknownMailbox) => {
                     self.gone(&name).await?;
                     Ok(Some(Notice::Ended { name }))
                 }
-                Err(error) => Ok(Some(Notice::Problem(format!(
-                    "Regeln an {name} nicht zugestellt: {error}"
-                )))),
+                Err(error) => {
+                    let what = match what {
+                        Sent::Rules => "Regeln",
+                        // Comes again when the other side repeats `hello`.
+                        Sent::Reveal => "Prüfwert für den Prüfcode",
+                        Sent::End => "Abbruch der Kopplung",
+                    };
+                    Ok(Some(Notice::Problem(format!(
+                        "{what} an {name} nicht zugestellt: {error}"
+                    ))))
+                }
             },
         }
     }
 
-    /// Withdraws expired invitations and deletes their mailboxes.
+    /// Pairings this device accepted and that still wait for `reveal`:
+    /// sends `hello` again from time to time, in case `reveal` got lost,
+    /// and ends those that can no longer complete.
+    async fn check_pairings(&mut self, notices: &mut Vec<Notice>) -> Result<()> {
+        let now = self.now();
+        let (repeat, failed) = self.store.update(|device| {
+            let mut repeat = Vec::new();
+            let mut failed = Vec::new();
+            for contact in device.contacts.iter_mut().filter(|c| !c.state.ended) {
+                if contact.state.pairing_failed(now) {
+                    let envelope = contact
+                        .state
+                        .end(now, &mut OsRng)
+                        .map_err(crate::ctx::core)?;
+                    failed.push((
+                        contact.name.clone(),
+                        contact.state.contact.peer.clone(),
+                        envelope,
+                        contact.own_relay,
+                        contact.state.contact.own_mailbox,
+                        contact.read_token,
+                    ));
+                } else if let Some(hello) = contact.state.contact.hello_to_repeat(now) {
+                    repeat.push((
+                        contact.name.clone(),
+                        contact.state.contact.peer.clone(),
+                        hello,
+                    ));
+                }
+            }
+            Ok::<_, Fail>((repeat, failed))
+        })?;
+        for (name, peer, envelope, relay, mailbox, token) in failed {
+            // The other side may be gone already; nothing to tell then.
+            let _ = self
+                .relay
+                .deliver(&peer.relay, &peer.mailbox, &peer.send_token, &envelope)
+                .await;
+            self.delete_own(&relay, &mailbox, &token).await;
+            let notice = Notice::PairingFailed { name };
+            self.show(&notice);
+            notices.push(notice);
+        }
+        for (name, peer, hello) in repeat {
+            match self
+                .relay
+                .deliver(&peer.relay, &peer.mailbox, &peer.send_token, &hello)
+                .await
+            {
+                Ok(()) => {}
+                Err(RelayError::UnknownMailbox) => {
+                    // The invitation is gone on the other side.
+                    self.gone(&name).await?;
+                    let notice = Notice::PairingFailed { name };
+                    self.show(&notice);
+                    notices.push(notice);
+                }
+                // Tried again later.
+                Err(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Withdraws expired invitations and those of version 1, and deletes
+    /// their mailboxes.
     async fn clean_invitations(&mut self) -> Result<()> {
         let now = self.now();
         let expired = self.store.update(|device| {
             let (expired, open) = std::mem::take(&mut device.invitations)
                 .into_iter()
-                .partition::<Vec<_>, _>(|i| i.pending.keep_until() < now);
+                .partition::<Vec<_>, _>(|i| {
+                    i.pending.keep_until() < now || i.pending.is_outdated()
+                });
             device.invitations = open;
             Ok::<_, Fail>(expired)
         })?;
@@ -425,10 +513,15 @@ impl<R: Relay> Ctx<R> {
             let own = &invitation.pending.own;
             self.delete_own(&own.relay, &own.mailbox, &invitation.read_token)
                 .await;
-            self.say(&format!(
-                "Einladung für {} ist abgelaufen und wurde entfernt.",
-                invitation.name
-            ));
+            let name = &invitation.name;
+            self.say(&if invitation.pending.is_outdated() {
+                format!(
+                    "Einladung für {name} stammt aus einer älteren Version und wurde entfernt. \
+                     Lade {name} neu ein."
+                )
+            } else {
+                format!("Einladung für {name} ist abgelaufen und wurde entfernt.")
+            });
         }
         Ok(())
     }
@@ -455,18 +548,18 @@ fn receive_into(
         .find(|c| c.own_relay == *relay && c.state.contact.own_mailbox == *mailbox)
     {
         let own_mailbox = contact.state.contact.own_mailbox;
-        let (notice, follow_up) = receive_for_contact(contact, data, now);
-        if let Notice::Paired { name } = &notice {
+        let name = contact.name.clone();
+        let (mut notices, follow_ups, paired) = receive_for_contact(contact, data, now);
+        if paired {
             // `receive_for_contact` has announced the rules, so the
             // record carries their stamp.
             if let Err(error) = device.sync_contact_added(&own_mailbox, now, &mut OsRng) {
-                let problem = Notice::Problem(format!(
+                notices.push(Notice::Problem(format!(
                     "{name} nicht an die eigenen Geräte übergeben: {error}"
-                ));
-                return Ok((vec![notice, problem], vec![follow_up]));
+                )));
             }
         }
-        return Ok((vec![notice], vec![follow_up]));
+        return Ok((notices, follow_ups));
     }
     let Some(index) = device
         .invitations
@@ -485,15 +578,33 @@ fn receive_into(
     let name = invitation.name.clone();
     match invitation.pending.receive_hello(data, now) {
         Ok(contact) => {
+            // Contact, secret value and `reveal` are stored in this one
+            // step, before `reveal` goes out; a second `hello` then finds
+            // the contact and gets none.
+            let reveal = contact.reveal(now, &mut OsRng).map_err(crate::ctx::core)?;
+            let code = contact
+                .verification_code()
+                .ok_or_else(|| fail!("Kein Prüfcode für {name}."))?;
+            let peer = contact.peer.clone();
             let invitation = device.invitations.remove(index);
-            let code = contact.verification_code();
             device.contacts.push(StoredContact {
                 name: name.clone(),
                 own_relay: invitation.pending.own.relay,
                 read_token: invitation.read_token,
                 state: ContactState::new(contact),
             });
-            Ok::<_, Fail>((vec![Notice::Accepted { name, code }], vec![]))
+            Ok::<_, Fail>((
+                vec![Notice::Accepted {
+                    name: name.clone(),
+                    code,
+                }],
+                vec![FollowUp::Send {
+                    name,
+                    peer,
+                    envelope: Box::new(reveal),
+                    what: Sent::Reveal,
+                }],
+            ))
         }
         Err(error) => Ok((
             vec![Notice::Dropped {
@@ -602,67 +713,143 @@ fn ignored(why: SyncIgnored) -> &'static str {
     }
 }
 
-fn receive_for_contact(contact: &mut StoredContact, data: &[u8], now: u64) -> (Notice, FollowUp) {
+/// Applies a message from a contact. Returns the notices, the network work
+/// to do afterwards, and whether the pairing has just completed.
+fn receive_for_contact(
+    contact: &mut StoredContact,
+    data: &[u8],
+    now: u64,
+) -> (Vec<Notice>, Vec<FollowUp>, bool) {
     let name = contact.name.clone();
     let event = match contact.state.receive(data, now) {
         Ok(event) => event,
         Err(error) => {
             return (
-                Notice::Dropped {
+                vec![Notice::Dropped {
                     name: Some(name),
                     why: error.to_string(),
-                },
-                FollowUp::None,
+                }],
+                vec![],
+                false,
             );
         }
     };
+    let delete_own = FollowUp::DeleteOwn {
+        relay: contact.own_relay,
+        mailbox: contact.state.contact.own_mailbox,
+        token: contact.read_token,
+    };
     match event {
-        Event::Paired => match contact.state.announce_rules(now, &mut OsRng) {
+        Event::Paired => {
+            let (notices, follow_ups) = announce_after_pairing(contact, vec![], now);
+            (notices, follow_ups, true)
+        }
+        Event::Revealed { code, paired } => {
+            let revealed = Notice::Revealed {
+                name: name.clone(),
+                code,
+                paired,
+            };
+            if paired {
+                let (notices, follow_ups) = announce_after_pairing(contact, vec![revealed], now);
+                (notices, follow_ups, true)
+            } else {
+                (vec![revealed], vec![], false)
+            }
+        }
+        Event::RevealMismatch => {
+            let mut follow_ups = Vec::new();
+            match contact.state.end(now, &mut OsRng) {
+                Ok(envelope) => follow_ups.push(FollowUp::Send {
+                    name: name.clone(),
+                    peer: contact.state.contact.peer.clone(),
+                    envelope: Box::new(envelope),
+                    what: Sent::End,
+                }),
+                // Cannot happen with valid keys; the contact is ended
+                // locally all the same.
+                Err(_) => contact.state.ended = true,
+            }
+            follow_ups.push(delete_own);
+            (vec![Notice::RevealMismatch { name }], follow_ups, false)
+        }
+        Event::HelloOkKept => (
+            vec![Notice::Dropped {
+                name: Some(name),
+                why: "Bestätigung vor dem Prüfcode, zurückgehalten".into(),
+            }],
+            vec![],
+            false,
+        ),
+        Event::HelloAgain => match contact.state.contact.reveal(now, &mut OsRng) {
             Ok(envelope) => (
-                Notice::Paired { name: name.clone() },
-                FollowUp::Send {
+                vec![],
+                vec![FollowUp::Send {
                     peer: contact.state.contact.peer.clone(),
                     name,
                     envelope: Box::new(envelope),
-                },
+                    what: Sent::Reveal,
+                }],
+                false,
             ),
             Err(error) => (
-                Notice::Problem(format!("Regeln für {name} nicht verschlüsselt: {error}")),
-                FollowUp::None,
+                vec![Notice::Problem(format!(
+                    "Prüfwert für {name} nicht verschlüsselt: {error}"
+                ))],
+                vec![],
+                false,
             ),
         },
-        Event::Rules(rules) => (Notice::Rules { name, rules }, FollowUp::None),
-        Event::Request(_) => (Notice::Request { name }, FollowUp::None),
-        Event::Response { kind, at, .. } => (Notice::Response { name, kind, at }, FollowUp::None),
-        Event::Ended => (
-            Notice::Ended { name },
-            FollowUp::DeleteOwn {
-                relay: contact.own_relay,
-                mailbox: contact.state.contact.own_mailbox,
-                token: contact.read_token,
-            },
-        ),
-        Event::Rejected => (
-            Notice::Rejected { name },
-            FollowUp::DeleteOwn {
-                relay: contact.own_relay,
-                mailbox: contact.state.contact.own_mailbox,
-                token: contact.read_token,
-            },
-        ),
+        Event::Rules(rules) => (vec![Notice::Rules { name, rules }], vec![], false),
+        Event::Request(_) => (vec![Notice::Request { name }], vec![], false),
+        Event::Response { kind, at, .. } => {
+            (vec![Notice::Response { name, kind, at }], vec![], false)
+        }
+        Event::Ended => (vec![Notice::Ended { name }], vec![delete_own], false),
+        Event::Rejected => (vec![Notice::Rejected { name }], vec![delete_own], false),
         Event::SecondAcceptance => (
-            Notice::SecondAcceptance {
+            vec![Notice::SecondAcceptance {
                 name,
                 paired: contact.state.is_paired(),
-            },
-            FollowUp::None,
+            }],
+            vec![],
+            false,
         ),
         Event::Ignored(why) => (
-            Notice::Dropped {
+            vec![Notice::Dropped {
                 name: Some(name),
                 why: format!("{why:?}"),
-            },
-            FollowUp::None,
+            }],
+            vec![],
+            false,
         ),
+    }
+}
+
+/// The pairing completed on the accepting side: the own rules go to the
+/// contact.
+fn announce_after_pairing(
+    contact: &mut StoredContact,
+    mut notices: Vec<Notice>,
+    now: u64,
+) -> (Vec<Notice>, Vec<FollowUp>) {
+    let name = contact.name.clone();
+    match contact.state.announce_rules(now, &mut OsRng) {
+        Ok(envelope) => {
+            notices.push(Notice::Paired { name: name.clone() });
+            let send = FollowUp::Send {
+                peer: contact.state.contact.peer.clone(),
+                name,
+                envelope: Box::new(envelope),
+                what: Sent::Rules,
+            };
+            (notices, vec![send])
+        }
+        Err(error) => {
+            notices.push(Notice::Problem(format!(
+                "Regeln für {name} nicht verschlüsselt: {error}"
+            )));
+            (notices, vec![])
+        }
     }
 }

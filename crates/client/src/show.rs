@@ -68,6 +68,15 @@ pub fn reported(reason: impl std::fmt::Display) -> String {
     format!("„{reason}“ (gemeldet)")
 }
 
+/// Shown next to every verification code of a pairing: someone who controls
+/// the channel of the invitation could pass the digits on as well.
+pub const COMPARE_HINT: &str = "Vergleiche den Prüfcode persönlich oder am Telefon, nicht im selben \
+     Chat, über den die Einladung kam.";
+
+/// Refusal of an invitation of version 1.
+pub const OLD_INVITATION: &str =
+    "Diese Einladung stammt aus einer älteren Version; bitte um eine neue.";
+
 /// A point where a client may tell the person what to do next.
 ///
 /// The shared texts are complete sentences without commands; each client
@@ -124,6 +133,23 @@ pub enum Notice {
     Accepted {
         name: String,
         code: String,
+    },
+    /// The inviting side revealed its secret value: the code can be
+    /// compared now. If `paired`, it had confirmed already.
+    Revealed {
+        name: String,
+        code: String,
+        paired: bool,
+    },
+    /// The revealed value does not fit the invitation: someone interferes.
+    /// The pairing was ended and the own mailbox deleted.
+    RevealMismatch {
+        name: String,
+    },
+    /// No valid `reveal` arrived in time, or the pairing was begun with an
+    /// older version. It was ended and the own mailbox deleted.
+    PairingFailed {
+        name: String,
     },
     /// The other side confirmed the pairing.
     Paired {
@@ -222,11 +248,46 @@ impl Notice {
         match self {
             Self::Accepted { name, code } => with_hints(
                 format!(
-                    "{name} hat die Einladung angenommen. Prüfcode: {code}\n\
+                    "{name} hat die Einladung angenommen. Prüfcode: {code}\n{COMPARE_HINT}\n\
                      Bestätige nur, wenn er mit dem Prüfcode bei {name} übereinstimmt."
                 ),
                 hints,
                 &[Hint::Confirm(name), Hint::Reject(name)],
+            ),
+            Self::Revealed {
+                name,
+                code,
+                paired: false,
+            } => with_hints(
+                format!(
+                    "Prüfcode für {name}: {code}\n{COMPARE_HINT}\n\
+                     Vergleiche ihn mit dem Prüfcode bei {name}. Gekoppelt seid ihr, sobald \
+                     {name} bestätigt hat."
+                ),
+                hints,
+                &[Hint::Reject(name)],
+            ),
+            Self::Revealed {
+                name,
+                code,
+                paired: true,
+            } => with_hints(
+                format!(
+                    "Prüfcode für {name}: {code}\n{COMPARE_HINT}\n\
+                     {name} hat schon bestätigt. Stimmt er nicht mit dem Prüfcode bei {name} \
+                     überein, entferne den Kontakt."
+                ),
+                hints,
+                &[Hint::Remove(name)],
+            ),
+            Self::RevealMismatch { name } => format!(
+                "Achtung: Die Antwort auf deine Annahme passt nicht zur Einladung von {name}. \
+                 Vermutlich hat sich jemand dazwischengeschaltet. Die Kopplung ist abgebrochen; \
+                 bitte {name} persönlich um eine neue Einladung."
+            ),
+            Self::PairingFailed { name } => format!(
+                "Kopplung mit {name} fehlgeschlagen: Der Prüfcode ist nicht angekommen. \
+                 Für einen neuen Versuch braucht es eine neue Einladung."
             ),
             Self::Paired { name } => format!("{name} hat die Kopplung bestätigt."),
             Self::Rules { name, rules: r } => {

@@ -81,8 +81,10 @@ impl SetupCode {
 /// Which kind of code a scanned or pasted text is, by its prefix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CodeKind {
-    /// `LZ1-`: an invitation.
+    /// `LZ2-`: an invitation.
     Invitation,
+    /// `LZ1-`: an invitation of version 1, recognized only to refuse it.
+    OldInvitation,
     /// `LZD1-`: the device code of a new device.
     Device,
     /// `LZS1-`: a setup code.
@@ -103,6 +105,8 @@ impl CodeKind {
             Some(Self::Setup)
         } else if starts(crate::invitation::PREFIX) {
             Some(Self::Invitation)
+        } else if starts(crate::invitation::OLD_PREFIX) {
+            Some(Self::OldInvitation)
         } else {
             None
         }
@@ -196,7 +200,8 @@ mod tests {
 
     #[test]
     fn recognizes_the_kind_of_a_code() {
-        assert_eq!(CodeKind::of("LZ1-AEAA"), Some(CodeKind::Invitation));
+        assert_eq!(CodeKind::of("LZ2-AIAA"), Some(CodeKind::Invitation));
+        assert_eq!(CodeKind::of(" lz1-aeaa"), Some(CodeKind::OldInvitation));
         assert_eq!(CodeKind::of("  lzd1-aeaa"), Some(CodeKind::Device));
         assert_eq!(CodeKind::of("LZS1-AEAA"), Some(CodeKind::Setup));
         assert_eq!(CodeKind::of("https://example.org"), None);

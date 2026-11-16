@@ -157,7 +157,8 @@ impl Device {
             | Body::Rules(_)
             | Body::Request
             | Body::Response(_)
-            | Body::End => SyncEvent::Ignored(SyncIgnored::NotExpected),
+            | Body::End
+            | Body::Reveal(_) => SyncEvent::Ignored(SyncIgnored::NotExpected),
             Body::Unknown(_) => SyncEvent::Ignored(SyncIgnored::UnknownType),
         };
         events.push(event);
@@ -535,6 +536,8 @@ fn contact_from_record(own_mailbox: MailboxId, record: ContactRecord) -> StoredC
         },
         own_mailbox,
         state: PairingState::Paired,
+        secret: None,
+        awaiting_reveal: None,
     });
     state.own_rules = record.own_rules;
     state.own_rules_stamp = record.own_rules_stamp;
@@ -583,6 +586,11 @@ pub(crate) mod tests {
         let (peer, hello) = accept(&invitation, address(fill + 100), T, &mut OsRng).unwrap();
         let mut peer = ContactState::new(peer);
         let mut own = ContactState::new(pending.receive_hello(&hello, T).unwrap());
+        let reveal = own.contact.reveal(T, &mut OsRng).unwrap();
+        assert!(matches!(
+            peer.receive(&reveal, T).unwrap(),
+            Event::Revealed { paired: false, .. }
+        ));
         let [hello_ok, rules] = own.confirm(T, &mut OsRng).unwrap();
         assert_eq!(peer.receive(&hello_ok, T).unwrap(), Event::Paired);
         peer.receive(&rules, T).unwrap();
