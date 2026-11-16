@@ -897,7 +897,7 @@ async function showDevices() {
             "Entfernen",
             "Wirklich? Nochmal klicken",
             async () => {
-              await call("device_remove", { name: device.name });
+              await call("device_remove", { reader: device.reader });
               await showDevices();
             },
           ),

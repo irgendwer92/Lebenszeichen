@@ -64,8 +64,45 @@ pub trait Dialog {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DeviceView {
     pub name: String,
+    /// Reader identifier in hex; names need not be unique.
+    pub reader: String,
     /// This device.
     pub this: bool,
+}
+
+fn to_hex(reader: &ReaderId) -> String {
+    reader.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn from_hex(text: &str) -> Option<ReaderId> {
+    let mut reader = ReaderId::default();
+    if text.len() != 2 * reader.len() || !text.is_ascii() {
+        return None;
+    }
+    for (i, byte) in reader.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(reader)
+}
+
+/// `name`, or `name 2`, `name 3` … if another device already has it. Cut
+/// at a character boundary so that it stays within 32 bytes.
+fn unique_name<'a>(name: &str, taken: impl Iterator<Item = &'a str> + Clone) -> String {
+    let free = |candidate: &str| !taken.clone().any(|t| t == candidate);
+    if free(name) {
+        return name.to_owned();
+    }
+    (2..)
+        .map(|n| {
+            let suffix = format!(" {n}");
+            let mut base = name.to_owned();
+            while base.len() + suffix.len() > 32 {
+                base.pop();
+            }
+            format!("{base}{suffix}")
+        })
+        .find(|candidate| free(candidate))
+        .expect("there is always a free number")
 }
 
 /// Checks the name of a device: not empty, at most 32 bytes.
@@ -260,6 +297,9 @@ impl<R: Relay> Ctx<R> {
         }
 
         let contacts = handover.contacts.len();
+        // Names need not be unique to work, but two devices with the same
+        // name confuse people; the new one gets a number.
+        let name = unique_name(&name, handover.devices.iter().map(|d| d.name.as_str()));
         let mut device = new.install(handover, name.clone());
         device.push_url = push_url.map(str::to_owned);
         device.push_pending = push_url.is_some();
@@ -685,10 +725,12 @@ impl<R: Relay> Ctx<R> {
         let device = self.load()?;
         let mut list = vec![DeviceView {
             name: device.name.clone().unwrap_or_default(),
+            reader: to_hex(&device.reader_id),
             this: true,
         }];
         list.extend(device.devices.iter().map(|d| DeviceView {
             name: d.name.clone(),
+            reader: to_hex(&d.reader),
             this: false,
         }));
         Ok(list)
@@ -721,17 +763,45 @@ impl<R: Relay> Ctx<R> {
     /// tells the remaining devices.
     pub async fn remove_device(&mut self, name: &str) -> Result<()> {
         let device = self.load()?;
-        if device.name.as_deref() == Some(name) {
+        let matches: Vec<_> = device.devices.iter().filter(|d| d.name == name).collect();
+        let reader = match matches.as_slice() {
+            [one] => one.reader,
+            [] if device.name.as_deref() == Some(name) => {
+                return Err(fail!(
+                    "„{name}“ ist dieses Gerät. Entfernen geht nur von einem anderen Gerät aus."
+                ));
+            }
+            [] => return Err(fail!("Kein eigenes Gerät namens „{name}“ gefunden.")),
+            _ => {
+                return Err(fail!(
+                    "Mehrere eigene Geräte heißen „{name}“; entferne es in der App."
+                ));
+            }
+        };
+        self.remove_reader(&reader, name).await
+    }
+
+    /// Removes the device with this reader identifier (hex), as the app
+    /// does: names need not be unique.
+    pub async fn remove_device_by_reader(&mut self, reader: &str) -> Result<()> {
+        let device = self.load()?;
+        let reader = from_hex(reader).ok_or_else(|| fail!("Unbekanntes Gerät."))?;
+        if reader == device.reader_id {
             return Err(fail!(
-                "„{name}“ ist dieses Gerät. Entfernen geht nur von einem anderen Gerät aus."
+                "Das ist dieses Gerät. Entfernen geht nur von einem anderen Gerät aus."
             ));
         }
-        let reader = device
+        let name = device
             .devices
             .iter()
-            .find(|d| d.name == name)
-            .map(|d| d.reader)
-            .ok_or_else(|| fail!("Kein eigenes Gerät namens „{name}“ gefunden."))?;
+            .find(|d| d.reader == reader)
+            .map(|d| d.name.clone())
+            .ok_or_else(|| fail!("Unbekanntes Gerät."))?;
+        self.remove_reader(&reader, &name).await
+    }
+
+    async fn remove_reader(&mut self, reader: &ReaderId, name: &str) -> Result<()> {
+        let reader = *reader;
         if let Some(error) = self.unregister_reader(&reader).await? {
             return Err(fail!(
                 "„{name}“ ist nicht überall ausgetragen ({error}); versuche es noch einmal."
@@ -851,5 +921,30 @@ fn busy_or(error: RelayError) -> Fail {
              einmal."
         ),
         other => fail!("Übergabe nicht gespeichert: {other}."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{from_hex, to_hex, unique_name};
+
+    #[test]
+    fn duplicate_names_get_a_number() {
+        let taken = ["Laptop", "Handy", "Laptop 2"];
+        assert_eq!(unique_name("Tablet", taken.iter().copied()), "Tablet");
+        assert_eq!(unique_name("Laptop", taken.iter().copied()), "Laptop 3");
+        assert_eq!(unique_name("Handy", taken.iter().copied()), "Handy 2");
+        let long = "x".repeat(32);
+        let named = unique_name(&long, [long.as_str()].into_iter());
+        assert_eq!(named.len(), 32);
+        assert!(named.ends_with(" 2"));
+    }
+
+    #[test]
+    fn reader_ids_round_trip_as_hex() {
+        let reader = [0xab; 16];
+        assert_eq!(from_hex(&to_hex(&reader)), Some(reader));
+        assert_eq!(from_hex("abc"), None);
+        assert_eq!(from_hex(&"zz".repeat(16)), None);
     }
 }

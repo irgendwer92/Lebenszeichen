@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import java.lang.ref.WeakReference
+import java.util.concurrent.ConcurrentHashMap
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.LinearLayout
@@ -100,6 +102,7 @@ class RequestActivity : ComponentActivity() {
                 }
             },
         )
+        shown[key] = WeakReference(this)
         EventLog.add(this, key, "fullscreen-shown", "")
     }
 
@@ -111,6 +114,7 @@ class RequestActivity : ComponentActivity() {
 
     override fun onDestroy() {
         if (titleView != null) unregisterReceiver(unlocked)
+        shown[key]?.let { ref -> if (ref.get() === this) shown.remove(key, ref) }
         super.onDestroy()
     }
 
@@ -138,5 +142,27 @@ class RequestActivity : ComponentActivity() {
         // Only stores the mark and queues the answer; the network is WorkManager's.
         Requests.react(this, name, since, reaction)
         finish()
+    }
+
+    companion object {
+        /** Open full-screen displays by request key. */
+        private val shown = ConcurrentHashMap<String, WeakReference<RequestActivity>>()
+
+        /**
+         * Closes every full-screen display whose request is no longer open:
+         * answered on another device, expired or gone. Closing it this way is
+         * no reaction and sends nothing; only the person leaving it does.
+         */
+        fun closeAllExcept(open: Set<String>) {
+            for ((key, ref) in shown) {
+                if (key in open) continue
+                shown.remove(key)
+                ref.get()?.let { activity ->
+                    activity.runOnUiThread {
+                        if (!activity.isFinishing) activity.finish()
+                    }
+                }
+            }
+        }
     }
 }
