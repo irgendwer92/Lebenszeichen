@@ -113,7 +113,7 @@ status-no-contacts = Noch keine Kontakte.{ $hint }
 error-contact-gone = { $name } hat die Verbindung beendet (das Postfach gibt es nicht mehr).
 error-not-delivered = Nicht zugestellt, nichts geändert: { $error }
 warn-partly-delivered = Warnung: nicht alles zugestellt: { $error }
-error-no-data-dir = Weder XDG_DATA_HOME noch HOME gesetzt; bitte --state angeben.
+error-no-data-dir = Kein Datenverzeichnis gefunden (APPDATA unter Windows, sonst XDG_DATA_HOME oder HOME); bitte --state angeben.
 notice-compare-hint = Vergleiche den Prüfcode persönlich oder am Telefon, nicht im selben Chat, über den die Einladung kam.
 notice-accepted =
     { $name } hat die Einladung angenommen. Prüfcode: { $code }

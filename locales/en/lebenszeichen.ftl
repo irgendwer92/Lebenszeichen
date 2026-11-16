@@ -113,7 +113,7 @@ status-no-contacts = No contacts yet.{ $hint }
 error-contact-gone = { $name } has ended the connection (the mailbox no longer exists).
 error-not-delivered = Not delivered, nothing changed: { $error }
 warn-partly-delivered = Warning: not everything delivered: { $error }
-error-no-data-dir = Neither XDG_DATA_HOME nor HOME is set; please give --state.
+error-no-data-dir = No data directory found (APPDATA on Windows, otherwise XDG_DATA_HOME or HOME); please give --state.
 notice-compare-hint = Compare the check code in person or by phone, not in the same chat the invitation came through.
 notice-accepted =
     { $name } accepted the invitation. Check code: { $code }

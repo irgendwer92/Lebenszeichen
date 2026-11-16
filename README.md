@@ -45,7 +45,8 @@ with a QR code and two check codes. Status in [docs/roadmap.md](docs/roadmap.md)
 `lz` is the client without a UI. Each device has a state file, selectable
 with `--state <path>` or `LZ_STATE`; the default is
 `$XDG_DATA_HOME/lebenszeichen/device.json` (otherwise
-`~/.local/share/lebenszeichen/device.json`).
+`~/.local/share/lebenszeichen/device.json`), on Windows
+`%APPDATA%\lebenszeichen\device.json`.
 
 ```sh
 # Once: create the device. With an access token it can invite.

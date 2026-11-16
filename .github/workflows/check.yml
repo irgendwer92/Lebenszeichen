@@ -85,3 +85,31 @@ jobs:
         env:
           LZ_DEFAULT_RELAY: ${{ vars.LZ_DEFAULT_RELAY }}
         run: cargo test --locked
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            app/src-tauri
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --locked
+      - name: Clippy (desktop app)
+        working-directory: app/src-tauri
+        env:
+          LZ_DEFAULT_RELAY: ${{ vars.LZ_DEFAULT_RELAY }}
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Tests (desktop app)
+        working-directory: app/src-tauri
+        env:
+          LZ_DEFAULT_RELAY: ${{ vars.LZ_DEFAULT_RELAY }}
+        run: cargo test --locked
