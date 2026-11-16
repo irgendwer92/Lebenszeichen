@@ -1,36 +1,45 @@
 //! Human-readable output: times in local time, rules, events.
 
-use chrono::{DateTime, Datelike, Local, TimeZone};
+use chrono::{DateTime, Datelike, Local, TimeZone, Timelike};
 use lz_core::wire::{ResponseKind, Rules};
 
-const WEEKDAYS: [&str; 7] = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+use crate::i18n::Texts;
 
 /// A point in time relative to `now`: "heute 18:00", "morgen 07:30",
-/// "Mo 16.11. 18:00", with the year if it differs.
-pub fn when(at: u64, now: u64) -> String {
+/// "Mo 16.11. 18:00", with the year if it differs. Times are on the 24-hour
+/// clock in every language.
+pub fn when(t: Texts, at: u64, now: u64) -> String {
     if at == u64::MAX {
-        return "nie".into();
+        return tr!(t, "time-never");
     }
-    let (Some(at), Some(now)) = (local(at), local(now)) else {
-        return format!("{at} (Unix-Zeit)");
+    let (Some(local_at), Some(local_now)) = (local(at), local(now)) else {
+        return tr!(t, "time-unix", at = &at.to_string());
     };
-    let time = at.format("%H:%M");
-    let days = (at.date_naive() - now.date_naive()).num_days();
-    match days {
-        -1 => format!("gestern {time}"),
-        0 => format!("heute {time}"),
-        1 => format!("morgen {time}"),
-        _ if at.year() == now.year() => format!(
-            "{} {} {time}",
-            WEEKDAYS[at.weekday().num_days_from_monday() as usize],
-            at.format("%d.%m.")
-        ),
-        _ => format!(
-            "{} {} {time}",
-            WEEKDAYS[at.weekday().num_days_from_monday() as usize],
-            at.format("%d.%m.%Y")
-        ),
-    }
+    let time = format!("{:02}:{:02}", local_at.hour(), local_at.minute());
+    let days = (local_at.date_naive() - local_now.date_naive()).num_days();
+    let id = match days {
+        -1 => "time-yesterday",
+        0 => "time-today",
+        1 => "time-tomorrow",
+        _ if local_at.year() == local_now.year() => "time-date",
+        _ => "time-date-year",
+    };
+    let weekday = t.text(
+        &format!("time-weekday-{}", local_at.weekday().number_from_monday()),
+        &[],
+    );
+    let month_name = t.text(&format!("time-month-{}", local_at.month()), &[]);
+    tr!(
+        t,
+        id,
+        time = &time,
+        weekday = &weekday,
+        day = &local_at.day().to_string(),
+        day2 = &format!("{:02}", local_at.day()),
+        month2 = &format!("{:02}", local_at.month()),
+        month_name = &month_name,
+        year = &local_at.year().to_string()
+    )
 }
 
 fn local(at: u64) -> Option<DateTime<Local>> {
@@ -38,44 +47,47 @@ fn local(at: u64) -> Option<DateTime<Local>> {
 }
 
 /// A duration in minutes, in hours where that is exact.
-pub fn minutes(m: u32) -> String {
+pub fn minutes(t: Texts, m: u32) -> String {
     if m != 0 && m.is_multiple_of(60) {
-        format!("{} h", m / 60)
+        tr!(t, "time-hours", count = &(m / 60).to_string())
     } else {
-        format!("{m} min")
+        tr!(t, "time-minutes", count = &m.to_string())
     }
 }
 
 /// The request rules in one line.
-pub fn rules(rules: &Rules) -> String {
-    format!(
-        "Mindestabstand {}, Ablauf nach {}, höchstens {} pro Woche",
-        minutes(rules.min_interval_minutes),
-        minutes(rules.expiry_minutes),
-        rules.weekly_limit
+pub fn rules(t: Texts, rules: &Rules) -> String {
+    tr!(
+        t,
+        "rules-line",
+        interval = &minutes(t, rules.min_interval_minutes),
+        expiry = &minutes(t, rules.expiry_minutes),
+        weekly = &rules.weekly_limit.to_string()
     )
 }
 
 /// A response as the asking side sees it.
-pub fn response(kind: &ResponseKind, at: u64, now: u64) -> String {
+pub fn response(t: Texts, kind: &ResponseKind, at: u64, now: u64) -> String {
     match kind {
-        ResponseKind::Manual => format!("✓ {}", when(at, now)),
-        ResponseKind::Reported(reason) => reported(reason),
+        ResponseKind::Manual => response_manual(t, at, now),
+        ResponseKind::Reported(reason) => reported(t, reason),
     }
 }
 
-pub fn reported(reason: impl std::fmt::Display) -> String {
-    format!("„{reason}“ (gemeldet)")
+/// A manual response: a check mark and the time.
+pub fn response_manual(t: Texts, at: u64, now: u64) -> String {
+    tr!(t, "response-manual", at = &when(t, at, now))
+}
+
+pub fn reported(t: Texts, reason: impl std::fmt::Display) -> String {
+    tr!(t, "response-reported", reason = &reason.to_string())
 }
 
 /// Shown next to every verification code of a pairing: someone who controls
 /// the channel of the invitation could pass the digits on as well.
-pub const COMPARE_HINT: &str = "Vergleiche den Prüfcode persönlich oder am Telefon, nicht im selben \
-     Chat, über den die Einladung kam.";
-
-/// Refusal of an invitation of version 1.
-pub const OLD_INVITATION: &str =
-    "Diese Einladung stammt aus einer älteren Version; bitte um eine neue.";
+pub fn compare_hint(t: Texts) -> String {
+    tr!(t, "notice-compare-hint")
+}
 
 /// A point where a client may tell the person what to do next.
 ///
@@ -110,19 +122,20 @@ pub enum Hint<'a> {
     JoinSomeDevice,
 }
 
-/// Turns a hint into the wording of a client, or into nothing.
-pub type Hints = fn(&Hint<'_>) -> Option<String>;
+/// Turns a hint into the wording of a client in a language, or into
+/// nothing.
+pub type Hints = fn(&Hint<'_>, Texts) -> Option<String>;
 
 /// For clients that show no hints.
-pub fn no_hints(_: &Hint<'_>) -> Option<String> {
+pub fn no_hints(_: &Hint<'_>, _: Texts) -> Option<String> {
     None
 }
 
 /// The hints that apply, each on a line of its own after `text`.
-pub fn with_hints(text: String, hints: Hints, wanted: &[Hint<'_>]) -> String {
+pub fn with_hints(text: String, hints: Hints, t: Texts, wanted: &[Hint<'_>]) -> String {
     wanted
         .iter()
-        .filter_map(hints)
+        .filter_map(|hint| hints(hint, t))
         .fold(text, |text, hint| format!("{text}\n{hint}"))
 }
 
@@ -230,10 +243,10 @@ pub enum Notice {
 }
 
 /// "auf „Handy“", or "auf einem anderen Gerät" if it is not known which.
-fn on(device: &Option<String>) -> String {
+fn on(t: Texts, device: &Option<String>) -> String {
     match device {
-        Some(name) => format!("auf „{name}“"),
-        None => "auf einem anderen Gerät".into(),
+        Some(name) => tr!(t, "notice-on-device", name = name),
+        None => tr!(t, "notice-on-other-device"),
     }
 }
 
@@ -242,16 +255,14 @@ impl Notice {
         matches!(self, Self::Dropped { .. })
     }
 
-    /// Text of the notice, with times relative to `now` and the hints of
-    /// the client.
-    pub fn text(&self, now: u64, hints: Hints) -> String {
+    /// Text of the notice in a language, with times relative to `now` and
+    /// the hints of the client.
+    pub fn text(&self, t: Texts, now: u64, hints: Hints) -> String {
         match self {
             Self::Accepted { name, code } => with_hints(
-                format!(
-                    "{name} hat die Einladung angenommen. Prüfcode: {code}\n{COMPARE_HINT}\n\
-                     Bestätige nur, wenn er mit dem Prüfcode bei {name} übereinstimmt."
-                ),
+                tr!(t, "notice-accepted", name = name, code = code),
                 hints,
+                t,
                 &[Hint::Confirm(name), Hint::Reject(name)],
             ),
             Self::Revealed {
@@ -259,12 +270,9 @@ impl Notice {
                 code,
                 paired: false,
             } => with_hints(
-                format!(
-                    "Prüfcode für {name}: {code}\n{COMPARE_HINT}\n\
-                     Vergleiche ihn mit dem Prüfcode bei {name}. Gekoppelt seid ihr, sobald \
-                     {name} bestätigt hat."
-                ),
+                tr!(t, "notice-revealed", name = name, code = code),
                 hints,
+                t,
                 &[Hint::Reject(name)],
             ),
             Self::Revealed {
@@ -272,108 +280,112 @@ impl Notice {
                 code,
                 paired: true,
             } => with_hints(
-                format!(
-                    "Prüfcode für {name}: {code}\n{COMPARE_HINT}\n\
-                     {name} hat schon bestätigt. Stimmt er nicht mit dem Prüfcode bei {name} \
-                     überein, entferne den Kontakt."
-                ),
+                tr!(t, "notice-revealed-paired", name = name, code = code),
                 hints,
+                t,
                 &[Hint::Remove(name)],
             ),
-            Self::RevealMismatch { name } => format!(
-                "Achtung: Die Antwort auf deine Annahme passt nicht zur Einladung von {name}. \
-                 Vermutlich hat sich jemand dazwischengeschaltet. Die Kopplung ist abgebrochen; \
-                 bitte {name} persönlich um eine neue Einladung."
-            ),
-            Self::PairingFailed { name } => format!(
-                "Kopplung mit {name} fehlgeschlagen: Der Prüfcode ist nicht angekommen. \
-                 Für einen neuen Versuch braucht es eine neue Einladung."
-            ),
-            Self::Paired { name } => format!("{name} hat die Kopplung bestätigt."),
+            Self::RevealMismatch { name } => tr!(t, "notice-reveal-mismatch", name = name),
+            Self::PairingFailed { name } => tr!(t, "notice-pairing-failed", name = name),
+            Self::Paired { name } => tr!(t, "notice-paired", name = name),
             Self::Rules { name, rules: r } => {
-                format!("Regeln von {name} für deine Anfragen: {}", rules(r))
+                tr!(t, "notice-rules", name = name, rules = &rules(t, r))
             }
             Self::Request { name } => with_hints(
-                format!("{name} fragt nach einem Lebenszeichen."),
+                tr!(t, "notice-request", name = name),
                 hints,
+                t,
                 &[Hint::Respond(name)],
             ),
-            Self::Response { name, kind, at } => {
-                format!("{name}: {}", response(kind, *at, now))
-            }
-            Self::Ended { name } => format!("{name} hat die Verbindung beendet."),
-            Self::Rejected { name } => format!(
-                "{name} hat die Kopplung abgelehnt, vermutlich weil der Prüfcode nicht übereinstimmte. \
-                 Für einen neuen Versuch braucht es eine neue Einladung."
+            Self::Response { name, kind, at } => tr!(
+                t,
+                "notice-response",
+                name = name,
+                response = &response(t, kind, *at, now)
             ),
+            Self::Ended { name } => tr!(t, "notice-ended", name = name),
+            Self::Rejected { name } => tr!(t, "notice-rejected", name = name),
             Self::SecondAcceptance { name, paired } => {
-                let (what, undo) = if *paired {
-                    (
-                        format!(
-                            "Prüfe mit {name}, ob der Prüfcode wirklich übereinstimmte. \
-                             Wenn nicht, entferne den Kontakt und lade neu ein."
-                        ),
-                        Hint::Remove(name),
-                    )
+                let (id, undo) = if *paired {
+                    ("notice-second-acceptance-paired", Hint::Remove(name))
                 } else {
-                    (
-                        format!(
-                            "Vergleiche den Prüfcode mit {name} besonders sorgfältig, bevor du \
-                             bestätigst. Stimmt er nicht, lehne ab und lade neu ein."
-                        ),
-                        Hint::Reject(name),
-                    )
+                    ("notice-second-acceptance", Hint::Reject(name))
                 };
                 with_hints(
-                    format!(
-                        "Achtung: Die Einladung an {name} wurde ein weiteres Mal angenommen, \
-                         der Code ist also noch jemand anderem bekannt. {what}"
+                    tr!(
+                        t,
+                        "notice-second-acceptance-warning",
+                        name = name,
+                        what = &tr!(t, id, name = name)
                     ),
                     hints,
+                    t,
                     &[undo],
                 )
             }
             Self::Dropped { name, why } => match name {
-                Some(name) => format!("(verworfen, {name}: {why})"),
-                None => format!("(verworfen: {why})"),
+                Some(name) => tr!(t, "notice-dropped-from", name = name, why = why),
+                None => tr!(t, "notice-dropped", why = why),
             },
             Self::Problem(text) => text.clone(),
             Self::OwnRequested { name, device } => {
-                format!("Anfrage an {name} {} gesendet.", on(device))
+                tr!(
+                    t,
+                    "notice-own-requested",
+                    name = name,
+                    device = &on(t, device)
+                )
             }
             Self::OwnResponded { name, device, kind } => match kind {
                 ResponseKind::Manual => {
-                    format!("Anfrage von {name} {} beantwortet.", on(device))
+                    tr!(
+                        t,
+                        "notice-own-responded",
+                        name = name,
+                        device = &on(t, device)
+                    )
                 }
-                ResponseKind::Reported(reason) => format!(
-                    "Zur Anfrage von {name} {} gemeldet: {}",
-                    on(device),
-                    reported(reason)
+                ResponseKind::Reported(reason) => tr!(
+                    t,
+                    "notice-own-reported",
+                    name = name,
+                    device = &on(t, device),
+                    reason = &reported(t, reason)
                 ),
             },
             Self::OwnRules {
                 name,
                 device,
                 rules: r,
-            } => format!("Regeln für {name} {} geändert: {}", on(device), rules(r)),
+            } => tr!(
+                t,
+                "notice-own-rules",
+                name = name,
+                device = &on(t, device),
+                rules = &rules(t, r)
+            ),
             Self::OwnContactAdded { name, device } => {
-                format!(
-                    "{name} wurde {} gekoppelt und ist jetzt auch hier.",
-                    on(device)
+                tr!(
+                    t,
+                    "notice-own-contact-added",
+                    name = name,
+                    device = &on(t, device)
                 )
             }
             Self::OwnContactRemoved { name, device } => {
-                format!("{name} wurde {} entfernt.", on(device))
+                tr!(
+                    t,
+                    "notice-own-contact-removed",
+                    name = name,
+                    device = &on(t, device)
+                )
             }
-            Self::DeviceAdded { name } => format!(
-                "Eigenes Gerät „{name}“ ist dabei. Hast du es nicht selbst hinzugefügt, \
-                 entferne es und kopple deine Kontakte neu."
-            ),
+            Self::DeviceAdded { name } => tr!(t, "notice-device-added", name = name),
             Self::DeviceRemoved { name } => match name {
-                Some(name) => format!("Eigenes Gerät „{name}“ wurde entfernt."),
-                None => "Ein eigenes Gerät wurde entfernt.".into(),
+                Some(name) => tr!(t, "notice-device-removed", name = name),
+                None => tr!(t, "notice-device-removed-unnamed"),
             },
-            Self::Removed => "Dieses Gerät wurde entfernt.".into(),
+            Self::Removed => tr!(t, "notice-removed"),
         }
     }
 }
@@ -381,21 +393,64 @@ impl Notice {
 #[cfg(test)]
 mod tests {
     use super::{minutes, when};
+    use crate::i18n::Language;
+
+    /// A day in the middle of the year, so that neighbours share the year.
+    fn now() -> u64 {
+        1_794_650_000
+    }
 
     #[test]
-    fn relative_days() {
-        let now = 1_794_650_000;
-        assert!(when(now, now).starts_with("heute "));
-        assert!(when(now + 24 * 3600, now).starts_with("morgen "));
-        assert!(when(now - 24 * 3600, now).starts_with("gestern "));
-        assert!(when(now + 3 * 24 * 3600, now).contains('.'));
-        assert_eq!(when(u64::MAX, now), "nie");
+    fn relative_days_german() {
+        let (t, now) = (Language::De.texts(), now());
+        assert!(when(t, now, now).starts_with("heute "));
+        assert!(when(t, now + 24 * 3600, now).starts_with("morgen "));
+        assert!(when(t, now - 24 * 3600, now).starts_with("gestern "));
+        assert!(when(t, now + 3 * 24 * 3600, now).contains('.'));
+        assert_eq!(when(t, u64::MAX, now), "nie");
+    }
+
+    #[test]
+    fn relative_days_english() {
+        let (t, now) = (Language::En.texts(), now());
+        assert!(when(t, now, now).starts_with("today "));
+        assert!(when(t, now + 24 * 3600, now).starts_with("tomorrow "));
+        assert!(when(t, now - 24 * 3600, now).starts_with("yesterday "));
+        assert_eq!(when(t, u64::MAX, now), "never");
+    }
+
+    #[test]
+    fn dates_and_clock_times() {
+        use chrono::{Local, TimeZone};
+        let at = |y, m, d, h, min| {
+            Local
+                .with_ymd_and_hms(y, m, d, h, min, 0)
+                .single()
+                .unwrap()
+                .timestamp() as u64
+        };
+        let now = at(2026, 11, 16, 9, 0);
+        let (de, en) = (Language::De.texts(), Language::En.texts());
+        // Monday 23 November 2026, in the afternoon and at 07:05.
+        assert_eq!(when(de, at(2026, 11, 23, 16, 7), now), "Mo 23.11. 16:07");
+        assert_eq!(when(en, at(2026, 11, 23, 16, 7), now), "Mon 23 Nov 16:07");
+        assert_eq!(when(de, at(2026, 11, 3, 7, 5), now), "Di 03.11. 07:05");
+        assert_eq!(when(en, at(2026, 11, 3, 7, 5), now), "Tue 3 Nov 07:05");
+        assert_eq!(when(de, at(2026, 11, 16, 16, 7), now), "heute 16:07");
+        assert_eq!(when(en, at(2026, 11, 16, 16, 7), now), "today 16:07");
+        assert_eq!(when(de, at(2026, 11, 15, 23, 59), now), "gestern 23:59");
+        assert_eq!(when(en, at(2026, 11, 15, 23, 59), now), "yesterday 23:59");
+        assert_eq!(when(de, at(2027, 1, 4, 18, 0), now), "Mo 04.01.2027 18:00");
+        assert_eq!(when(en, at(2027, 1, 4, 18, 0), now), "Mon 4 Jan 2027 18:00");
     }
 
     #[test]
     fn durations() {
-        assert_eq!(minutes(360), "6 h");
-        assert_eq!(minutes(90), "90 min");
-        assert_eq!(minutes(0), "0 min");
+        for language in [Language::De, Language::En] {
+            let t = language.texts();
+            assert_eq!(minutes(t, 360), "6 h");
+            assert_eq!(minutes(t, 90), "90 min");
+            assert_eq!(minutes(t, 0), "0 min");
+        }
     }
 }

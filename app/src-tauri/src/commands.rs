@@ -13,9 +13,17 @@ use std::time::Duration;
 
 use lz_client::ctx::{self, Clock, ContactView, Ctx, LastResponse, Overview, Status};
 use lz_client::devices::{Check, DeviceView, Dialog};
+use lz_client::i18n::{Language, Texts};
 use lz_client::qr::{self, Qr};
 use lz_client::relay::{Http, b64};
 use lz_client::show::{self, no_hints, reported, when};
+
+/// The language of the texts of the app, until it chooses one.
+pub(crate) const LANG: Language = Language::De;
+
+pub(crate) fn de() -> Texts {
+    LANG.texts()
+}
 use lz_core::store::{JsonFile, Store};
 use lz_core::wire::{CodeKind, Rules, SetupCode, setup_code};
 use serde::Serialize;
@@ -193,6 +201,8 @@ pub(crate) fn new_ctx(path: PathBuf, out: Box<dyn Write>) -> Result<Ctx<Http>, S
         idle: SYNC_IDLE,
         // The window has buttons for every next step.
         hints: no_hints,
+        // German until the app chooses its language.
+        lang: LANG,
     })
 }
 
@@ -321,7 +331,8 @@ pub async fn init_with_invitation_only(
     let path = path(&state);
     off_thread(move || {
         let mut out = Lines::default();
-        ctx::init(&JsonFile::new(path), None, None, &mut out).map_err(|error| error.to_string())?;
+        ctx::init(&JsonFile::new(path), None, None, LANG, &mut out)
+            .map_err(|error| error.to_string())?;
         Ok(Reply {
             value: (),
             lines: out.take(),
@@ -357,8 +368,14 @@ pub async fn init_from_setup_code(
     let path = path(&state);
     off_thread(move || {
         let mut out = Lines::default();
-        ctx::init(&JsonFile::new(path), Some(&relay), Some(&token), &mut out)
-            .map_err(|error| error.to_string())?;
+        ctx::init(
+            &JsonFile::new(path),
+            Some(&relay),
+            Some(&token),
+            LANG,
+            &mut out,
+        )
+        .map_err(|error| error.to_string())?;
         Ok(Reply {
             value: (),
             lines: out.take(),
@@ -432,7 +449,7 @@ pub async fn init_device(
         let token = Some(access_token.trim()).filter(|t| !t.is_empty());
         let relay = Some(relay.trim()).filter(|r| !r.is_empty());
         let store = JsonFile::new(path);
-        ctx::init(&store, relay, token, &mut out).map_err(|error| error.to_string())?;
+        ctx::init(&store, relay, token, LANG, &mut out).map_err(|error| error.to_string())?;
         Ok(Reply {
             value: (),
             lines: out.take(),
@@ -460,7 +477,7 @@ pub struct Card {
     /// Verification code while pairing, once there is one.
     code: Option<String>,
     /// To show next to the code: over which channel to compare it.
-    compare_hint: Option<&'static str>,
+    compare_hint: Option<String>,
     /// Text about the open request of the contact, if any.
     incoming: Option<String>,
     /// Text about the own open request, if any.
@@ -489,7 +506,7 @@ fn rules_card(own: &Rules, peer: &Rules) -> RulesCard {
         interval_hours: f64::from(own.min_interval_minutes) / 60.0,
         expiry_hours: f64::from(own.expiry_minutes) / 60.0,
         weekly_limit: own.weekly_limit,
-        peer: show::rules(peer),
+        peer: show::rules(de(), peer),
     }
 }
 
@@ -544,11 +561,11 @@ fn card(view: ContactView, now: u64) -> Card {
     let incoming = view.incoming.filter(|_| paired).map(|open| {
         let mut text = format!(
             "fragt seit {} nach einem Lebenszeichen (läuft ab {})",
-            when(open.since, now),
-            when(open.expires_at, now)
+            when(de(), open.since, now),
+            when(de(), open.expires_at, now)
         );
         if let Some(reason) = open.reported {
-            text.push_str(&format!("; gemeldet: {}", reported(reason)));
+            text.push_str(&format!("; gemeldet: {}", reported(de(), reason)));
         }
         text
     });
@@ -556,19 +573,23 @@ fn card(view: ContactView, now: u64) -> Card {
     Card {
         name: view.name,
         status,
-        compare_hint: code.as_ref().map(|_| show::COMPARE_HINT),
+        compare_hint: code.as_ref().map(|_| show::compare_hint(de())),
         code,
         incoming,
         outgoing: view
             .outgoing_since
             .filter(|_| paired)
-            .map(|since| format!("eigene Anfrage offen seit {}", when(since, now))),
+            .map(|since| format!("eigene Anfrage offen seit {}", when(de(), since, now))),
         can_request,
-        next_request: (paired && !can_request)
-            .then(|| format!("wieder möglich ab {}", when(view.next_request_at, now))),
+        next_request: (paired && !can_request).then(|| {
+            format!(
+                "wieder möglich ab {}",
+                when(de(), view.next_request_at, now)
+            )
+        }),
         last_response: view.last_response.map(|last| match last {
-            LastResponse::Manual { at } => format!("✓ {}", when(at, now)),
-            LastResponse::Reported { reason } => reported(reason),
+            LastResponse::Manual { at } => format!("✓ {}", when(de(), at, now)),
+            LastResponse::Reported { reason } => reported(de(), reason),
         }),
         rules: paired.then(|| rules_card(&view.own_rules, &view.peer_rules)),
     }
@@ -589,7 +610,10 @@ fn cards(overview: Overview) -> Cards {
                 text: if invitation.expired {
                     "Einladung abgelaufen; eine rechtzeitige Annahme wird noch abgeholt".into()
                 } else {
-                    format!("Einladung offen bis {}", when(invitation.expires_at, now))
+                    format!(
+                        "Einladung offen bis {}",
+                        when(de(), invitation.expires_at, now)
+                    )
                 },
                 name: invitation.name,
             })
@@ -1044,7 +1068,10 @@ mod tests {
         let card = card(view, NOW);
         assert_eq!(card.status, "awaiting_confirmation");
         assert_eq!(card.code.as_deref(), Some("123456"));
-        assert_eq!(card.compare_hint, Some(show::COMPARE_HINT));
+        assert_eq!(
+            card.compare_hint,
+            Some(show::compare_hint(crate::commands::de()))
+        );
         assert!(!card.can_request);
         assert!(card.next_request.is_none());
 
@@ -1115,6 +1142,7 @@ mod tests {
             &first,
             Some("https://relay.example.org"),
             Some(&token),
+            crate::commands::LANG,
             &mut Vec::new(),
         )
         .unwrap();
@@ -1127,7 +1155,7 @@ mod tests {
 
         // Without access token there is nothing to show.
         let second = JsonFile::new(dir.path().join("b.json"));
-        ctx::init(&second, None, None, &mut Vec::new()).unwrap();
+        ctx::init(&second, None, None, crate::commands::LANG, &mut Vec::new()).unwrap();
         assert!(
             own_setup_code(&second)
                 .unwrap_err()

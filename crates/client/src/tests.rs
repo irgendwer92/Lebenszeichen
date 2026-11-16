@@ -13,14 +13,24 @@ use lz_core::store::{Device, JsonFile, Store, StoredContact};
 use lz_core::wire::{Reason, RelayUrl, ResponseKind, Rules, Token};
 
 use crate::ctx::{self, Clock, Ctx, Fail};
+use crate::i18n::{Language, Texts};
 use crate::relay::fake::FakeRelay;
 use crate::relay::{Relay, b64};
 use crate::show::{Hint, Notice};
 
+/// The German texts, which the assertions of these tests use.
+pub(crate) fn de() -> Texts {
+    Language::De.texts()
+}
+
+fn compare_hint() -> String {
+    crate::show::compare_hint(de())
+}
+
 const T: u64 = 1_794_600_000;
 
 /// Shows every hint as its name, so tests see where hints go.
-fn test_hints(hint: &Hint<'_>) -> Option<String> {
+fn test_hints(hint: &Hint<'_>, _: Texts) -> Option<String> {
     Some(format!("[{hint:?}]"))
 }
 const MINUTE: u64 = 60;
@@ -84,6 +94,7 @@ impl World {
                 verbose: true,
                 idle: Duration::from_millis(20),
                 hints: test_hints,
+                lang: Language::De,
             },
             out,
             _dir: dir,
@@ -100,6 +111,7 @@ impl World {
             &store,
             relay.map(|(url, _)| url),
             token.as_deref(),
+            Language::De,
             &mut out.clone(),
         )
         .unwrap();
@@ -113,6 +125,7 @@ impl World {
                 verbose: true,
                 idle: Duration::from_millis(20),
                 hints: test_hints,
+                lang: Language::De,
             },
             out,
             _dir: dir,
@@ -179,7 +192,7 @@ async fn paired(world: &World) -> (Person, Person) {
     assert_eq!(name, "Bert");
     let out = anna.out.take();
     assert!(out.contains(r#"[Confirm("Bert")]"#));
-    assert!(out.contains(crate::show::COMPARE_HINT), "{out}");
+    assert!(out.contains(&compare_hint()), "{out}");
     assert!(anna.device().invitations.is_empty());
     assert_eq!(
         bert.sync().await,
@@ -191,7 +204,7 @@ async fn paired(world: &World) -> (Person, Person) {
     );
     let out = bert.out.take();
     assert!(
-        out.contains(&code) && out.contains(crate::show::COMPARE_HINT),
+        out.contains(&code) && out.contains(&compare_hint()),
         "{out}"
     );
     anna.ctx.confirm("Bert").await.unwrap();
@@ -498,15 +511,22 @@ fn init_checks_its_input() {
     let dir = tempfile::tempdir().unwrap();
     let store = JsonFile::new(dir.path().join("device.json"));
     let mut out = Vec::new();
-    assert!(ctx::init(&store, Some("ftp://x"), None, &mut out).is_err());
-    assert!(ctx::init(&store, Some(RELAY_A), Some("kurz"), &mut out).is_err());
-    assert!(ctx::init(&store, None, Some(&b64(&TOKEN_A)), &mut out).is_err());
-    ctx::init(&store, Some("http://localhost:8080/"), None, &mut out).unwrap();
+    assert!(ctx::init(&store, Some("ftp://x"), None, Language::De, &mut out).is_err());
+    assert!(ctx::init(&store, Some(RELAY_A), Some("kurz"), Language::De, &mut out).is_err());
+    assert!(ctx::init(&store, None, Some(&b64(&TOKEN_A)), Language::De, &mut out).is_err());
+    ctx::init(
+        &store,
+        Some("http://localhost:8080/"),
+        None,
+        Language::De,
+        &mut out,
+    )
+    .unwrap();
     assert_eq!(
         store.load().unwrap().relay.unwrap().url,
         url("http://localhost:8080")
     );
-    let error = ctx::init(&store, None, None, &mut out).unwrap_err();
+    let error = ctx::init(&store, None, None, Language::De, &mut out).unwrap_err();
     assert!(error.0.contains("gibt es schon"));
 }
 
@@ -763,4 +783,45 @@ async fn invalid_push_urls_are_refused() {
         "lehnt die Push-Adresse ab",
     );
     assert!(anna.device().push_pending);
+}
+
+#[tokio::test]
+async fn english_texts_for_an_english_context() {
+    let world = World::new();
+    let mut anna = world.person(Some((RELAY_A, Some(TOKEN_A))));
+    assert_eq!(anna.ctx.lang, Language::De);
+    anna.ctx.lang = Language::En;
+
+    let error = anna.ctx.accept("Bert", "nonsense").await.unwrap_err();
+    assert_eq!(error.0, "This is not a valid invitation code.");
+    let error = anna.ctx.request("Bert").await.unwrap_err();
+    assert_eq!(error.0, "No contact named Bert found.");
+
+    anna.ctx.contacts().unwrap();
+    assert_eq!(
+        anna.out.take(),
+        format!("No contacts yet.{}\n", " [InviteSomeone]")
+    );
+    let code = anna.ctx.invite("Bert", false).await.unwrap();
+    let out = anna.out.take();
+    assert!(
+        out.contains(&format!("Invitation for Bert:\n\n{code}\n")),
+        "{out}"
+    );
+    assert!(out.contains("Valid until today "), "{out}");
+    assert!(out.contains("and only once."), "{out}");
+    // No Unicode isolation marks around arguments.
+    assert!(out.is_ascii(), "{out}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = JsonFile::new(dir.path().join("device.json"));
+    let mut out = Vec::new();
+    ctx::init(&store, None, None, Language::En, &mut out).unwrap();
+    let error = ctx::init(&store, None, None, Language::En, &mut out).unwrap_err();
+    assert!(error.0.ends_with("already exists."), "{error:?}");
+    assert!(
+        String::from_utf8(out)
+            .unwrap()
+            .contains("Device created in")
+    );
 }

@@ -315,14 +315,14 @@ impl Relay for Http {
         } else if let Some(rest) = base.strip_prefix("http://") {
             format!("ws://{rest}/v1/stream")
         } else {
-            return Err(transport("Adresse beginnt nicht mit http:// oder https://"));
+            return Err(RelayError::BadAddress);
         };
         let connector = Connector::Rustls(self.tls.clone());
         let connect =
             tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector));
         let (socket, _) = tokio::time::timeout(TIMEOUT, connect)
             .await
-            .map_err(|_| transport("Zeitüberschreitung"))?
+            .map_err(|_| RelayError::Timeout)?
             .map_err(transport)?;
         let (mut sink, mut stream) = socket.split();
 
@@ -434,7 +434,7 @@ impl WebSocket {
         let text = serde_json::to_string(frame).map_err(transport)?;
         self.outgoing
             .send(text)
-            .map_err(|_| transport("Verbindung getrennt"))
+            .map_err(|_| RelayError::Disconnected)
     }
 }
 

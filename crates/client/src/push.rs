@@ -5,21 +5,20 @@
 //! address goes to all of them. Until every mailbox has it, `push_pending`
 //! stays set and the next fetch tries again.
 
-use lz_core::store::Store;
-
 use crate::ctx::{Ctx, Fail, Result};
+use crate::i18n::Texts;
 use crate::relay::{Relay, RelayError};
 use crate::sync::own_mailboxes;
 
 /// Most bytes of a push address that the relay accepts.
 const MAX_PUSH_URL_LEN: usize = 1024;
 
-pub(crate) fn check(url: &str) -> Result<()> {
+pub(crate) fn check(t: Texts, url: &str) -> Result<()> {
     if !url.starts_with("https://") {
-        return Err(fail!("Die Push-Adresse muss mit https:// beginnen."));
+        return Err(fail!(t, "error-push-scheme"));
     }
     if url.len() > MAX_PUSH_URL_LEN {
-        return Err(fail!("Die Push-Adresse ist zu lang."));
+        return Err(fail!(t, "error-push-long"));
     }
     Ok(())
 }
@@ -32,23 +31,27 @@ impl<R: Relay> Ctx<R> {
     /// fetch sends it then. An unchanged address that every mailbox already
     /// has costs no call to the relay.
     pub async fn set_push_url(&mut self, url: Option<&str>) -> Result<()> {
+        let t = self.texts();
         if let Some(url) = url {
-            check(url)?;
+            check(t, url)?;
         }
-        let due = self.store.update(|device| {
+        let due = self.update(|device| {
             if device.push_url.as_deref() != url {
                 device.push_url = url.map(str::to_owned);
                 device.push_pending = true;
             }
-            Ok::<_, Fail>(device.push_pending)
+            Ok(device.push_pending)
         })?;
         if due {
             self.send_push_url().await?;
         }
-        self.say(match url {
-            Some(_) => "Push-Adresse eingetragen.",
-            None => "Push-Adresse entfernt.",
-        });
+        self.say(&tr!(
+            t,
+            match url {
+                Some(_) => "out-push-set",
+                None => "out-push-removed",
+            }
+        ));
         Ok(())
     }
 
@@ -59,9 +62,8 @@ impl<R: Relay> Ctx<R> {
             return Ok(());
         }
         if let Err(error) = self.send_push_url().await {
-            self.say(&format!(
-                "Push-Adresse noch nicht überall eingetragen: {error}"
-            ));
+            let text = tr!(self.texts(), "warn-push-not-everywhere", error = &error.0);
+            self.say(&text);
         }
         Ok(())
     }
@@ -69,7 +71,8 @@ impl<R: Relay> Ctx<R> {
     /// Sends the stored push address to every own mailbox and clears
     /// `push_pending` once all of them have it.
     async fn send_push_url(&mut self) -> Result<()> {
-        let device = self.store.load()?;
+        let t = self.texts();
+        let device = self.load()?;
         let mailboxes = own_mailboxes(&device);
         let mut first_error = None;
         for (relay, boxes) in &mailboxes {
@@ -89,14 +92,11 @@ impl<R: Relay> Ctx<R> {
                     Ok(()) | Err(RelayError::UnknownMailbox) => {}
                     Err(RelayError::Refused { status: 400, .. }) => {
                         first_error.get_or_insert_with(|| {
-                            fail!(
-                                "Das Relay {relay} lehnt die Push-Adresse ab. Es nimmt nur \
-                                 öffentliche https-Adressen an, manche auch nur bestimmte."
-                            )
+                            fail!(t, "error-push-refused", relay = &relay.to_string())
                         });
                     }
                     Err(error) => {
-                        first_error.get_or_insert_with(|| error.into());
+                        first_error.get_or_insert_with(|| Fail(error.text(t)));
                     }
                 }
             }
@@ -106,11 +106,11 @@ impl<R: Relay> Ctx<R> {
         }
         // Only if nothing changed in between: a new address or a new mailbox
         // would still need sending.
-        self.store.update(|now| {
+        self.update(|now| {
             if now.push_url == device.push_url && own_mailboxes(now) == mailboxes {
                 now.push_pending = false;
             }
-            Ok::<_, Fail>(())
+            Ok(())
         })
     }
 }

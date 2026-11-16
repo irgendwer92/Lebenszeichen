@@ -1,22 +1,28 @@
 //! Hints in the wording of the command line: which `lz` command comes next.
 
+use lz_client::i18n::Texts;
 use lz_client::show::Hint;
 
-pub fn cli(hint: &Hint<'_>) -> Option<String> {
-    Some(match hint {
-        Hint::Init => "Zuerst: lz init".into(),
-        Hint::InitWithAccessToken => "(lz init --relay … --access-token …)".into(),
-        Hint::InviteWithVoucher => "(lz invite --voucher)".into(),
-        Hint::Fetch => "Abholen mit lz sync oder lz listen.".into(),
-        Hint::StopListening => "Abbruch mit Strg+C".into(),
-        Hint::Confirm(name) => format!("Bestätigen mit: lz confirm {name}"),
-        Hint::Reject(name) => format!("Ablehnen mit: lz reject {name}"),
-        Hint::Respond(name) => format!("Antworten mit: lz respond {name}"),
-        Hint::Remove(name) => format!("Entfernen mit: lz remove {name}"),
-        Hint::Invite(name) => format!("Einladen mit: lz invite {name}"),
-        Hint::InviteSomeone => "Einladen mit: lz invite <name>".into(),
-        Hint::AddDevice => "Dort eingeben: lz device add <code> --name <name>".into(),
-        Hint::JoinAgain => "Neu beginnen mit: lz device join --relay … --name …".into(),
-        Hint::JoinSomeDevice => "Auf dem neuen Gerät: lz device join --relay … --name …".into(),
+pub fn cli(hint: &Hint<'_>, t: Texts) -> Option<String> {
+    use lz_client::i18n::Arg;
+    let (id, name) = match hint {
+        Hint::Init => ("hint-init", None),
+        Hint::InitWithAccessToken => ("hint-init-access-token", None),
+        Hint::InviteWithVoucher => ("hint-invite-voucher", None),
+        Hint::Fetch => ("hint-fetch", None),
+        Hint::StopListening => ("hint-stop-listening", None),
+        Hint::Confirm(name) => ("hint-confirm", Some(*name)),
+        Hint::Reject(name) => ("hint-reject", Some(*name)),
+        Hint::Respond(name) => ("hint-respond", Some(*name)),
+        Hint::Remove(name) => ("hint-remove", Some(*name)),
+        Hint::Invite(name) => ("hint-invite", Some(*name)),
+        Hint::InviteSomeone => ("hint-invite-someone", None),
+        Hint::AddDevice => ("hint-add-device", None),
+        Hint::JoinAgain => ("hint-join-again", None),
+        Hint::JoinSomeDevice => ("hint-join-some-device", None),
+    };
+    Some(match name {
+        Some(name) => t.text(id, &[("name", Arg::Text(name))]),
+        None => t.text(id, &[]),
     })
 }

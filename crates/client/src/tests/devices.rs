@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use lz_core::crypto;
 use lz_core::handover::{Adding, NewDevice, challenge_slot, handover_slot};
 use lz_core::pairing::Address;
-use lz_core::store::{Device, Group, Store};
+use lz_core::store::{Device, Group};
 use lz_core::wire::{DeviceCode, ENVELOPE_LEN, Hash, ResponseKind, Token, device_code};
 use rand_core::OsRng;
 
@@ -671,7 +671,6 @@ async fn removed_device_deletes_its_state() {
     let now = world.now();
     phone
         .ctx
-        .store
         .update(|device| {
             device
                 .sync_device_removed(&reader, now, &mut OsRng)

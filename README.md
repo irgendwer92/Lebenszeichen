@@ -148,6 +148,14 @@ The same steps run on every push and pull request in the CI, for
 `app/src-tauri` in a separate step (desktop app for Linux).
 Identifiers in the code are English, the documentation is English.
 
+Texts for people live in Fluent files, `locales/<tag>/lebenszeichen.ftl`
+(English is the default and the fallback, German is complete), and are
+embedded by `crates/client/src/i18n.rs`. `lz` picks the language from
+`LC_ALL`, `LC_MESSAGES` or `LANG`. To add a language, copy
+`locales/en/lebenszeichen.ftl` to `locales/<tag>/`, translate the values, add
+a variant to `Language` and to `Language::ALL` in `i18n.rs`; the tests check
+that the file parses and has every message id of the English one.
+
 ## License
 
 - `crates/wire`, `crates/core`, `crates/cli` and the app: GPL-3.0-or-later,
