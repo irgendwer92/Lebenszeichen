@@ -35,9 +35,11 @@ pub fn pipe_name(sid: &str) -> String {
 /// entry that gives the user `sid` full access (`GA`). Nobody else, not
 /// Everyone, not anonymous, gets in. Full access rather than read and
 /// write because the app needs `FILE_CREATE_PIPE_INSTANCE` on its own pipe
-/// to create the further instances.
+/// to create the further instances. The owner is set to the user as well
+/// (`O:`), also when the app runs elevated, where it would otherwise be
+/// the Administrators group: clients check that the pipe belongs to them.
 fn sddl(sid: &str) -> String {
-    format!("D:P(A;;GA;;;{sid})")
+    format!("O:{sid}D:P(A;;GA;;;{sid})")
 }
 
 /// The security descriptor of the pipe, freed with `LocalFree` on drop.
@@ -172,6 +174,9 @@ mod tests {
             pipe_name(sid),
             r"\\.\pipe\lebenszeichen-S-1-5-21-1-2-3-1001-app"
         );
-        assert_eq!(sddl(sid), "D:P(A;;GA;;;S-1-5-21-1-2-3-1001)");
+        assert_eq!(
+            sddl(sid),
+            "O:S-1-5-21-1-2-3-1001D:P(A;;GA;;;S-1-5-21-1-2-3-1001)"
+        );
     }
 }

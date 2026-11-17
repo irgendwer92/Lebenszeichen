@@ -26,9 +26,43 @@ switch ($Action) {
     'show' { $method = 'GET'; $body = '' }
 }
 
+# Owner of the pipe, read from its handle. A handle opened for reading
+# includes READ_CONTROL, which is all GetSecurityInfo needs.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
+
+public static class PipeOwner {
+    [DllImport("advapi32.dll")]
+    static extern uint GetSecurityInfo(SafePipeHandle handle, int objectType, int info,
+        out IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl, out IntPtr descriptor);
+    [DllImport("kernel32.dll")]
+    static extern IntPtr LocalFree(IntPtr memory);
+
+    public static string Of(SafePipeHandle handle) {
+        IntPtr owner, descriptor;
+        // 6: SE_KERNEL_OBJECT, 1: OWNER_SECURITY_INFORMATION
+        uint error = GetSecurityInfo(handle, 6, 1, out owner, IntPtr.Zero, IntPtr.Zero,
+            IntPtr.Zero, out descriptor);
+        if (error != 0) throw new System.ComponentModel.Win32Exception((int)error);
+        try { return new SecurityIdentifier(owner).Value; }
+        finally { LocalFree(descriptor); }
+    }
+}
+'@
+
 $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $pipeName, [System.IO.Pipes.PipeDirection]::InOut)
 try {
     $pipe.Connect(2000)  # milliseconds; fails if the app does not run
+    # Pipe names are global on the machine and the SID is no secret, so
+    # another user could have taken the name first. The app sets itself
+    # (the user) as owner of its pipe; anything else is not the app.
+    $owner = [PipeOwner]::Of($pipe.SafePipeHandle)
+    if ($owner -ne $sid) {
+        throw "the pipe $pipeName belongs to $owner, not to you; not sending anything"
+    }
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
     $head = "$method /state HTTP/1.1`r`nHost: localhost`r`nConnection: close`r`n" +
             "Content-Type: application/json`r`nContent-Length: $($bytes.Length)`r`n`r`n"

@@ -41,7 +41,7 @@ Done when: a script reports "asleep" and the requester sees
 - Windows (desktop app): named pipe `\\.\pipe\lebenszeichen-<SID>-app`,
   `<SID>` the current user's SID as text (`S-1-5-21-…`), same HTTP. Pipe
   names are global on a machine, so the SID gives each signed-in user an
-  interface of their own. Security descriptor `D:P(A;;GA;;;<SID>)`: a
+  interface of their own. Security descriptor `O:<SID>D:P(A;;GA;;;<SID>)`: owner the user, a
   protected DACL with one entry, full access for the user (the app needs
   `FILE_CREATE_PIPE_INSTANCE` for further instances); nobody else, not
   Everyone, not anonymous. Remote clients are rejected
@@ -51,7 +51,8 @@ Done when: a script reports "asleep" and the requester sees
   the app logs it and does not serve, rather than share the name; while it
   serves, one instance is always open, so the name stays taken. No token.
   Client: `examples/report-state.ps1` (`set <minutes> <reason>`, `clear`,
-  `show`). `lz` has no interface on Windows in M8: `lz listen` serves none
+  `show`). It sends nothing unless the pipe's owner is the current user, so a
+  pipe another user took first gets nothing. `lz` has no interface on Windows in M8: `lz listen` serves none
   and `lz state` says it is not available here; the desktop app is the
   Windows end.
 - Android: a broadcast to the app (package `io.github.irgendwer92.lebenszeichen`,
