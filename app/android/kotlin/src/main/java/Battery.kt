@@ -29,21 +29,28 @@ object Battery {
         val app = context.applicationContext
         val sticky = app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val manager = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-        var percent = manager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-        if (percent < 0 || percent > 100) {
-            // No value from the property: compute it from the sticky broadcast.
-            val level = sticky?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-            val scale = sticky?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-            if (level < 0 || scale <= 0) return true
-            percent = level * 100 / scale
-        }
-        val status = sticky?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-        val plugged = sticky?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        // The sticky broadcast first: it is what the status bar shows, and
+        // it follows `adb shell dumpsys battery set …` for tests, while the
+        // BatteryManager properties read the hardware. They serve only
+        // without a broadcast.
+        val level = sticky?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = sticky?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val percent =
+            if (level >= 0 && scale > 0) {
+                level * 100 / scale
+            } else {
+                manager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            }
+        if (percent !in 0..100) return true
         val charging =
-            manager.isCharging ||
+            if (sticky != null) {
+                val status = sticky.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
                 status == BatteryManager.BATTERY_STATUS_CHARGING ||
-                status == BatteryManager.BATTERY_STATUS_FULL ||
-                plugged != 0
+                    status == BatteryManager.BATTERY_STATUS_FULL ||
+                    sticky.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+            } else {
+                manager.isCharging
+            }
         val answer = CoreBridge.checkBattery(app, percent, charging)
         if (answer.optBoolean("applied")) {
             EventLog.add(app, Requests.NO_REQUEST, "battery-state", if (charging) "charging" else "low")
