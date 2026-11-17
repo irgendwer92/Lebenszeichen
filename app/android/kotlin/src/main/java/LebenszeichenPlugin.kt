@@ -41,6 +41,7 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
     override fun load(webView: WebView) {
         RequestPresenter.ensureChannel(activity)
         AnswerPresenter.ensureChannel(activity)
+        BatteryWorker.start(activity)
         try {
             if (UnifiedPush.getAckDistributor(activity) != null) {
                 UnifiedPush.register(activity, messageForDistributor = MESSAGE_FOR_DISTRIBUTOR)
@@ -73,6 +74,8 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
         val app = activity.applicationContext
         Thread {
             Requests.refresh(app, "app")
+            // The window may just have turned the battery setting on.
+            BatteryWorker.ensure(app)
             invoke.resolve()
         }.start()
     }

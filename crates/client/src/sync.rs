@@ -743,6 +743,10 @@ fn receive_sync(
                 name,
                 device: other.clone(),
             },
+            SyncEvent::StateHanded { reason } => Notice::OwnState {
+                reason,
+                device: other.clone(),
+            },
             SyncEvent::PartStored | SyncEvent::Parked => continue,
             SyncEvent::Ignored(why) => Notice::Dropped {
                 name: None,

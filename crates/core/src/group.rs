@@ -51,6 +51,9 @@ pub enum SyncEvent {
         relay: RelayUrl,
         read_token: Token,
     },
+    /// Another device handed on its state (`Some`) or ended it (`None`);
+    /// the handed state here changed accordingly.
+    StateHanded { reason: Option<String> },
     /// Another device ended this contact; it was deleted here.
     ContactRemoved { contact: MailboxId, name: String },
     /// A part of a contact transfer was stored; more are missing.
@@ -71,7 +74,8 @@ pub enum SyncIgnored {
     NotExpected,
     /// A message type this version does not know.
     UnknownType,
-    /// Rules not newer than the ones applied last.
+    /// Rules, or a shared or cleared state, not newer than the ones
+    /// applied last.
     Outdated,
     /// A `device` or `device_removed` about this device, or a transfer of a
     /// contact that exists already.
@@ -136,6 +140,20 @@ impl Device {
                 SyncEvent::DeviceRemoved { reader }
             }
             Body::ContactPart(part) => return self.apply_part(part, now, events),
+            Body::StateShared(shared) => {
+                let stamp = Stamp {
+                    at: message.sent_at,
+                    id: message.id,
+                };
+                self.apply_shared_state(Some(shared), stamp)
+            }
+            Body::StateCleared => {
+                let stamp = Stamp {
+                    at: message.sent_at,
+                    id: message.id,
+                };
+                self.apply_shared_state(None, stamp)
+            }
             Body::Requested(_)
             | Body::Responded(_)
             | Body::RulesSet(_)
@@ -351,7 +369,7 @@ impl Device {
     /// into the replay protection, so the own copy is dropped on reading.
     ///
     /// Does nothing without a group: then there are no other devices.
-    fn queue_sync(
+    pub(crate) fn queue_sync(
         &mut self,
         message: &Message,
         now: u64,
@@ -1143,6 +1161,176 @@ pub(crate) mod tests {
         let b_state = state(&mut b, &BERT);
         assert_eq!(b_state.own_rules, changed);
         assert_eq!(b_state.outgoing.entries[0].id, [8; 16]);
+    }
+
+    fn reason(text: &str) -> crate::wire::Reason {
+        crate::wire::Reason::new(text).unwrap()
+    }
+
+    fn shown(device: &Device, now: u64) -> Option<(String, bool, bool)> {
+        device
+            .current_state(now)
+            .map(|s| (s.reason.as_str().to_owned(), s.shared, s.handed))
+    }
+
+    #[test]
+    fn a_shared_state_is_handed_to_the_other_device() {
+        let (mut a, mut b, _) = two_devices();
+        a.share_state(reason("Phone empty"), 60, T, &mut OsRng)
+            .unwrap();
+        assert_eq!(shown(&a, T), Some(("Phone empty".into(), true, false)));
+        assert_eq!(
+            deliver(&mut a, &mut b, T),
+            [SyncEvent::StateHanded {
+                reason: Some("Phone empty".into())
+            }]
+        );
+        assert_eq!(shown(&b, T + 1), Some(("Phone empty".into(), false, true)));
+        assert_eq!(b.current_state(T + 1).unwrap().until, T + 3600);
+        assert_eq!(shown(&b, T + 3600), None, "ends with the state");
+    }
+
+    #[test]
+    fn clearing_with_share_ends_it_everywhere_but_keeps_unshared_states() {
+        let (mut a, mut b, _) = two_devices();
+        b.set_state(reason("asleep"), 480, T).unwrap();
+        a.share_state(reason("Phone empty"), 60, T + 1, &mut OsRng)
+            .unwrap();
+        deliver(&mut a, &mut b, T + 1);
+        // The handed state was set later, so it applies.
+        assert_eq!(shown(&b, T + 2), Some(("Phone empty".into(), false, true)));
+        a.clear_shared_state(T + 3, &mut OsRng).unwrap();
+        assert_eq!(shown(&a, T + 3), None);
+        assert_eq!(
+            deliver(&mut a, &mut b, T + 3),
+            [SyncEvent::StateHanded { reason: None }]
+        );
+        assert_eq!(shown(&b, T + 4), Some(("asleep".into(), false, false)));
+    }
+
+    #[test]
+    fn clearing_without_share_stays_local() {
+        let (mut a, mut b, _) = two_devices();
+        a.share_state(reason("Phone empty"), 60, T, &mut OsRng)
+            .unwrap();
+        deliver(&mut a, &mut b, T);
+        a.clear_state();
+        assert!(a.outbox.is_empty());
+        assert_eq!(shown(&a, T + 1), None);
+        b.clear_state();
+        assert_eq!(shown(&b, T + 1), Some(("Phone empty".into(), false, true)));
+    }
+
+    #[test]
+    fn the_cross_on_a_handed_state_ends_it_on_the_sharing_device() {
+        let (mut a, mut b, _) = two_devices();
+        a.share_state(reason("Phone empty"), 60, T, &mut OsRng)
+            .unwrap();
+        deliver(&mut a, &mut b, T);
+        b.end_current_state(T + 5, &mut OsRng).unwrap();
+        assert_eq!(shown(&b, T + 5), None);
+        deliver(&mut b, &mut a, T + 5);
+        assert_eq!(shown(&a, T + 6), None);
+    }
+
+    #[test]
+    fn the_cross_on_an_unshared_state_stays_local() {
+        let (_, mut b, _) = two_devices();
+        b.set_state(reason("asleep"), 60, T).unwrap();
+        b.end_current_state(T, &mut OsRng).unwrap();
+        assert!(b.outbox.is_empty());
+        assert_eq!(shown(&b, T), None);
+    }
+
+    #[test]
+    fn a_newer_share_replaces_the_shared_state_everywhere() {
+        let (mut a, mut b, _) = two_devices();
+        a.share_state(reason("Phone empty"), 60, T, &mut OsRng)
+            .unwrap();
+        deliver(&mut a, &mut b, T);
+        b.share_state(reason("asleep"), 480, T + 10, &mut OsRng)
+            .unwrap();
+        deliver(&mut b, &mut a, T + 10);
+        assert_eq!(shown(&a, T + 11), Some(("asleep".into(), false, true)));
+        assert_eq!(a.reports.state, None, "the own shared state was replaced");
+        // A clear from b ends it on a as well.
+        b.clear_shared_state(T + 20, &mut OsRng).unwrap();
+        deliver(&mut b, &mut a, T + 20);
+        assert_eq!(shown(&a, T + 21), None);
+    }
+
+    #[test]
+    fn an_older_share_or_clear_arriving_late_is_ignored() {
+        let (mut a, mut b, _) = two_devices();
+        a.share_state(reason("Phone empty"), 60, T, &mut OsRng)
+            .unwrap();
+        let old_share = std::mem::take(&mut a.outbox);
+        a.clear_shared_state(T + 5, &mut OsRng).unwrap();
+        deliver(&mut a, &mut b, T + 5);
+        let events: Vec<_> = old_share
+            .iter()
+            .flat_map(|o| b.receive_sync(&o.envelope, T + 6).unwrap())
+            .collect();
+        assert_eq!(events, [SyncEvent::Ignored(SyncIgnored::Outdated)]);
+        assert_eq!(shown(&b, T + 6), None);
+    }
+
+    #[test]
+    fn sharing_without_other_devices_sets_it_here() {
+        let mut device = Device::new(&mut OsRng);
+        device
+            .share_state(reason("Phone empty"), 60, T, &mut OsRng)
+            .unwrap();
+        assert!(device.outbox.is_empty());
+        assert_eq!(shown(&device, T), Some(("Phone empty".into(), true, false)));
+        device.clear_shared_state(T, &mut OsRng).unwrap();
+        assert_eq!(shown(&device, T), None);
+    }
+
+    #[test]
+    fn battery_hands_over_once_and_ends_it_when_charging() {
+        use crate::report::BatteryChange::{Cleared, None as Nothing, Shared};
+        let (mut a, mut b, _) = two_devices();
+        assert_eq!(a.check_battery(1, false, T, &mut OsRng), Ok(Nothing), "off");
+        a.set_battery(Some(reason("Phone empty"))).unwrap();
+        assert_eq!(a.check_battery(3, false, T, &mut OsRng), Ok(Nothing));
+        assert_eq!(
+            a.check_battery(2, true, T, &mut OsRng),
+            Ok(Nothing),
+            "charging"
+        );
+        assert_eq!(a.check_battery(2, false, T, &mut OsRng), Ok(Shared));
+        deliver(&mut a, &mut b, T);
+        assert_eq!(shown(&b, T + 1), Some(("Phone empty".into(), false, true)));
+        assert_eq!(b.current_state(T).unwrap().until, T + 24 * 3600);
+        // Once per crossing: still low, nothing new, even after a ✕ elsewhere.
+        b.end_current_state(T + 2, &mut OsRng).unwrap();
+        deliver(&mut b, &mut a, T + 2);
+        assert_eq!(a.check_battery(1, false, T + 3, &mut OsRng), Ok(Nothing));
+        assert_eq!(shown(&a, T + 3), None);
+        // Recovered: nothing to end any more, but armed again.
+        assert_eq!(a.check_battery(4, false, T + 4, &mut OsRng), Ok(Nothing));
+        assert_eq!(a.check_battery(5, false, T + 4, &mut OsRng), Ok(Nothing));
+        assert_eq!(a.check_battery(2, false, T + 5, &mut OsRng), Ok(Shared));
+        deliver(&mut a, &mut b, T + 5);
+        assert_eq!(a.check_battery(2, true, T + 6, &mut OsRng), Ok(Cleared));
+        deliver(&mut a, &mut b, T + 6);
+        assert_eq!(shown(&b, T + 7), None);
+    }
+
+    #[test]
+    fn battery_leaves_a_state_shared_by_another_device() {
+        use crate::report::BatteryChange::{None as Nothing, Shared};
+        let (mut a, mut b, _) = two_devices();
+        a.set_battery(Some(reason("Phone empty"))).unwrap();
+        assert_eq!(a.check_battery(2, false, T, &mut OsRng), Ok(Shared));
+        deliver(&mut a, &mut b, T);
+        b.share_state(reason("asleep"), 480, T + 10, &mut OsRng)
+            .unwrap();
+        deliver(&mut b, &mut a, T + 10);
+        assert_eq!(a.check_battery(50, true, T + 20, &mut OsRng), Ok(Nothing));
+        assert!(a.outbox.is_empty());
+        assert_eq!(shown(&a, T + 21), Some(("asleep".into(), false, true)));
     }
 
     #[test]

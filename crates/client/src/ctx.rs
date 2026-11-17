@@ -868,6 +868,8 @@ impl<R: Relay> Ctx<R> {
         let state = device.current_state(now).map(|s| StateView {
             reason: s.reason.as_str().to_owned(),
             until: s.until,
+            shared: s.shared,
+            handed: s.handed,
         });
         Ok(Overview {
             now,
@@ -888,7 +890,8 @@ impl<R: Relay> Ctx<R> {
                 t,
                 "status-reported-state",
                 reason = &show::reported_state(t, &state.reason),
-                until = &when(t, state.until, now)
+                until = &when(t, state.until, now),
+                origin = &show::state_origin(t, state.shared, state.handed)
             ));
         }
         for contact in &overview.contacts {
@@ -1091,6 +1094,10 @@ pub struct Overview {
 pub struct StateView {
     pub reason: String,
     pub until: u64,
+    /// Set here and handed to the other own devices.
+    pub shared: bool,
+    /// Handed here by another own device.
+    pub handed: bool,
 }
 
 /// One contact as shown to the person.

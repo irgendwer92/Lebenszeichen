@@ -193,7 +193,7 @@ async fn route(request: Request<Incoming>, shared: Arc<Shared>) -> Answer {
             join::cancel(&shared);
             empty(StatusCode::NO_CONTENT)
         }
-        "/api/state" => match with_device(&shared, |ctx| ctx.clear_state()).await {
+        "/api/state" => match with_device(&shared, |ctx| ctx.end_state()).await {
             Ok(()) => empty(StatusCode::NO_CONTENT),
             Err(answer) => *answer,
         },
@@ -357,9 +357,19 @@ fn state_json(overview: &Overview, t: Texts) -> Value {
         &[
             ("reason", Arg::Text(&show::reported_state(t, &state.reason))),
             ("until", Arg::Text(&when(t, state.until, overview.now))),
+            (
+                "origin",
+                Arg::Text(&show::state_origin(t, state.shared, state.handed)),
+            ),
         ],
     );
-    json!({ "reason": state.reason, "until": state.until, "text": text })
+    json!({
+        "reason": state.reason,
+        "until": state.until,
+        "shared": state.shared,
+        "handed": state.handed,
+        "text": text,
+    })
 }
 
 fn contact_json(view: ContactView, now: u64, t: Texts) -> Value {

@@ -144,11 +144,15 @@ pub fn report_wait(path: &Path) -> Option<u64> {
 #[derive(Debug, Clone, Copy)]
 pub enum External<'a> {
     /// `minutes` as the sender gave it: Tasker and Home Assistant send text.
+    /// `share`: also on the other own devices (M8c).
     Set {
         reason: Option<&'a str>,
         minutes: Option<&'a str>,
+        share: bool,
     },
-    Clear,
+    Clear {
+        share: bool,
+    },
 }
 
 /// What became of a state report from another app.
@@ -158,12 +162,16 @@ pub struct Applied {
     /// As [`Requests::report_wait`], after the change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_wait: Option<u64>,
+    /// A message to the other own devices waits: fetch soon to send it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub send: bool,
 }
 
 impl Applied {
     const DROPPED: Self = Self {
         applied: false,
         report_wait: None,
+        send: false,
     };
 }
 
@@ -180,15 +188,19 @@ pub fn report_from_app(path: &Path, token: Option<&str>, call: External<'_>) -> 
     if !ctx.report_token_matches(token).unwrap_or(false) {
         return Applied::DROPPED;
     }
-    let done = match call {
-        External::Set { reason, minutes } => {
+    let (done, share) = match call {
+        External::Set {
+            reason,
+            minutes,
+            share,
+        } => {
             let minutes = minutes.and_then(|text| text.trim().parse::<u32>().ok());
             match (reason, minutes) {
-                (Some(reason), Some(minutes)) => ctx.set_state(reason, minutes),
+                (Some(reason), Some(minutes)) => (ctx.set_state(reason, minutes, share), share),
                 _ => return Applied::DROPPED,
             }
         }
-        External::Clear => ctx.clear_state(),
+        External::Clear { share } => (ctx.clear_state(share), share),
     };
     if done.is_err() {
         return Applied::DROPPED;
@@ -196,7 +208,38 @@ pub fn report_from_app(path: &Path, token: Option<&str>, call: External<'_>) -> 
     Applied {
         applied: true,
         report_wait: ctx.report_wait().ok().flatten(),
+        send: share,
     }
+}
+
+/// What a battery check did, and whether the battery setting is on.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct BatteryChecked {
+    #[serde(flatten)]
+    pub applied: Applied,
+    /// The setting is on (or could not be read): keep checking.
+    pub battery: bool,
+}
+
+/// Checks the battery level against the battery setting (M8c). `applied`
+/// if the battery state was handed over or ended; then `send` is set too.
+pub fn check_battery(path: &Path, percent: u8, charging: bool) -> BatteryChecked {
+    let Ok(mut ctx) = quiet_ctx(path) else {
+        return BatteryChecked {
+            applied: Applied::DROPPED,
+            battery: true,
+        };
+    };
+    let applied = match ctx.check_battery(percent, charging) {
+        Ok(lz_core::report::BatteryChange::None) | Err(_) => Applied::DROPPED,
+        Ok(_) => Applied {
+            applied: true,
+            report_wait: ctx.report_wait().ok().flatten(),
+            send: true,
+        },
+    };
+    let battery = ctx.battery_reason().map_or(true, |reason| reason.is_some());
+    BatteryChecked { applied, battery }
 }
 
 fn is_open(path: &Path, name: &str, since: u64) -> Result<bool, String> {
@@ -251,7 +294,8 @@ mod tests {
     use lz_core::store::{JsonFile, Store};
 
     use super::{
-        Applied, External, Outcome, fetch, open_requests, report_from_app, report_wait, respond,
+        Applied, External, Outcome, check_battery, fetch, open_requests, report_from_app,
+        report_wait, respond,
         set_push_url, title,
     };
 
@@ -323,6 +367,7 @@ mod tests {
         External::Set {
             reason: Some(reason),
             minutes: Some(minutes),
+            share: false,
         }
     }
 
@@ -340,8 +385,27 @@ mod tests {
         assert_eq!(applied.report_wait, None);
         assert!(state_of(&path).unwrap().starts_with("asleep:"));
         // Cleared again with the same token.
-        let applied = report_from_app(&path, Some(&token), External::Clear);
+        let applied = report_from_app(&path, Some(&token), External::Clear { share: false });
         assert!(applied.applied);
+        assert_eq!(state_of(&path), None);
+    }
+
+    #[test]
+    fn battery_check_follows_the_setting() {
+        let (_dir, path) = device();
+        let off = check_battery(&path, 1, false);
+        assert!(!off.applied.applied && !off.battery);
+        super::quiet_ctx(&path)
+            .unwrap()
+            .set_battery(Some("Phone empty"))
+            .unwrap();
+        let low = check_battery(&path, 2, false);
+        assert!(low.applied.applied && low.applied.send && low.battery);
+        assert!(state_of(&path).unwrap().starts_with("Phone empty:"));
+        let json = serde_json::to_value(&low).unwrap();
+        assert_eq!(json["applied"], true);
+        assert_eq!(json["battery"], true);
+        assert!(check_battery(&path, 6, false).applied.applied);
         assert_eq!(state_of(&path), None);
     }
 
@@ -363,6 +427,7 @@ mod tests {
         let missing = External::Set {
             reason: Some("other"),
             minutes: None,
+            share: false,
         };
         assert_eq!(
             report_from_app(&path, Some(&token), missing),
@@ -371,6 +436,7 @@ mod tests {
         let no_reason = External::Set {
             reason: None,
             minutes: Some("5"),
+            share: false,
         };
         assert_eq!(
             report_from_app(&path, Some(&token), no_reason),
@@ -397,7 +463,7 @@ mod tests {
                 Applied::DROPPED
             );
             assert_eq!(
-                report_from_app(&path, given, External::Clear),
+                report_from_app(&path, given, External::Clear { share: false }),
                 Applied::DROPPED
             );
         }
@@ -408,7 +474,7 @@ mod tests {
             .disable_report_token()
             .unwrap();
         assert_eq!(
-            report_from_app(&path, Some(&token), External::Clear),
+            report_from_app(&path, Some(&token), External::Clear { share: false }),
             Applied::DROPPED
         );
         assert_eq!(state_of(&path), before);

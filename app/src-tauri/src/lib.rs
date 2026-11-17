@@ -56,6 +56,8 @@ macro_rules! handler {
             commands::enable_report_token,
             commands::renew_report_token,
             commands::disable_report_token,
+            commands::battery_reason,
+            commands::set_battery_reason,
             commands::texts,
             commands::set_language,
             $($extra,)*

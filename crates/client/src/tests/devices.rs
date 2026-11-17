@@ -1209,3 +1209,53 @@ async fn device_offline_for_hours_catches_up() {
             .any(|n| matches!(n, Notice::Response { .. }))
     );
 }
+
+#[tokio::test]
+async fn shared_state_answers_from_the_other_device() {
+    let world = World::new();
+    let (mut phone, mut laptop, mut bert) = family(&world).await;
+    laptop.ctx.set_report_setting("Bert", true, None).unwrap();
+    phone.ctx.set_state("Akku leer", 1440, true).unwrap();
+    // The fetch sends it; then the phone is off.
+    assert!(phone.sync().await.is_empty());
+    assert_eq!(
+        laptop.sync().await,
+        vec![Notice::OwnState {
+            reason: Some("Akku leer".into()),
+            device: Some("Handy".into()),
+        }]
+    );
+    let state = laptop.ctx.overview().unwrap().state.unwrap();
+    assert!(state.handed && !state.shared);
+
+    bert.ctx.request("Anna").await.unwrap();
+    assert_eq!(laptop.sync().await.len(), 1);
+    world.advance(15 * MINUTE);
+    assert_eq!(
+        laptop.sync().await,
+        vec![Notice::Reported {
+            name: "Bert".into(),
+            reason: "Akku leer".into()
+        }]
+    );
+    assert!(matches!(
+        &bert.sync().await[..],
+        [Notice::Response {
+            kind: ResponseKind::Reported(reason),
+            ..
+        }] if reason.as_str() == "Akku leer"
+    ));
+
+    // Charged again: cleared on the phone, and so on the laptop.
+    phone.sync().await;
+    phone.ctx.clear_state(true).unwrap();
+    phone.sync().await;
+    assert_eq!(
+        laptop.sync().await,
+        vec![Notice::OwnState {
+            reason: None,
+            device: Some("Handy".into()),
+        }]
+    );
+    assert!(laptop.ctx.overview().unwrap().state.is_none());
+}

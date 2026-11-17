@@ -52,6 +52,12 @@ class FetchWorker(context: Context, params: WorkerParameters) : Worker(context, 
         val answer = CoreBridge.fetch(app)
         Answer.parseAll(answer).forEach { AnswerPresenter.show(app, it) }
         Requests.update(app, answer, "fetch")
+        // Every fetch also looks at the battery (cheap; the core decides).
+        try {
+            Battery.check(app)
+        } catch (e: Exception) {
+            EventLog.add(app, Requests.NO_REQUEST, "error", "battery not checked")
+        }
         // A reported answer still due right now could not be sent (no
         // network, relay down): try again like after an error.
         val wait = if (answer.has("report_wait")) answer.optLong("report_wait") else null

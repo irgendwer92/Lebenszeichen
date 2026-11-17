@@ -255,11 +255,13 @@ pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge
     })
 }
 
-/// `CoreBridge.nativeReportState(context, action, token, reason, minutes): String`
+/// `CoreBridge.nativeReportState(context, action, token, reason, minutes, share): String`
 /// – a state report from another app (`StateReceiver`). `action` is `"set"`
-/// or `"clear"`; `minutes` is the text of the extra, whatever type the
-/// sender used. Answers `{"applied":…,"report_wait":…}`; a report that is
-/// not accepted is dropped without saying why.
+/// or `"clear"`; `minutes` and `share` are the text of the extras, whatever
+/// type the sender used; `share` counts only as `true` (any case). Answers
+/// `{"applied":…,"report_wait":…,"send":…}`; with `send` the app fetches
+/// soon to hand the state on. A report that is not accepted is dropped
+/// without saying why.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge_nativeReportState<
     'local,
@@ -271,26 +273,52 @@ pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge
     token: JString<'local>,
     reason: JString<'local>,
     minutes: JString<'local>,
+    share: JString<'local>,
 ) -> jstring {
     entry(&mut env, &context, |env, path| {
         let action = optional_string(env, &action);
         let token = optional_string(env, &token);
         let reason = optional_string(env, &reason);
         let minutes = optional_string(env, &minutes);
+        let share = optional_string(env, &share)
+            .is_some_and(|text| text.trim().eq_ignore_ascii_case("true"));
         let call = match action.as_deref() {
             Some("set") => background::External::Set {
                 reason: reason.as_deref(),
                 minutes: minutes.as_deref(),
+                share,
             },
-            Some("clear") => background::External::Clear,
+            Some("clear") => background::External::Clear { share },
             _ => {
                 return background::Applied {
                     applied: false,
                     report_wait: None,
+                    send: false,
                 };
             }
         };
         background::report_from_app(&path, token.as_deref(), call)
+    })
+}
+
+/// `CoreBridge.nativeCheckBattery(context, percent: Int, charging: Boolean): String`
+/// – checks the battery level against the battery setting. Answers as
+/// `nativeReportState`, plus `battery`: whether the setting is on, so the
+/// app can stop its 10-minute checks while it is off. `applied` if the
+/// battery state was handed over or ended.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge_nativeCheckBattery<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    context: JObject<'local>,
+    percent: jint,
+    charging: jboolean,
+) -> jstring {
+    entry(&mut env, &context, |_env, path| {
+        let percent = u8::try_from(percent.clamp(0, 100)).unwrap_or(100);
+        background::check_battery(&path, percent, charging != 0)
     })
 }
 

@@ -8,8 +8,10 @@ import android.content.Intent
  * Receives a state report from another app (Tasker, Automate, the Home
  * Assistant Companion app): `<applicationId>.SET_STATE` with the extras
  * `token`, `reason` and `minutes`, or `<applicationId>.CLEAR_STATE` with
- * `token`. The receiver is exported; the protection is the token, which
- * the core checks (and which is off by default). A report that is not
+ * `token`. The optional extra `share` (text or Boolean `true`) hands the
+ * state to the own devices, or ends it on all of them. The receiver is
+ * exported; the protection is the token, which the core checks (and which
+ * is off by default). A report that is not
  * accepted is dropped without a trace; nothing of it goes to the log.
  *
  * The file work runs on a thread of its own, held open by `goAsync()`.
@@ -29,11 +31,12 @@ class StateReceiver : BroadcastReceiver() {
         val token = extras?.get(EXTRA_TOKEN)?.toString()
         val reason = extras?.get(EXTRA_REASON)?.toString()
         val minutes = extras?.get(EXTRA_MINUTES)?.toString()
+        val share = extras?.get(EXTRA_SHARE)?.toString()
         val app = context.applicationContext
         val pending = goAsync()
         Thread {
             try {
-                val answer = CoreBridge.reportState(app, kind, token, reason, minutes)
+                val answer = CoreBridge.reportState(app, kind, token, reason, minutes, share)
                 if (answer.optBoolean("applied")) {
                     EventLog.add(app, Requests.NO_REQUEST, "state-report", kind)
                     val wait = if (answer.has("report_wait")) answer.optLong("report_wait") else null
@@ -43,6 +46,8 @@ class StateReceiver : BroadcastReceiver() {
                         else -> ReportWorker.schedule(app, wait)
                     }
                 }
+                // A message to the other own devices waits: a fetch sends it.
+                if (answer.optBoolean("send")) FetchWorker.enqueue(app, "state")
             } catch (e: Exception) {
                 EventLog.add(app, Requests.NO_REQUEST, "error", "state report not processed")
             } finally {
@@ -55,5 +60,6 @@ class StateReceiver : BroadcastReceiver() {
         const val EXTRA_TOKEN = "token"
         const val EXTRA_REASON = "reason"
         const val EXTRA_MINUTES = "minutes"
+        const val EXTRA_SHARE = "share"
     }
 }

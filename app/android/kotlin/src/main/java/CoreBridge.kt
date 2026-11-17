@@ -42,7 +42,10 @@ object CoreBridge {
         token: String?,
         reason: String?,
         minutes: String?,
+        share: String?,
     ): String?
+
+    @JvmStatic private external fun nativeCheckBattery(context: Context, percent: Int, charging: Boolean): String?
 
     @JvmStatic private external fun nativeSetForeground(on: Boolean)
 
@@ -117,10 +120,23 @@ object CoreBridge {
     /**
      * A state report from another app: [action] is `"set"` or `"clear"`.
      * The core checks the token; the answer has `applied` and, if a reported
-     * answer is pending, `report_wait` in seconds.
+     * answer is pending, `report_wait` in seconds; `send` if a message to the
+     * other own devices waits in the outbox. [share] is the text of the extra
+     * `share` (`"true"` hands the state to the own devices).
      */
-    fun reportState(context: Context, action: String, token: String?, reason: String?, minutes: String?): JSONObject =
-        call(context) { nativeReportState(context.applicationContext, action, token, reason, minutes) }
+    fun reportState(
+        context: Context,
+        action: String,
+        token: String?,
+        reason: String?,
+        minutes: String?,
+        share: String?,
+    ): JSONObject =
+        call(context) { nativeReportState(context.applicationContext, action, token, reason, minutes, share) }
+
+    /** The battery level for the setting "hand over a state when the battery is low"; answers like [reportState]. */
+    fun checkBattery(context: Context, percent: Int, charging: Boolean): JSONObject =
+        call(context) { nativeCheckBattery(context.applicationContext, percent, charging) }
 
     /** Turns every way of failing into an answer with `error`, in the chosen language. */
     private fun call(context: Context, native: () -> String?): JSONObject {

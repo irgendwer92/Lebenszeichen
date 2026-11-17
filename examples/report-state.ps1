@@ -5,24 +5,37 @@
 #   .\report-state.ps1 set 480 asleep   # "asleep" for eight hours
 #   .\report-state.ps1 clear            # clear the state
 #   .\report-state.ps1 show             # print the current state (404: none)
+#   .\report-state.ps1 set -Share 1440 Phone empty   # also hand it to your other devices
+#   .\report-state.ps1 clear -Share    # end it on all your devices
+#
+# With -Share, a state set goes through the encrypted sync mailbox to all
+# your devices, and clear ends a shared or handed state everywhere. Without
+# it, a state stays on this device and clear only ends the state set here.
 
 param(
     [Parameter(Mandatory, Position = 0)][ValidateSet('set', 'clear', 'show')][string]$Action,
     [Parameter(Position = 1)][int]$Minutes,
-    [Parameter(Position = 2, ValueFromRemainingArguments)][string[]]$Reason
+    [Parameter(Position = 2, ValueFromRemainingArguments)][string[]]$Reason,
+    [switch]$Share
 )
 
 # The pipe name carries the SID of the user: lebenszeichen-<SID>-app.
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $pipeName = "lebenszeichen-$sid-app"
+$query = ''
 
 switch ($Action) {
     'set' {
-        if (-not $Minutes -or -not $Reason) { throw 'usage: set <minutes> <reason>' }
+        if (-not $Minutes -or -not $Reason) { throw 'usage: set [-Share] <minutes> <reason>' }
         $method = 'POST'
-        $body = @{ reason = ($Reason -join ' '); minutes = $Minutes } | ConvertTo-Json -Compress
+        $state = @{ reason = ($Reason -join ' '); minutes = $Minutes }
+        if ($Share) { $state.share = $true }
+        $body = $state | ConvertTo-Json -Compress
     }
-    'clear' { $method = 'DELETE'; $body = '' }
+    'clear' {
+        $method = 'DELETE'; $body = ''
+        if ($Share) { $query = '?share=true' }
+    }
     'show' { $method = 'GET'; $body = '' }
 }
 
@@ -64,7 +77,7 @@ try {
         throw "the pipe $pipeName belongs to $owner, not to you; not sending anything"
     }
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
-    $head = "$method /state HTTP/1.1`r`nHost: localhost`r`nConnection: close`r`n" +
+    $head = "$method /state$query HTTP/1.1`r`nHost: localhost`r`nConnection: close`r`n" +
             "Content-Type: application/json`r`nContent-Length: $($bytes.Length)`r`n`r`n"
     $headBytes = [System.Text.Encoding]::ASCII.GetBytes($head)
     $pipe.Write($headBytes, 0, $headBytes.Length)
@@ -80,4 +93,12 @@ try {
 $parts = $answer -split "`r`n`r`n", 2
 $status = ($parts[0] -split ' ')[1]
 Write-Output "status: $status"
-if ($parts.Length -gt 1 -and $parts[1]) { Write-Output $parts[1] }
+if ($parts.Length -gt 1 -and $parts[1]) {
+    $text = $parts[1]
+    if ($Action -eq 'show') {
+        # {"reason":…,"until":…,"shared":…,"handed":…}; the notes are appended.
+        if ($text -match '"shared"\s*:\s*true') { $text += ' (shared)' }
+        if ($text -match '"handed"\s*:\s*true') { $text += ' (from another device)' }
+    }
+    Write-Output $text
+}

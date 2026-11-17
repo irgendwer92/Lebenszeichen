@@ -21,7 +21,7 @@ pub use device_code::DeviceCode;
 pub use invitation::Invitation;
 pub use message::{
     Body, ContactPart, DeviceAnnounce, Hello, Message, PartData, Requested, Responded, Response,
-    ResponseKind, Rules, RulesSet,
+    ResponseKind, Rules, RulesSet, StateShared,
 };
 pub use record::{ContactRecord, Stamp};
 pub use setup_code::{CodeKind, SetupCode};

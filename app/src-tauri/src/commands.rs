@@ -791,6 +791,10 @@ fn cards(overview: Overview, t: Texts) -> Cards {
                 &[
                     ("reason", Arg::Text(&show::reported_state(t, &state.reason))),
                     ("until", Arg::Text(&when(t, state.until, now))),
+                    (
+                        "origin",
+                        Arg::Text(&show::state_origin(t, state.shared, state.handed)),
+                    ),
                 ],
             )
         }),
@@ -911,10 +915,11 @@ pub async fn set_report_setting(
     .await
 }
 
-/// Ends the reported state of this device.
+/// Ends the reported state that applies on this device: on all own devices
+/// if it is the shared one (✕ next to the state).
 #[tauri::command]
 pub async fn clear_state(state: tauri::State<'_, AppState>) -> Result<Reply<()>, String> {
-    run(path(&state), async |ctx| ctx.clear_state()).await
+    run(path(&state), async |ctx| ctx.end_state()).await
 }
 
 /// The token for state reports from other apps (Android), or `None` if
@@ -952,6 +957,29 @@ pub async fn disable_report_token(
 ) -> Result<Reply<Option<String>>, String> {
     run(path(&state), async |ctx| {
         ctx.disable_report_token().map(|()| None)
+    })
+    .await
+}
+
+/// The reason handed over when the battery is low, or `None` if that is
+/// off (Android, M8c).
+#[tauri::command]
+pub async fn battery_reason(
+    state: tauri::State<'_, AppState>,
+) -> Result<Reply<Option<String>>, String> {
+    run(path(&state), async |ctx| ctx.battery_reason()).await
+}
+
+/// Turns handing over a state at low battery on with `reason`, or off with
+/// `None`; answers the setting as it is now.
+#[tauri::command]
+pub async fn set_battery_reason(
+    state: tauri::State<'_, AppState>,
+    reason: Option<String>,
+) -> Result<Reply<Option<String>>, String> {
+    run(path(&state), async move |ctx| {
+        ctx.set_battery(reason.as_deref())?;
+        ctx.battery_reason()
     })
     .await
 }

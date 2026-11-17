@@ -155,6 +155,9 @@ enum Command {
 enum StateCommand {
     /// Reports a state through the running lz listen
     Set {
+        /// Hand the state on to the own devices as well
+        #[arg(long)]
+        share: bool,
         /// How long the state applies, in minutes
         minutes: u32,
         /// Short reason the contact sees, such as asleep
@@ -162,7 +165,11 @@ enum StateCommand {
         reason: Vec<String>,
     },
     /// Ends the reported state
-    Clear,
+    Clear {
+        /// End the shared state on the own devices as well
+        #[arg(long)]
+        share: bool,
+    },
     /// Answers the contact with the reported state from this device
     Allow {
         /// Name of the contact
@@ -426,6 +433,7 @@ async fn state_call(
         let call = match action {
             None => StateCall::Show,
             Some(StateCommand::Set {
+                share,
                 minutes,
                 reason: words,
             }) => {
@@ -433,9 +441,10 @@ async fn state_call(
                 StateCall::Set {
                     reason: &reason,
                     minutes,
+                    share,
                 }
             }
-            Some(StateCommand::Clear) => StateCall::Clear,
+            Some(StateCommand::Clear { share }) => StateCall::Clear { share },
             Some(StateCommand::Allow { .. } | StateCommand::Deny { .. }) => {
                 unreachable!("handled by the caller")
             }

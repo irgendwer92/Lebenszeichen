@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-battery-reason"
+description = "Enables the set_battery_reason command without any pre-configured scope."
+commands.allow = ["set_battery_reason"]
+
+[[permission]]
+identifier = "deny-set-battery-reason"
+description = "Denies the set_battery_reason command without any pre-configured scope."
+commands.deny = ["set_battery_reason"]
