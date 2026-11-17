@@ -32,7 +32,10 @@ type Toasts = Arc<Mutex<HashMap<u32, ToastNotification>>>;
 
 /// The toasts of this app.
 pub struct Service {
-    notifier: ToastNotifier,
+    /// The app identifier. The notifier is made anew on the thread that
+    /// uses it: one made on the main thread may not be called from another
+    /// (`RPC_E_WRONG_THREAD`).
+    app_id: HSTRING,
     /// Toasts on screen, by id, so that the app can withdraw them; removed
     /// when they go.
     toasts: Toasts,
@@ -49,14 +52,15 @@ impl Service {
         unsafe { CoIncrementMTAUsage() }.map_err(|error| error.to_string())?;
         let id = app.config().identifier.as_str();
         register(id, &app.package_info().name);
-        ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(id))
-            .map_err(|error| error.to_string())
-            .map(|notifier| Self {
-                notifier,
-                toasts: Arc::default(),
-                next: AtomicU32::new(1),
-                on_event: OnceLock::new(),
-            })
+        let app_id = HSTRING::from(id);
+        // Only to learn here whether Windows offers notifications at all.
+        notifier(&app_id).map_err(|error| error.to_string())?;
+        Ok(Self {
+            app_id,
+            toasts: Arc::default(),
+            next: AtomicU32::new(1),
+            on_event: OnceLock::new(),
+        })
     }
 
     /// Where events of the toasts go.
@@ -115,18 +119,30 @@ impl Service {
             )?;
         }
         lock(&self.toasts).insert(id, toast.clone());
-        self.notifier.Show(&toast).inspect_err(|_| {
-            lock(&self.toasts).remove(&id);
-        })
+        notifier(&self.app_id)
+            .and_then(|notifier| notifier.Show(&toast))
+            .inspect_err(|_| {
+                lock(&self.toasts).remove(&id);
+            })
     }
 
-    /// Withdraws a toast; Windows reports it as `ApplicationHidden`.
+    /// Withdraws a toast; Windows reports it as `ApplicationHidden`. On a
+    /// thread of its own, because a click into the foreground window
+    /// arrives on the main thread, which may not use toasts made elsewhere.
     pub fn close(&self, id: u32) {
         let toast = lock(&self.toasts).remove(&id);
         if let Some(toast) = toast {
-            let _ = self.notifier.Hide(&toast);
+            let app_id = self.app_id.clone();
+            std::thread::spawn(move || {
+                let _ = notifier(&app_id).and_then(|notifier| notifier.Hide(&toast));
+            });
         }
     }
+}
+
+/// The toast notifier of the app, for the calling thread.
+fn notifier(app_id: &HSTRING) -> windows::core::Result<ToastNotifier> {
+    ToastNotificationManager::CreateToastNotifierWithId(app_id)
 }
 
 /// Passes on what happened to one toast.

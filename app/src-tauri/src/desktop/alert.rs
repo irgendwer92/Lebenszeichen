@@ -16,7 +16,7 @@ const PREFIX: &str = "alert-";
 
 /// Size of the window in logical pixels.
 const WIDTH: f64 = 420.0;
-const HEIGHT: f64 = 280.0;
+const HEIGHT: f64 = 240.0;
 
 /// Shift of each further window, so that several stay visible.
 const STACK_OFFSET: i32 = 32;
