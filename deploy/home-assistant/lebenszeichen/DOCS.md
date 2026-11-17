@@ -27,21 +27,27 @@ Put the token in `secrets.yaml`, not in an automation.
 ## Report a state from an automation
 
 The socket is `/share/lebenszeichen/lz.sock`. `shell_command` runs in the
-Home Assistant container, as root, and reaches it. Replace `<token>` by the
-token, via `secrets.yaml`:
+Home Assistant container, as root, and reaches it; `curl` is there. Put the
+whole command into `secrets.yaml`, because `!secret` replaces only whole
+values (this is the way that was tested):
 
 ```yaml
-shell_command:
-  lz_asleep: >-
-    curl --silent --show-error --unix-socket /share/lebenszeichen/lz.sock
-    -H "Authorization: Bearer {{ token }}"
-    -d '{"reason":"asleep","minutes":{{ minutes }}}' http://lz/state
-  lz_clear: >-
-    curl --silent --show-error --unix-socket /share/lebenszeichen/lz.sock
-    -H "Authorization: Bearer {{ token }}" -X DELETE http://lz/state
+# secrets.yaml
+lz_asleep: >-
+  curl -sS --fail-with-body --unix-socket /share/lebenszeichen/lz.sock
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json"
+  -d '{"reason":"asleep","minutes":600}' http://lz/state
+lz_clear: >-
+  curl -sS --fail-with-body --unix-socket /share/lebenszeichen/lz.sock
+  -H "Authorization: Bearer <token>" -X DELETE http://lz/state
 ```
 
 ```yaml
+# configuration.yaml
+shell_command:
+  lz_asleep: !secret lz_asleep
+  lz_clear: !secret lz_clear
+
 automation:
   - alias: Lebenszeichen asleep
     triggers:
@@ -50,9 +56,6 @@ automation:
         to: "on"
     actions:
       - action: shell_command.lz_asleep
-        data:
-          token: !secret lz_token
-          minutes: 600
         response_variable: result
       - if: "{{ result.returncode != 0 }}"
         then:
@@ -60,6 +63,9 @@ automation:
             data:
               message: "Lebenszeichen: {{ result.stderr }} {{ result.stdout }}"
 ```
+
+After a new token (Renew on the page), change it in `secrets.yaml` and
+restart Home Assistant.
 
 A failing command is not an error for Home Assistant: check `returncode`
 yourself. `shell_command` stops a command after 60 seconds.

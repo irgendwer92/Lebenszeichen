@@ -358,18 +358,22 @@ function contactsCard(status) {
 /// templating of the token (`{{ token }}` here) will be finalized during the
 /// test with a real Home Assistant; everything about it is in this function.
 function exampleYaml(socket) {
+  // `!secret` replaces only whole values, so the whole command, token
+  // included, goes into secrets.yaml. Tested on Home Assistant OS.
   return [
-    "shell_command:",
-    "  lz_asleep: >-",
-    `    curl -sS --fail-with-body --unix-socket ${socket}`,
-    '    -H "Authorization: Bearer {{ token }}"',
-    '    -H "Content-Type: application/json"',
-    `    -d '{"reason":"asleep","minutes":480}' http://lz/state`,
-    "  lz_clear: >-",
-    `    curl -sS --fail-with-body --unix-socket ${socket}`,
-    '    -H "Authorization: Bearer {{ token }}" -X DELETE http://lz/state',
+    "# secrets.yaml",
+    "lz_asleep: >-",
+    `  curl -sS --fail-with-body --unix-socket ${socket}`,
+    '  -H "Authorization: Bearer <token>" -H "Content-Type: application/json"',
+    `  -d '{"reason":"asleep","minutes":480}' http://lz/state`,
+    "lz_clear: >-",
+    `  curl -sS --fail-with-body --unix-socket ${socket}`,
+    '  -H "Authorization: Bearer <token>" -X DELETE http://lz/state',
     "",
-    "# secrets.yaml:  lz_token: <the token above>",
+    "# configuration.yaml",
+    "shell_command:",
+    "  lz_asleep: !secret lz_asleep",
+    "  lz_clear: !secret lz_clear",
   ].join("\n");
 }
 
