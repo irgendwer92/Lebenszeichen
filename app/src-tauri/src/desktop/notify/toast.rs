@@ -41,20 +41,16 @@ pub struct Service {
 }
 
 impl Service {
-    /// The toast notifier for the app identifier; `None` if Windows offers
+    /// The toast notifier for the app identifier, or why Windows offers
     /// none.
-    pub fn connect(app: &AppHandle) -> Option<Self> {
+    pub fn connect(app: &AppHandle) -> Result<Self, String> {
         // Keeps a multithreaded apartment alive, so that the worker thread
         // may call WinRT without joining an apartment itself.
-        if let Err(error) = unsafe { CoIncrementMTAUsage() } {
-            eprintln!("No notifications: {error}");
-            return None;
-        }
+        unsafe { CoIncrementMTAUsage() }.map_err(|error| error.to_string())?;
         let id = app.config().identifier.as_str();
         register(id, &app.package_info().name);
         ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(id))
-            .inspect_err(|error| eprintln!("No notifications: {error}"))
-            .ok()
+            .map_err(|error| error.to_string())
             .map(|notifier| Self {
                 notifier,
                 toasts: Arc::default(),
@@ -105,10 +101,17 @@ impl Service {
                 },
             ))?;
             toast.Failed(
-                &TypedEventHandler::<ToastNotification, ToastFailedEventArgs>::new(move |_, _| {
-                    report.send(Event::Failed);
-                    Ok(())
-                }),
+                &TypedEventHandler::<ToastNotification, ToastFailedEventArgs>::new(
+                    move |_, args: Ref<ToastFailedEventArgs>| {
+                        let why = args
+                            .ok()
+                            .and_then(ToastFailedEventArgs::ErrorCode)
+                            .map_or_else(|error| error, windows::core::Error::from)
+                            .to_string();
+                        report.send(Event::Failed(why));
+                        Ok(())
+                    },
+                ),
             )?;
         }
         lock(&self.toasts).insert(id, toast.clone());

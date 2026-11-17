@@ -29,8 +29,8 @@ pub struct Service {
 }
 
 impl Service {
-    /// The notification service; `None` if the session has none.
-    pub fn connect(_app: &AppHandle) -> Option<Self> {
+    /// The notification service, or why the session has none.
+    pub fn connect(_app: &AppHandle) -> Result<Self, String> {
         Connection::session()
             .and_then(|connection| {
                 Proxy::new(
@@ -40,8 +40,7 @@ impl Service {
                     "org.freedesktop.Notifications",
                 )
             })
-            .inspect_err(|error| eprintln!("No notifications: {error}"))
-            .ok()
+            .map_err(|error| error.to_string())
             .map(|proxy| Self { proxy })
     }
 

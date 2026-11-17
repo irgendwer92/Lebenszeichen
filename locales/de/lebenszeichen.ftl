@@ -485,3 +485,5 @@ app-error-request-closed = Die Anfrage ist nicht mehr offen.
 app-error-no-alert-here = Vordergrund-Fenster gibt es hier noch nicht.
 app-error-autostart = Start bei der Anmeldung fehlgeschlagen
 app-error-answer-failed = Lebenszeichen an { $name } nicht gesendet: { $error }
+app-error-notification = Benachrichtigung fehlgeschlagen: { $error }
+app-error-no-notifications = Keine Benachrichtigungen auf diesem System: { $error }

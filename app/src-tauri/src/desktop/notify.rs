@@ -99,9 +99,10 @@ impl Gone {
 #[derive(Debug)]
 enum Event {
     Gone(Gone),
-    /// The notification could not be shown after all (Windows only).
+    /// The notification could not be shown after all, and why (Windows
+    /// only).
     #[cfg_attr(not(windows), allow(dead_code))]
-    Failed,
+    Failed(String),
 }
 
 /// Text of a notification.
@@ -253,6 +254,8 @@ struct Shared {
     path: PathBuf,
     /// The notification service, if the system has one.
     service: Option<Arc<service::Service>>,
+    /// Why there is none, reported when a request would need it.
+    no_service: Option<String>,
     next_window: Arc<AtomicU32>,
     screen: Arc<Mutex<Screen>>,
     wake: mpsc::Sender<()>,
@@ -262,7 +265,13 @@ struct Shared {
 /// without foreground windows nothing is shown; the main window still lists
 /// every request.
 pub fn start(app: AppHandle, path: PathBuf) -> Option<Notifier> {
-    let service = service::Service::connect(&app).map(Arc::new);
+    let (service, no_service) = match service::Service::connect(&app) {
+        Ok(service) => (Some(Arc::new(service)), None),
+        Err(error) => {
+            eprintln!("No notifications: {error}");
+            (None, Some(error))
+        }
+    };
     if service.is_none() && !alert::possible() {
         return None;
     }
@@ -271,6 +280,7 @@ pub fn start(app: AppHandle, path: PathBuf) -> Option<Notifier> {
         app,
         path,
         service,
+        no_service,
         next_window: Arc::default(),
         screen: Arc::default(),
         wake,
@@ -281,8 +291,8 @@ pub fn start(app: AppHandle, path: PathBuf) -> Option<Notifier> {
             let handle = Handle::Notification(id);
             match event {
                 Event::Gone(how) => events.gone(handle, &how),
-                Event::Failed => {
-                    eprintln!("Notification failed");
+                Event::Failed(why) => {
+                    events.report("app-error-notification", &why);
                     events.screen().not_shown(handle);
                 }
             }
@@ -353,6 +363,9 @@ impl Shared {
     /// Shows a request as a notification, if the system has a service.
     fn notify(&self, key: Key) {
         let Some(service) = &self.service else {
+            if let Some(why) = &self.no_service {
+                self.report("app-error-no-notifications", why);
+            }
             return;
         };
         // Noted under the lock, so that an event for the new notification
@@ -360,8 +373,19 @@ impl Shared {
         let mut screen = self.screen();
         match service.show(&Text::for_request(&key.0)) {
             Ok(id) => screen.shown(key, Handle::Notification(id)),
-            Err(error) => eprintln!("Notification failed: {error}"),
+            Err(error) => {
+                drop(screen);
+                self.report("app-error-notification", &error);
+            }
         }
+    }
+
+    /// Shows in the main window why a request could not be shown, so that
+    /// it does not vanish without a trace.
+    fn report(&self, id: &str, error: &str) {
+        let line = crate::lang::texts().text(id, &[("error", Arg::Text(error))]);
+        eprintln!("{line}");
+        let _ = self.app.emit(LINE_EVENT, line);
     }
 
     /// Takes a notification or window away without answering.

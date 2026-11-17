@@ -485,3 +485,5 @@ app-error-request-closed = The request is no longer open.
 app-error-no-alert-here = Foreground windows do not exist here yet.
 app-error-autostart = Start at login failed
 app-error-answer-failed = Sign of life to { $name } not sent: { $error }
+app-error-notification = Notification failed: { $error }
+app-error-no-notifications = No notifications on this system: { $error }
