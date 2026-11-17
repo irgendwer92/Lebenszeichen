@@ -67,6 +67,18 @@ pub fn poke(app: &AppHandle) {
     let _ = app;
 }
 
+/// A contact answered an own request: a notification says so.
+pub fn answer(app: &AppHandle, answer: &crate::answer::Answer) {
+    #[cfg(any(target_os = "linux", windows))]
+    if let Some(desktop) = app.try_state::<Desktop>()
+        && let Some(notifier) = &desktop.notifier
+    {
+        notifier.answer(answer);
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    let _ = (app, answer);
+}
+
 /// Tray, closing into the tray, and the display of requests, for the state
 /// file at `path`.
 pub fn setup(app: &mut tauri::App, path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {

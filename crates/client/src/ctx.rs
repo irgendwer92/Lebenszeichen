@@ -106,6 +106,9 @@ pub fn system_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+/// See [`Ctx::on_notice`].
+pub type OnNotice = Box<dyn FnMut(&crate::show::Notice)>;
+
 /// Everything a command needs.
 pub struct Ctx<R> {
     pub store: JsonFile,
@@ -120,6 +123,9 @@ pub struct Ctx<R> {
     pub hints: Hints,
     /// Language of all texts. English unless the caller sets it.
     pub lang: Language,
+    /// Called with every notice as it happens, before its text is shown
+    /// (or left out as dropped). The app uses it to notify of answers.
+    pub on_notice: Option<OnNotice>,
 }
 
 /// Creates the state file with a new device.

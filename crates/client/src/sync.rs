@@ -309,6 +309,9 @@ impl<R: Relay> Ctx<R> {
     }
 
     fn show(&mut self, notice: &Notice) {
+        if let Some(on_notice) = &mut self.on_notice {
+            on_notice(notice);
+        }
         if self.verbose || !notice.is_dropped() {
             let text = notice.text(self.texts(), self.now(), self.hints);
             self.say(&text);

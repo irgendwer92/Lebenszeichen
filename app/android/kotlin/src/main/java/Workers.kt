@@ -43,6 +43,7 @@ class FetchWorker(context: Context, params: WorkerParameters) : Worker(context, 
     override fun doWork(): Result {
         val app = applicationContext
         val answer = CoreBridge.fetch(app)
+        Answer.parseAll(answer).forEach { AnswerPresenter.show(app, it) }
         Requests.update(app, answer, "fetch")
         val failed = answer.errorText() != null
         return if (failed && runAttemptCount + 1 < MAX_ATTEMPTS) Result.retry() else Result.success()

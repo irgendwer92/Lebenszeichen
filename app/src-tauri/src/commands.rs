@@ -120,6 +120,7 @@ pub(crate) fn spawn_sync(app: AppHandle, path: PathBuf) {
         let sink = EventSink::new(app.clone());
         let outcome = runtime().and_then(|runtime| {
             let mut ctx = new_ctx(path, Box::new(sink))?;
+            crate::answer::notify_from(&mut ctx, &app);
             runtime
                 .block_on(ctx.sync())
                 .map(drop)
@@ -203,6 +204,7 @@ pub(crate) fn new_ctx(path: PathBuf, out: Box<dyn Write>) -> Result<Ctx<Http>, S
         // The window has buttons for every next step.
         hints: no_hints,
         lang: lang::current(),
+        on_notice: None,
     })
 }
 
@@ -248,6 +250,7 @@ fn spawn_listener(app: AppHandle, path: PathBuf) {
                 if path.exists()
                     && let Ok(mut ctx) = new_ctx(path.clone(), Box::new(sink))
                 {
+                    crate::answer::notify_from(&mut ctx, &app);
                     tokio::select! {
                         _ = ctx.listen() => {}
                         _ = active.wait_for(|on| !*on) => continue,
@@ -738,8 +741,12 @@ pub async fn overview(state: tauri::State<'_, AppState>) -> Result<Reply<Cards>,
 
 /// Fetches waiting messages once, in addition to the background fetch.
 #[tauri::command]
-pub async fn sync(state: tauri::State<'_, AppState>) -> Result<Reply<()>, String> {
-    run(path(&state), async |ctx| ctx.sync().await.map(drop)).await
+pub async fn sync(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<Reply<()>, String> {
+    run(path(&state), async move |ctx| {
+        crate::answer::notify_from(ctx, &app);
+        ctx.sync().await.map(drop)
+    })
+    .await
 }
 
 /// A new invitation: the code as text and as QR code.

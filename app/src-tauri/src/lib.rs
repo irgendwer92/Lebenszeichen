@@ -8,6 +8,7 @@
 //! WebView. That path lives in the Kotlin layer (`app/android`), which calls
 //! Rust through `jni_bridge` without starting Tauri.
 
+mod answer;
 #[cfg(any(target_os = "android", test))]
 mod background;
 mod commands;

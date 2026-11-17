@@ -8,7 +8,7 @@ use tauri::AppHandle;
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::Value;
 
-use super::{Event, Gone, Text};
+use super::{Event, Gone, Kind, Text};
 
 /// Key of the button that sends the sign of life.
 const RESPOND: &str = "respond";
@@ -22,6 +22,9 @@ const CLOSED_BY_USER: u32 = 2;
 /// Urgency "critical": stays until the user acts. KDE Plasma shows it even
 /// during Do Not Disturb; that is intended (see `docs/concept.md`).
 const CRITICAL: u8 = 2;
+
+/// Urgency "normal", for answers.
+const NORMAL: u8 = 1;
 
 /// The notification service of the session.
 pub struct Service {
@@ -58,14 +61,28 @@ impl Service {
         });
     }
 
-    /// Shows a notification; returns the id the service gave it.
+    /// Shows a notification; returns the id the service gave it. A request
+    /// is critical, silent and has the button; an answer is normal, with
+    /// the sound of the system, and expires as the service decides.
     pub fn show(&self, text: &Text) -> Result<u32, String> {
-        let hints: HashMap<&str, Value<'_>> = HashMap::from([
-            ("urgency", Value::U8(CRITICAL)),
-            ("suppress-sound", Value::Bool(true)),
-        ]);
+        let (hints, actions): (HashMap<&str, Value<'_>>, Vec<&str>) = match &text.kind {
+            Kind::Request { action } => (
+                HashMap::from([
+                    ("urgency", Value::U8(CRITICAL)),
+                    ("suppress-sound", Value::Bool(true)),
+                ]),
+                vec![DEFAULT, action, RESPOND, action],
+            ),
+            Kind::Answer { open } => (
+                HashMap::from([("urgency", Value::U8(NORMAL))]),
+                vec![DEFAULT, open],
+            ),
+        };
+        let timeout = match text.kind {
+            Kind::Request { .. } => 0i32,
+            Kind::Answer { .. } => -1i32,
+        };
         // The summary is plain text, so the name needs no escaping there.
-        let actions = [DEFAULT, text.action.as_str(), RESPOND, text.action.as_str()];
         self.proxy
             .call(
                 "Notify",
@@ -77,7 +94,7 @@ impl Service {
                     text.hint.as_str(),
                     &actions[..],
                     hints,
-                    0i32,
+                    timeout,
                 ),
             )
             .map_err(|error| error.to_string())

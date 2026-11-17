@@ -15,7 +15,7 @@
 //! A worker compares the open requests with what is on screen whenever
 //! something may have changed, and at least every [`TICK`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -27,6 +27,7 @@ use lz_client::i18n::Arg;
 use tauri::{AppHandle, Emitter};
 
 use super::alert;
+use crate::answer::Answer;
 use crate::commands::{EventSink, LINE_EVENT, new_ctx, runtime};
 
 #[cfg(target_os = "linux")]
@@ -109,8 +110,17 @@ enum Event {
 struct Text {
     title: String,
     hint: String,
-    /// Label of the button that sends the sign of life.
-    action: String,
+    /// What the notification is for.
+    kind: Kind,
+}
+
+/// A request, which stays and answers when the person acts on it, or an
+/// answer to an own request, which is an ordinary notification with sound.
+enum Kind {
+    /// With the label of the button that sends the sign of life.
+    Request { action: String },
+    /// With the label of a click, which shows the main window.
+    Answer { open: String },
 }
 
 impl Text {
@@ -119,7 +129,19 @@ impl Text {
         Self {
             title: t.text("app-alert-title", &[("name", Arg::Text(name))]),
             hint: t.text("app-alert-hint", &[]),
-            action: t.text("app-alert-action", &[]),
+            kind: Kind::Request {
+                action: t.text("app-alert-action", &[]),
+            },
+        }
+    }
+
+    fn for_answer(answer: &Answer) -> Self {
+        Self {
+            title: answer.title.clone(),
+            hint: answer.text.clone(),
+            kind: Kind::Answer {
+                open: crate::lang::texts().text("app-answer-open", &[]),
+            },
         }
     }
 }
@@ -245,6 +267,26 @@ impl Notifier {
         self.shared
             .gone(Handle::Window(window), &Gone::WindowClicked);
     }
+
+    /// Notifies of an answer to an own request. Without a notification
+    /// service only the main window shows it, as a line.
+    pub fn answer(&self, answer: &Answer) {
+        let Some(service) = &self.shared.service else {
+            return;
+        };
+        // Noted under the lock, so that a click cannot come before it is
+        // known.
+        let mut answers = self.shared.answers();
+        match service.show(&Text::for_answer(answer)) {
+            Ok(id) => {
+                answers.insert(id);
+            }
+            Err(error) => {
+                drop(answers);
+                self.shared.report("app-error-notification", &error);
+            }
+        }
+    }
 }
 
 /// Shared parts of the threads.
@@ -258,6 +300,9 @@ struct Shared {
     no_service: Option<String>,
     next_window: Arc<AtomicU32>,
     screen: Arc<Mutex<Screen>>,
+    /// Notifications of answers on screen. They answer nothing; a click
+    /// shows the main window.
+    answers: Arc<Mutex<HashSet<u32>>>,
     wake: mpsc::Sender<()>,
 }
 
@@ -283,12 +328,16 @@ pub fn start(app: AppHandle, path: PathBuf) -> Option<Notifier> {
         no_service,
         next_window: Arc::default(),
         screen: Arc::default(),
+        answers: Arc::default(),
         wake,
     };
     if let Some(service) = &shared.service {
         let events = shared.clone();
         service.listen(move |id, event| {
             let handle = Handle::Notification(id);
+            if events.answer_gone(id, &event) {
+                return;
+            }
             match event {
                 Event::Gone(how) => events.gone(handle, &how),
                 Event::Failed(why) => {
@@ -459,6 +508,23 @@ impl Shared {
         if let Some(service) = &self.service {
             service.close(id);
         }
+    }
+
+    /// Handles an event of an answer notification; whether it was one.
+    fn answer_gone(&self, id: u32, event: &Event) -> bool {
+        if !self.answers().remove(&id) {
+            return false;
+        }
+        if let Event::Gone(Gone::Clicked) = event {
+            // Some services leave the notification open after a click.
+            self.close(id);
+            crate::desktop::show_window(&self.app);
+        }
+        true
+    }
+
+    fn answers(&self) -> std::sync::MutexGuard<'_, HashSet<u32>> {
+        self.answers.lock().expect("lock poisoned")
     }
 
     fn screen(&self) -> std::sync::MutexGuard<'_, Screen> {

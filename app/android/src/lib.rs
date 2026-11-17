@@ -14,7 +14,7 @@ const ANDROID_PACKAGE: &str = "io.github.irgendwer92.lebenszeichen.droid";
 
 /// Keeps the handle of the Kotlin plugin alive for the lifetime of the app.
 #[cfg(target_os = "android")]
-struct AndroidLayer<R: Runtime>(#[allow(dead_code)] tauri::plugin::PluginHandle<R>);
+struct AndroidLayer<R: Runtime>(tauri::plugin::PluginHandle<R>);
 
 /// Initializes the plugin. On other platforms than Android it does nothing.
 #[must_use]
@@ -31,4 +31,33 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             Ok(())
         })
         .build()
+}
+
+/// Shows the notification of an answer to an own request
+/// (`LebenszeichenPlugin.showAnswer`). Does nothing on other platforms.
+///
+/// # Errors
+///
+/// If the Kotlin layer is missing or rejects the call.
+pub fn show_answer<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    answer: impl serde::Serialize,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri::Manager;
+        let layer = app
+            .try_state::<AndroidLayer<R>>()
+            .ok_or_else(|| "no Android layer".to_owned())?;
+        layer
+            .0
+            .run_mobile_plugin::<serde::de::IgnoredAny>("showAnswer", answer)
+            .map(drop)
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, answer);
+        Ok(())
+    }
 }

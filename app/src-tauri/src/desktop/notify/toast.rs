@@ -26,13 +26,16 @@ use windows::Win32::System::Com::CoIncrementMTAUsage;
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW};
 use windows::core::{HSTRING, IInspectable, Ref, w};
 
-use super::{Event, Gone, Text};
+use super::{Event, Gone, Kind, Text};
 
 type OnEvent = Arc<dyn Fn(u32, Event) + Send + Sync>;
 
 /// Group of all toasts of requests; with the id as tag, it finds a toast in
 /// the notification center.
 const GROUP: &str = "requests";
+
+/// Group of the toasts of answers, which the app never withdraws.
+const ANSWERS: &str = "answers";
 type Toasts = Arc<Mutex<HashMap<u32, ToastNotification>>>;
 
 /// The toasts of this app.
@@ -86,7 +89,11 @@ impl Service {
         xml.LoadXml(&HSTRING::from(toast_xml(text)))?;
         let toast = ToastNotification::CreateToastNotification(&xml)?;
         toast.SetTag(&tag(id))?;
-        toast.SetGroup(&HSTRING::from(GROUP))?;
+        let group = match text.kind {
+            Kind::Request { .. } => GROUP,
+            Kind::Answer { .. } => ANSWERS,
+        };
+        toast.SetGroup(&HSTRING::from(group))?;
         if let Some(on_event) = self.on_event.get() {
             let report = Report {
                 id,
@@ -227,22 +234,33 @@ fn register(id: &str, name: &str) {
     }
 }
 
-/// The toast: silent, staying until the person acts, with one button.
+/// The toast of a request: silent, staying until the person acts, with one
+/// button. That of an answer: an ordinary toast with the sound of the
+/// system, which goes on its own; a click shows the main window.
 fn toast_xml(text: &Text) -> String {
-    format!(
+    let visual = format!(
         concat!(
-            r#"<toast scenario="reminder" launch="respond">"#,
             r#"<visual><binding template="ToastGeneric">"#,
             "<text>{}</text><text>{}</text>",
             "</binding></visual>",
-            r#"<actions><action content="{}" arguments="respond" activationType="foreground"/></actions>"#,
-            r#"<audio silent="true"/>"#,
-            "</toast>",
         ),
         escape(&text.title),
         escape(&text.hint),
-        escape(&text.action),
-    )
+    );
+    match &text.kind {
+        Kind::Request { action } => format!(
+            concat!(
+                r#"<toast scenario="reminder" launch="respond">"#,
+                "{}",
+                r#"<actions><action content="{}" arguments="respond" activationType="foreground"/></actions>"#,
+                r#"<audio silent="true"/>"#,
+                "</toast>",
+            ),
+            visual,
+            escape(action),
+        ),
+        Kind::Answer { .. } => format!(r#"<toast launch="open">{visual}</toast>"#),
+    }
 }
 
 /// Escapes text for XML content and attribute values.
@@ -283,10 +301,26 @@ mod tests {
         let xml = toast_xml(&Text {
             title: "A&B</text><text>".into(),
             hint: "hint".into(),
-            action: r#"go" x="1"#.into(),
+            kind: Kind::Request {
+                action: r#"go" x="1"#.into(),
+            },
         });
         assert!(xml.contains("<text>A&amp;B&lt;/text&gt;&lt;text&gt;</text>"));
         assert!(xml.contains(r#"content="go&quot; x=&quot;1""#));
         assert_eq!(xml.matches("<text>").count(), 2);
+    }
+
+    #[test]
+    fn an_answer_has_sound_and_no_button() {
+        let xml = toast_xml(&Text {
+            title: "Anna has answered".into(),
+            hint: "✓ today 14:32".into(),
+            kind: Kind::Answer {
+                open: "Open".into(),
+            },
+        });
+        assert!(!xml.contains("<audio"));
+        assert!(!xml.contains("<actions>"));
+        assert!(!xml.contains("reminder"));
     }
 }

@@ -284,6 +284,7 @@ pub async fn run() -> Result<()> {
         idle: SYNC_IDLE,
         hints: crate::hints::cli,
         lang,
+        on_notice: None,
     };
     match args.command {
         Command::Init { .. } => unreachable!("handled above"),

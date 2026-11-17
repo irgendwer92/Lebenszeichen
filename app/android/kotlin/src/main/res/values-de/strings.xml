@@ -3,6 +3,8 @@
     <!-- Notification channel -->
     <string name="lz_notification_channel_name">Anfragen</string>
     <string name="lz_notification_channel_description">Anfragen nach einem Lebenszeichen. Standardmäßig ohne Ton und Vibration.</string>
+    <string name="lz_answer_channel_name">Antworten</string>
+    <string name="lz_answer_channel_description">Wenn ein Kontakt auf deine Anfrage antwortet. Abschalten betrifft die Anfragen nicht.</string>
 
     <!-- Notification and full-screen display. The neutral title is all the lock screen shows. -->
     <string name="lz_neutral_title">Lebenszeichen?</string>
