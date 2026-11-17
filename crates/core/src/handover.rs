@@ -410,6 +410,7 @@ impl Device {
             outbox: Vec::new(),
             transfers: Vec::new(),
             parked: Vec::new(),
+            reports: Default::default(),
         }
     }
 }

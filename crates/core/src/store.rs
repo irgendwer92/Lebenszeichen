@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 use crate::contact::{ContactState, Seen};
 use crate::crypto::GroupKey;
 use crate::pairing::{Address, PendingInvitation};
-use crate::wire::{ENVELOPE_LEN, MailboxId, READER_ID_LEN, ReaderId, RelayUrl, Token, TransferId};
+use crate::wire::{
+    ENVELOPE_LEN, MailboxId, MessageId, READER_ID_LEN, ReaderId, Reason, RelayUrl, Token,
+    TransferId,
+};
 
 /// Version of the stored format. Raised on incompatible changes.
 pub const FORMAT_VERSION: u32 = 1;
@@ -59,6 +62,10 @@ pub struct Device {
     /// Sync messages about contacts this device does not know yet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parked: Vec<Parked>,
+    /// Status reports of this device. Local only: never part of the
+    /// handover or the group sync.
+    #[serde(default, skip_serializing_if = "Reports::is_empty")]
+    pub reports: Reports,
 }
 
 /// The sync mailbox of the own devices and the group key.
@@ -182,6 +189,65 @@ pub struct StoredContact {
     pub state: ContactState,
 }
 
+/// What this device does with reported states. See `report.rs`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reports {
+    /// The reported state while set; may lie in the past, then unused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<ReportedState>,
+    /// Per contact, only where it differs from the default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<ReportSetting>,
+    /// When open requests arrived on this device; the waiting time starts
+    /// there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arrivals: Vec<Arrival>,
+    /// Token for reports from other apps (Android) or through a shared
+    /// socket. `None`: such reports are off.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
+    pub token: Option<Token>,
+}
+
+impl Reports {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A state reported through the local interface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportedState {
+    pub reason: Reason,
+    /// End of the state, Unix seconds; it applies while `now < until`.
+    pub until: u64,
+}
+
+/// Whether reported answers go to a contact from this device, and after
+/// which waiting time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportSetting {
+    /// Own mailbox of the contact.
+    #[serde(with = "crate::hex")]
+    pub mailbox: MailboxId,
+    pub allowed: bool,
+    pub delay_minutes: u32,
+}
+
+/// When a request arrived on this device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Arrival {
+    /// Own mailbox of the contact.
+    #[serde(with = "crate::hex")]
+    pub mailbox: MailboxId,
+    #[serde(with = "crate::hex")]
+    pub request: MessageId,
+    pub at: u64,
+}
+
 /// An invitation handed out and not yet accepted.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredInvitation {
@@ -211,6 +277,7 @@ impl Device {
             outbox: Vec::new(),
             transfers: Vec::new(),
             parked: Vec::new(),
+            reports: Reports::default(),
         }
     }
 
