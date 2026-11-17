@@ -22,8 +22,9 @@ LABEL org.opencontainers.image.title="Lebenszeichen" \
 
 # ca-certificates: the relay certificate is verified by the system store.
 # jq: reads /data/options.json in the Home Assistant app.
+# tzdata: times on the page and in the log follow TZ (UTC without it).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates jq \
+ && apt-get install -y --no-install-recommends ca-certificates jq tzdata \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --uid 1000 --user-group --no-create-home --shell /usr/sbin/nologin lebenszeichen \
  && install -d -o 1000 -g 1000 -m 0700 /data /run/lebenszeichen

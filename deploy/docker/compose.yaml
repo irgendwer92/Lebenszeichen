@@ -17,6 +17,8 @@ services:
 
     environment:
       LANG: en_US.UTF-8
+      # Times on the page and in the log; your zone, e.g. Europe/Berlin.
+      TZ: Etc/UTC
 
     volumes:
       # State: device keys and contacts. Back this up and keep it private.
