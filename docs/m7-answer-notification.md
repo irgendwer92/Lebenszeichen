@@ -22,26 +22,37 @@ its own (roadmap).
   connection (`spawn_listener`), "Fetch" in the tray (`spawn_sync`) and the
   `sync` command.
 - Desktop (`desktop/notify.rs`): `Kind::Answer`. D-Bus: urgency normal,
-  sound of the system, default expiry, one action (click) that shows the
-  main window. Toast: no scenario, no button, default sound, group
-  `answers`. Answer notifications never enter `Screen`, so closing or
-  clicking one answers nothing.
+  the sound `message-new-instant` as `sound-name` hint (without a hint the
+  services play nothing), default expiry, one action (click) that shows
+  the main window, from the main thread. Toast: no scenario, no button,
+  default sound, group `answers`, protocol activation of
+  `lebenszeichen-open:`; the app registers that scheme under
+  `HKCU\Software\Classes` at every start (the uninstaller leaves it, like
+  the AppUserModelID). Answer notifications never enter `Screen`, so
+  closing or clicking one answers nothing.
 - Android: channel `answers_v1` (default importance), `AnswerPresenter`.
   In the background `background::fetch` returns `answers` and
   `FetchWorker` shows them; with the app open the core calls the plugin
   command `showAnswer` through the plugin handle.
 
-## Test record
+## Test record (2026-11-17)
 
-To do on the devices (Phone, Windows, Linux), with requests from the `lz`
-test contact:
+Requests from the user's devices to an `lz` test contact, which answered
+with `lz respond` and `lz report … asleep`.
 
-- [ ] Linux: manual answer and reported answer appear with sound; click
-      opens the main window; closing sends nothing.
-- [ ] Windows: the same with toasts.
-- [ ] Phone, app in the background: notification with sound and name on
-      the lock screen; tap opens the app.
-- [ ] Phone, app open: the same.
-- [ ] Phone: channel "Answers" turned off; answers no longer notify,
-      requests still do.
-- [ ] One notification per answer on each device.
+- [x] Linux (KDE Plasma 6.7, Wayland): manual and reported answer, text
+      and sound; click opens the main window from the tray; closing sends
+      nothing. Plasma plays a sound only with the `sound-name` hint, and
+      not while the system's "Notification" stream is muted.
+- [x] Windows: toast with sound, no button. A click on a toast in the
+      notification center does not reach a running app that is not
+      packaged, so the answer toast opens `lebenszeichen-open:`, a scheme
+      the app registers for the user at every start; the single-instance
+      check shows the window. Windows did not ask which app to use.
+- [x] Phone (Fairphone 4, signed release APK from the branch), app in the
+      background and locked: notification with sound and name on the lock
+      screen; tap opens the app. App open: shown through `showAnswer`.
+- [x] Phone: channel "Answers" off; no notification for an answer, a
+      request still arrives on the channel of requests.
+- [x] Each answer notified once on each device (Linux, Windows and phone
+      at the same time).
