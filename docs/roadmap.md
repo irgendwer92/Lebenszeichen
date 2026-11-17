@@ -168,6 +168,12 @@ Scope:
 - Optional in both: an HTTP port for the same interface, off by default, only with a token, with a warning that plain HTTP exposes the token on the network.
 - **Done when:** a Home Assistant automation and a host script each report "asleep" and the requester sees "“asleep” (reported)".
 
+### M8c – Handing a state to the own devices
+- A device can hand its reported state to the other own devices through the sync mailbox (new sync message, contacts and relay see nothing new); clearing is handed on the same way. Each receiving device answers its contacts after the waiting time where reported answers are allowed on it.
+- Option on the state (`share`), on the socket, the pipe and the Android intent.
+- Use case: the phone at 1% battery (Tasker trigger) hands "Phone empty" to the desktop and the Home Assistant add-on, and clears it again at 5%. The user's phone stays a long time at 1%, so 1% is the threshold.
+- **Done when:** the phone hands over "Phone empty" at 1%, the phone is switched off, a contact asks and sees "“Phone empty” (reported)" from another device after the waiting time; at 5% the state is cleared on all devices.
+
 ### M9 – Hardening
 - Review of encryption and relay by a second person.
 - Guide for self-hosters, including logs turned off in the reverse proxy.
