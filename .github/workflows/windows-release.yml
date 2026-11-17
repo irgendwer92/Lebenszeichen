@@ -7,9 +7,6 @@ name: Windows release
 on:
   push:
     tags: ["v*"]
-    # Temporary, for testing M6 on a Windows PC before the merge (a workflow
-    # can only be started by hand once it is on main). Remove before merging.
-    branches: [m6-windows]
   workflow_dispatch:
 
 permissions:

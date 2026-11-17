@@ -111,6 +111,41 @@ desktop session, so windows, tray and notifications are visible there.
 
 1. Do Not Disturb: foreground window only when Windows accepts
    notifications, otherwise toast; matches "the system's Do Not Disturb is
-   respected".
+   respected". Changed on 2026-11-17, see below.
 2. Autostart: on by default after the first start, can be turned off in ⚙.
 3. Installer: NSIS per user, unsigned for now.
+
+## Changed on 2026-11-17, after the test on the PC
+
+- Decision 1: on Windows every request comes as a notification, and in
+  addition as a foreground window unless Focus Assist is on. Reason: during
+  a full-screen video Windows showed neither, because it holds notifications
+  back there; and `SHQueryUserNotificationState` does not report Focus
+  Assist on Windows 10, so the window appeared despite it. Focus Assist is
+  now read through `ntdll` (WNF, undocumented); if that fails, the window
+  appears.
+- The relay accepts 60 instead of 20 messages per hour and mailbox: the own
+  devices of a person share their sync mailbox, and adding and testing
+  devices hit 20 within an hour. A blocked outbox is now said once, not at
+  every fetch.
+- Errors of the notification service appear in the main window; a release
+  build on Windows has no console for them.
+
+## Checked on 2026-11-17 (Windows 10, installer from the CI)
+
+- Installer per user without administrator rights, language of the system,
+  Start menu shortcut; uninstall removes the autostart entry.
+- First start shows the window, "Start at login" is on; after logging in
+  again the app is only in the tray and a request arrives.
+- Tray: left click shows the window, right click the menu.
+- Foreground window above all windows without keyboard focus, no scroll bar.
+- Notification and window together: an answer through either withdraws the
+  other, and exactly one answer arrives (window, button, click on the
+  notification, closing it with ✕, click in the notification center).
+- Focus Assist "Alarms only" and "Priority only": notification only, no
+  window.
+- Windows app as second device of a person (M5): adding, check codes, an
+  answer on one withdraws the request on the other.
+
+Still open: Do Not Disturb on Windows 11; on Linux, a check that the split
+notification code, the start into the tray and autostart work as before.

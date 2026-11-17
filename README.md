@@ -26,7 +26,9 @@ systems. M4 (Android app) is complete: phone and desktop request each other
 via their own relay with wake signals, and the CI builds a signed APK. M5
 (multiple devices) is complete: a person's phone and computer share contacts,
 an answer on one withdraws the request on the other, and new devices are added
-with a QR code and two check codes. Status in [docs/roadmap.md](docs/roadmap.md).
+with a QR code and two check codes. M6 (Windows) is done: an installer from
+the CI, notification and foreground window, start at login; two checks are
+still open (Do Not Disturb on Windows 11, Linux after the changes). Status in [docs/roadmap.md](docs/roadmap.md).
 
 | Milestone | Content |
 |---|---|
@@ -102,14 +104,15 @@ crates/
 ├── cli/     Client without a UI (program: lz)
 └── relay/   Relay server (program: lz-relay)
 app/
-├── src-tauri/   Tauri shell for Linux desktop and Android
+├── src-tauri/   Tauri shell for the Linux and Windows desktop and Android
 ├── ui/          UI for both (plain HTML without a build step)
 └── android/     Kotlin layer: UnifiedPush, full-screen display, notifications
 docs/        Concept, protocol, roadmap, walking skeleton M1, Android release, Windows release, draft of the license exception
 ```
 
-`app/` is not part of the Cargo workspace. The desktop app for Linux is built
-and started locally (needs WebKitGTK 4.1 and GTK 3):
+`app/` is not part of the Cargo workspace. The desktop app is built and
+started locally, on Linux with WebKitGTK 4.1 and GTK 3, on Windows with the
+Visual Studio Build Tools (WebView2 is part of Windows 10 and 11):
 
 ```sh
 cd app/src-tauri
