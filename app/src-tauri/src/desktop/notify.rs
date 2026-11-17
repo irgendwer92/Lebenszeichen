@@ -119,8 +119,12 @@ struct Text {
 enum Kind {
     /// With the label of the button that sends the sign of life.
     Request { action: String },
-    /// With the label of a click, which shows the main window.
-    Answer { open: String },
+    /// With the label of a click, which shows the main window. A toast
+    /// needs none.
+    Answer {
+        #[cfg_attr(windows, allow(dead_code))]
+        open: String,
+    },
 }
 
 impl Text {

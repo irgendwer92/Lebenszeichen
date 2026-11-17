@@ -315,7 +315,7 @@ fn escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Text, ToastDismissalReason, dismissal, escape, toast_xml};
+    use super::{Kind, Text, ToastDismissalReason, dismissal, escape, toast_xml};
 
     #[test]
     fn only_the_person_dismisses() {
