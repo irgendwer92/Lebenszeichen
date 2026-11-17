@@ -52,8 +52,8 @@ const HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Most connections served at the same time; further ones are closed.
-#[cfg(any(unix, windows))]
-const MAX_CONNECTIONS: usize = 16;
+/// Public for servers that accept connections of their own, such as TCP.
+pub const MAX_CONNECTIONS: usize = 16;
 
 /// The only path of the interface.
 const STATE_PATH: &str = "/state";
@@ -68,7 +68,17 @@ pub struct Local {
     /// Source of the current time.
     pub clock: Clock,
     /// If set, every request needs `Authorization: Bearer <token in hex>`.
-    pub token: Option<Token>,
+    pub token: Option<TokenSource>,
+}
+
+/// Where the token that requests must carry comes from.
+pub enum TokenSource {
+    /// A token fixed when the interface starts.
+    Fixed(Token),
+    /// The token in the state file (`reports.token`), read for every
+    /// request, so that a renewed token applies at once. Without a state
+    /// file or a token in it, every request is refused.
+    Stored,
 }
 
 /// Body of `POST /state`.
@@ -349,10 +359,26 @@ async fn handle(request: Request<Incoming>, local: Arc<Local>) -> Answer {
     if request.uri().path() != STATE_PATH {
         return error(StatusCode::NOT_FOUND, "not found");
     }
-    if let Some(token) = &local.token
-        && !authorized(&request, token)
-    {
-        return error(StatusCode::UNAUTHORIZED, "token required");
+    if let Some(source) = &local.token {
+        let given = bearer(&request);
+        let allowed = match source {
+            TokenSource::Fixed(token) => matches(given.as_ref(), Some(token)),
+            TokenSource::Stored => {
+                let stored = blocking(Arc::clone(&local), |local| match local.store.load() {
+                    Ok(device) => Ok(device.reports.token),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+                    Err(e) => Err(e),
+                })
+                .await;
+                match stored {
+                    Ok(token) => matches(given.as_ref(), token.as_ref()),
+                    Err(answer) => return *answer,
+                }
+            }
+        };
+        if !allowed {
+            return error(StatusCode::UNAUTHORIZED, "token required");
+        }
     }
     match *request.method() {
         Method::GET => get_state(local).await,
@@ -454,19 +480,24 @@ async fn blocking<T: Send + 'static>(
     }
 }
 
-/// Whether the request carries `Authorization: Bearer <token>`, the token
-/// in lower-case hex. Missing and wrong tokens are treated alike.
-fn authorized(request: &Request<Incoming>, token: &Token) -> bool {
-    let Some(given) = request
+/// The token of `Authorization: Bearer <token>`, the token in lower-case
+/// hex; `None` if missing or malformed.
+fn bearer(request: &Request<Incoming>) -> Option<Token> {
+    request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .and_then(decode_token)
-    else {
-        return false;
-    };
-    given.ct_eq(token).into()
+}
+
+/// Whether a token was given and equals the expected one, compared in
+/// constant time. Missing and wrong tokens are treated alike.
+fn matches(given: Option<&Token>, expected: Option<&Token>) -> bool {
+    match (given, expected) {
+        (Some(given), Some(expected)) => given.ct_eq(expected).into(),
+        _ => false,
+    }
 }
 
 /// Decodes a token written as exactly 64 lower-case hex digits.
@@ -542,7 +573,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
 
-    use super::{Local, bind, default_socket_path, serve};
+    use super::{Local, TokenSource, bind, default_socket_path, serve};
     use crate::ctx::Clock;
 
     const NOW: u64 = 1_800_000_000;
@@ -570,7 +601,7 @@ mod tests {
         let local = Local {
             store: store.clone(),
             clock: Clock::Manual(Arc::new(AtomicU64::new(NOW))),
-            token,
+            token: token.map(TokenSource::Fixed),
         };
         let task = tokio::spawn(serve(listener, local));
         Server {

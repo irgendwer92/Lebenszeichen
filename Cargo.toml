@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/wire", "crates/core", "crates/client", "crates/cli", "crates/relay"]
+members = ["crates/wire", "crates/core", "crates/client", "crates/cli", "crates/relay", "crates/server"]
 # Die Tauri-App baut nur mit Android-SDK oder WebKitGTK und hat einen eigenen
 # Abhängigkeitsbaum. Sie bleibt bis M3 außerhalb dieses Workspace, damit der
 # Ablauf "Prüfen" schlank bleibt.

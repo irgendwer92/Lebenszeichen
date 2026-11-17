@@ -1174,6 +1174,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "lz-server"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "lz-client",
+ "lz-core",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "lz-wire"
 version = "0.0.0"
 dependencies = [
