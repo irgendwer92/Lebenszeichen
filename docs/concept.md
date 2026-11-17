@@ -115,16 +115,16 @@ The asking side learns of an answer by a notification on each of its devices: "A
 External programs (sleep detection, home automation, a script on the CPAP device) report a state to the app on the same device.
 
 **Scope**
-- `setzen(grund, dauer)`: The state applies from now on for the given time span and expires on its own afterward.
-- `löschen()`: The state ends immediately.
+- `set(reason, duration)`: The state applies from now on for the given time span and expires on its own afterward.
+- `clear()`: The state ends immediately.
 - There is always at most one state; a new one replaces the old one.
 
 **Rules**
 - The report is used only after the configurable waiting time for a normal response has passed, and only if it is still valid then.
-- Configurable per contact whether reported responses are sent. Default: off.
+- Configurable per contact and per device whether reported responses are allowed from this device. Default: off.
 - The reason is a short text that B sets personally. A sees exactly this text, so "asleep" instead of "CPAP on".
 - Only the reason and the "reported" marker are transmitted, never the remaining duration or the time of the report.
-- Reachable locally only: Unix socket (Linux), named pipe (Windows), intent with its own permission (Android). No network port.
+- Reachable locally only: Unix socket (Linux, also through a bind mount into containers), named pipe (Windows), on Android an intent with a token behind a switch that is off by default. No network port; the only exception is the server container and Home Assistant add-on, which can open an HTTP port on request, with a token and a warning that plain HTTP exposes the token on the network.
 - The report applies only on the device that received it.
 
 **Not planned:** transmitting audio snippets or other sensor data. Android denies microphone access to services started from the background, and the feature would have high potential for misuse.

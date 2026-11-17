@@ -255,6 +255,45 @@ pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge
     })
 }
 
+/// `CoreBridge.nativeReportState(context, action, token, reason, minutes): String`
+/// – a state report from another app (`StateReceiver`). `action` is `"set"`
+/// or `"clear"`; `minutes` is the text of the extra, whatever type the
+/// sender used. Answers `{"applied":…,"report_wait":…}`; a report that is
+/// not accepted is dropped without saying why.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_irgendwer92_lebenszeichen_droid_CoreBridge_nativeReportState<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    context: JObject<'local>,
+    action: JString<'local>,
+    token: JString<'local>,
+    reason: JString<'local>,
+    minutes: JString<'local>,
+) -> jstring {
+    entry(&mut env, &context, |env, path| {
+        let action = optional_string(env, &action);
+        let token = optional_string(env, &token);
+        let reason = optional_string(env, &reason);
+        let minutes = optional_string(env, &minutes);
+        let call = match action.as_deref() {
+            Some("set") => background::External::Set {
+                reason: reason.as_deref(),
+                minutes: minutes.as_deref(),
+            },
+            Some("clear") => background::External::Clear,
+            _ => {
+                return background::Applied {
+                    applied: false,
+                    report_wait: None,
+                };
+            }
+        };
+        background::report_from_app(&path, token.as_deref(), call)
+    })
+}
+
 /// `CoreBridge.nativeLanguage(context): String?` – the language in effect,
 /// `"en"` or `"de"`: the setting of this device, or for `system` the first
 /// locale of the context; languages without a translation give `"en"`. Used

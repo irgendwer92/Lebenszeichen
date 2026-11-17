@@ -25,7 +25,7 @@ fn text(id: &str) -> String {
     lang::texts().text(id, &[])
 }
 use lz_core::store::{JsonFile, Store};
-use lz_core::wire::{CodeKind, Rules, SetupCode, setup_code};
+use lz_core::wire::{CodeKind, SetupCode, setup_code};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -69,6 +69,8 @@ pub fn setup(app: &mut tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>
         flow: Mutex::new(None),
     });
     spawn_listener(app.handle().clone(), path.clone());
+    #[cfg(all(desktop, any(unix, windows)))]
+    spawn_local_interface(path.clone());
     Ok(path)
 }
 
@@ -262,6 +264,72 @@ fn spawn_listener(app: AppHandle, path: PathBuf) {
                 }
             }
         });
+    });
+}
+
+/// Serves the local interface (`docs/m8-local-interface.md`) on
+/// `$XDG_RUNTIME_DIR/lebenszeichen/app.sock` for as long as the app runs.
+/// Only the state file changes; the background fetch sends reported
+/// answers when they are due. Without a socket the app works as before.
+#[cfg(all(desktop, unix))]
+fn spawn_local_interface(path: PathBuf) {
+    use lz_client::local::{Local, bind, default_socket_path, serve};
+    std::thread::spawn(move || {
+        let Some(socket) = default_socket_path("app") else {
+            eprintln!("lebenszeichen: no XDG_RUNTIME_DIR, no local interface");
+            return;
+        };
+        let listener = match bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!(
+                    "lebenszeichen: local interface {}: {error}",
+                    socket.display()
+                );
+                return;
+            }
+        };
+        let Ok(runtime) = runtime() else { return };
+        let local = Local {
+            store: JsonFile::new(path),
+            clock: Clock::System,
+            token: None,
+        };
+        if let Err(error) = runtime.block_on(serve(listener, local)) {
+            eprintln!("lebenszeichen: local interface: {error}");
+        }
+    });
+}
+
+/// Serves the local interface (`docs/m8-local-interface.md`) on the named
+/// pipe `\\.\pipe\lebenszeichen-<user SID>-app` (`pipe::pipe_name`) for
+/// as long as the app runs. Only the current user may open it, remote
+/// clients are rejected. If the name is taken already, by an app that runs
+/// or by someone else, the app does not serve and works as before.
+#[cfg(all(desktop, windows))]
+fn spawn_local_interface(path: PathBuf) {
+    use crate::pipe::{Descriptor, current_user_sid, pipe_name};
+    use lz_client::local::{Local, serve_pipe};
+    std::thread::spawn(move || {
+        let (name, descriptor) = match current_user_sid()
+            .and_then(|sid| Ok((pipe_name(&sid), Descriptor::for_user(&sid)?)))
+        {
+            Ok(found) => found,
+            Err(error) => {
+                eprintln!("lebenszeichen: local interface: {error}");
+                return;
+            }
+        };
+        let Ok(runtime) = runtime() else { return };
+        let local = Local {
+            store: JsonFile::new(path),
+            clock: Clock::System,
+            token: None,
+        };
+        let create = |first| descriptor.create(&name, first);
+        if let Err(error) = runtime.block_on(serve_pipe(create, local)) {
+            eprintln!("lebenszeichen: local interface {name}: {error}");
+        }
     });
 }
 
@@ -581,14 +649,21 @@ pub struct RulesCard {
     weekly_limit: u16,
     /// How often the own side may ask the contact, as text.
     peer: String,
+    /// Whether this device answers the contact with the reported state.
+    reports_allowed: bool,
+    /// After how many minutes without a manual answer.
+    report_delay_minutes: u32,
 }
 
-fn rules_card(own: &Rules, peer: &Rules, t: Texts) -> RulesCard {
+fn rules_card(view: &ContactView, t: Texts) -> RulesCard {
+    let own = &view.own_rules;
     RulesCard {
         interval_hours: f64::from(own.min_interval_minutes) / 60.0,
         expiry_hours: f64::from(own.expiry_minutes) / 60.0,
         weekly_limit: own.weekly_limit,
-        peer: show::rules(t, peer),
+        peer: show::rules(t, &view.peer_rules),
+        reports_allowed: view.reports_allowed,
+        report_delay_minutes: view.report_delay_minutes,
     }
 }
 
@@ -649,9 +724,12 @@ pub struct InvitationCard {
 pub struct Cards {
     contacts: Vec<Card>,
     invitations: Vec<InvitationCard>,
+    /// The reported state of this device as text, while it applies.
+    state: Option<String>,
 }
 
 fn card(view: ContactView, now: u64, t: Texts) -> Card {
+    let rules = (view.status == Status::Paired).then(|| rules_card(&view, t));
     let (status, code) = match view.status {
         Status::Paired => ("paired", None),
         Status::AwaitingReveal => ("awaiting_reveal", None),
@@ -700,13 +778,22 @@ fn card(view: ContactView, now: u64, t: Texts) -> Card {
             LastResponse::Manual { at } => format!("✓ {}", when(t, at, now)),
             LastResponse::Reported { reason } => reported(t, reason),
         }),
-        rules: paired.then(|| rules_card(&view.own_rules, &view.peer_rules, t)),
+        rules,
     }
 }
 
 fn cards(overview: Overview, t: Texts) -> Cards {
     let now = overview.now;
     Cards {
+        state: overview.state.map(|state| {
+            t.text(
+                "app-reported-state",
+                &[
+                    ("reason", Arg::Text(&show::reported_state(t, &state.reason))),
+                    ("until", Arg::Text(&when(t, state.until, now))),
+                ],
+            )
+        }),
         contacts: overview
             .contacts
             .into_iter()
@@ -804,6 +891,67 @@ pub async fn set_rules(
     }
     run(path(&state), async move |ctx| {
         ctx.rules(&name, interval, expiry, weekly_limit).await
+    })
+    .await
+}
+
+/// Whether this device answers a contact with the reported state, and
+/// after how many minutes.
+#[tauri::command]
+pub async fn set_report_setting(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    allowed: bool,
+    delay_minutes: u32,
+) -> Result<Reply<()>, String> {
+    run(path(&state), async move |ctx| {
+        ctx.set_report_setting(&name, allowed, Some(delay_minutes))
+            .map(drop)
+    })
+    .await
+}
+
+/// Ends the reported state of this device.
+#[tauri::command]
+pub async fn clear_state(state: tauri::State<'_, AppState>) -> Result<Reply<()>, String> {
+    run(path(&state), async |ctx| ctx.clear_state()).await
+}
+
+/// The token for state reports from other apps (Android), or `None` if
+/// they are not accepted.
+#[tauri::command]
+pub async fn report_token(
+    state: tauri::State<'_, AppState>,
+) -> Result<Reply<Option<String>>, String> {
+    run(path(&state), async |ctx| ctx.report_token()).await
+}
+
+/// Accepts state reports from other apps; keeps an existing token.
+#[tauri::command]
+pub async fn enable_report_token(
+    state: tauri::State<'_, AppState>,
+) -> Result<Reply<Option<String>>, String> {
+    run(path(&state), async |ctx| {
+        ctx.enable_report_token().map(Some)
+    })
+    .await
+}
+
+/// Replaces the token for state reports from other apps.
+#[tauri::command]
+pub async fn renew_report_token(
+    state: tauri::State<'_, AppState>,
+) -> Result<Reply<Option<String>>, String> {
+    run(path(&state), async |ctx| ctx.renew_report_token().map(Some)).await
+}
+
+/// Stops accepting state reports from other apps.
+#[tauri::command]
+pub async fn disable_report_token(
+    state: tauri::State<'_, AppState>,
+) -> Result<Reply<Option<String>>, String> {
+    run(path(&state), async |ctx| {
+        ctx.disable_report_token().map(|()| None)
     })
     .await
 }
@@ -1115,20 +1263,26 @@ mod tests {
             last_response: None,
             own_rules: Rules::DEFAULT,
             peer_rules: Rules::DEFAULT,
+            reports_allowed: false,
+            report_delay_minutes: 15,
         }
     }
 
     #[test]
     fn rules_in_hours() {
-        let card = rules_card(
-            &Rules::DEFAULT,
-            &Rules {
+        let view = ContactView {
+            peer_rules: Rules {
                 min_interval_minutes: 90,
                 expiry_minutes: 60,
                 weekly_limit: 2,
             },
-            de(),
-        );
+            reports_allowed: true,
+            report_delay_minutes: 30,
+            ..paired()
+        };
+        let card = rules_card(&view, de());
+        assert!(card.reports_allowed);
+        assert_eq!(card.report_delay_minutes, 30);
         assert_eq!(card.interval_hours, 6.0);
         assert_eq!(card.expiry_hours, 24.0);
         assert_eq!(card.weekly_limit, 7);

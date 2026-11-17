@@ -35,6 +35,15 @@ object CoreBridge {
 
     @JvmStatic private external fun nativeSetPushUrl(context: Context, url: String?): String?
 
+    @JvmStatic
+    private external fun nativeReportState(
+        context: Context,
+        action: String,
+        token: String?,
+        reason: String?,
+        minutes: String?,
+    ): String?
+
     @JvmStatic private external fun nativeSetForeground(on: Boolean)
 
     @JvmStatic private external fun nativeLanguage(context: Context): String?
@@ -104,6 +113,14 @@ object CoreBridge {
     /** Sets the push address, or removes it with `null`. */
     fun setPushUrl(context: Context, url: String?): JSONObject =
         call(context) { nativeSetPushUrl(context.applicationContext, url) }
+
+    /**
+     * A state report from another app: [action] is `"set"` or `"clear"`.
+     * The core checks the token; the answer has `applied` and, if a reported
+     * answer is pending, `report_wait` in seconds.
+     */
+    fun reportState(context: Context, action: String, token: String?, reason: String?, minutes: String?): JSONObject =
+        call(context) { nativeReportState(context.applicationContext, action, token, reason, minutes) }
 
     /** Turns every way of failing into an answer with `error`, in the chosen language. */
     private fun call(context: Context, native: () -> String?): JSONObject {

@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 use crate::ctx::{Ctx, Fail, Result};
 use crate::i18n::Texts;
 use crate::relay::{Connection, Delivery, Relay, RelayError, ServerFrame};
+use crate::reports::Failed;
 use crate::show::Notice;
 
 /// How long to wait for the relay to confirm subscriptions.
@@ -143,7 +144,10 @@ impl<R: Relay> Ctx<R> {
         self.flush_outbox().await?;
         self.check_pairings(&mut notices).await?;
         self.reconcile(&mut live, &deliveries, &mut notices).await?;
+        let mut failed_reports = Failed::new();
         if live.is_empty() && !listen {
+            self.send_due_reports(&mut notices, &mut failed_reports)
+                .await?;
             self.clean_invitations().await?;
             if notices.is_empty() && mode == Mode::Sync {
                 self.say(&tr!(self.texts(), "out-no-mailboxes"));
@@ -176,6 +180,7 @@ impl<R: Relay> Ctx<R> {
                         self.check_pairings(&mut notices).await?;
                         self.reconcile(&mut live, &deliveries, &mut notices).await?;
                         self.clean_invitations().await?;
+                        self.send_due_reports(&mut notices, &mut failed_reports).await?;
                         continue;
                     }
                 }
@@ -292,6 +297,8 @@ impl<R: Relay> Ctx<R> {
                 }
             }
         }
+        self.send_due_reports(&mut notices, &mut failed_reports)
+            .await?;
         self.clean_invitations().await?;
         if mode == Mode::Sync && notices.iter().all(Notice::is_dropped) {
             self.say(&tr!(self.texts(), "out-no-new-messages"));
@@ -308,7 +315,7 @@ impl<R: Relay> Ctx<R> {
         self.delete_state()
     }
 
-    fn show(&mut self, notice: &Notice) {
+    pub(crate) fn show(&mut self, notice: &Notice) {
         if let Some(on_notice) = &mut self.on_notice {
             on_notice(notice);
         }
@@ -382,6 +389,8 @@ impl<R: Relay> Ctx<R> {
         self.update(|device| {
             let queued = device.outbox.len();
             let (notices, follow_ups) = receive_into(t, device, relay, mailbox, data, now)?;
+            // The waiting time for a reported answer starts on arrival.
+            device.refresh_arrivals(now);
             Ok((notices, follow_ups, device.outbox.len() > queued))
         })
     }

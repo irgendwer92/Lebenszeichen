@@ -35,6 +35,22 @@
             android:name="io.github.irgendwer92.lebenszeichen.droid.ReactionReceiver"
             android:exported="false" />
 
+        <!--
+          State reports from other apps. Exported on purpose: Tasker, Automate
+          and the Home Assistant Companion app cannot hold a custom permission.
+          The protection is the token in the extras, checked by the core; with
+          the switch off every report is dropped. ${applicationId} becomes the
+          package of the app.
+        -->
+        <receiver
+            android:name="io.github.irgendwer92.lebenszeichen.droid.StateReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="${applicationId}.SET_STATE" />
+                <action android:name="${applicationId}.CLEAR_STATE" />
+            </intent-filter>
+        </receiver>
+
         <!-- Full-screen display, started by the full-screen intent of the notification. -->
         <activity
             android:name="io.github.irgendwer92.lebenszeichen.droid.RequestActivity"

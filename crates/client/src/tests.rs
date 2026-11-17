@@ -3,6 +3,7 @@
 
 mod devices;
 mod pairing;
+mod reports;
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};

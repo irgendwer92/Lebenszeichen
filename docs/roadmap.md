@@ -155,11 +155,26 @@ Scope:
 - Done criterion met on 2026-11-17 on Linux (KDE Plasma), Windows 10 and a Fairphone 4 with the release APK: manual and reported answers notify with sound on each device once; a click opens the app; the channel "Answers" turned off on the phone silences answers while requests still arrive. Found on the way: Plasma plays a sound only with a `sound-name` hint; on Windows a click in the notification center reaches the app only through a link scheme (`lebenszeichen-open:`).
 - **Done when:** on the phone and on the desktop, an answer to an own request appears as a notification, and the channel on Android can be turned off on its own.
 
-### M8 – Local interface
-- `setzen` and `löschen` via Unix socket, named pipe and Android intent.
-- Reported response after the waiting time has expired, approval per contact.
+### M8 – Local interface (completed on 2026-11-17)
+- `set` and `clear` via Unix socket, named pipe and Android intent with token.
+- Reported response after the waiting time, allowed per contact and device.
 - Example script.
+- Plan, decisions and test record in `m8-local-interface.md`.
+- Guide for users with recipes: `local-interface.md`.
 - **Done when:** a script reports "asleep" and the requester sees "“asleep” (reported)" after the waiting time.
+- Done criterion met on 2026-11-17 on Linux (example script on the socket), Windows 10 (PowerShell script on the pipe) and a Fairphone 4 (Home Assistant broadcast with token): each answered a request of the test contact with the reported state after the waiting time; a later tap still sent ✓. Found on the way: the window's new commands were missing from the app's permissions.
+
+### M8b – Container and Home Assistant
+- Docker image of `lz listen` (amd64, aarch64 later), state in a volume, socket in a mounted directory.
+- Home Assistant add-on on the same image; socket in `/share/lebenszeichen/`, with token; `shell_command` with `curl --unix-socket`.
+- Optional in both: an HTTP port for the same interface, off by default, only with a token, with a warning that plain HTTP exposes the token on the network.
+- **Done when:** a Home Assistant automation and a host script each report "asleep" and the requester sees "“asleep” (reported)".
+
+### M8c – Handing a state to the own devices
+- A device can hand its reported state to the other own devices through the sync mailbox (new sync message, contacts and relay see nothing new); clearing is handed on the same way. Each receiving device answers its contacts after the waiting time where reported answers are allowed on it.
+- Option on the state (`share`), on the socket, the pipe and the Android intent.
+- Use case: the phone at 1% battery (Tasker trigger) hands "Phone empty" to the desktop and the Home Assistant add-on, and clears it again at 5%. The user's phone stays a long time at 1%, so 1% is the threshold.
+- **Done when:** the phone hands over "Phone empty" at 1%, the phone is switched off, a contact asks and sees "“Phone empty” (reported)" from another device after the waiting time; at 5% the state is cleared on all devices.
 
 ### M9 – Hardening
 - Review of encryption and relay by a second person.
@@ -202,5 +217,4 @@ What is already being done for this now, without extra effort:
 
 - Wording of the app store exception.
 - Protection of the keys on the device. The storage format is decided, see `concept.md`.
-- Extend the local interface by "open request present?" and "answer" (for microcontroller satellites).
 - Restricted device role for devices without secure storage.

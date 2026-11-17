@@ -10,9 +10,11 @@ pub mod i18n;
 #[macro_use]
 pub mod ctx;
 pub mod devices;
+pub mod local;
 pub mod push;
 pub mod qr;
 pub mod relay;
+pub mod reports;
 pub mod show;
 pub mod sync;
 

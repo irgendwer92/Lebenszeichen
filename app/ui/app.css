@@ -431,6 +431,18 @@ label.check {
   color: var(--text);
 }
 
+.banner.state {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  align-items: center;
+}
+
+.rules .check {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
 .banner.success {
   background: var(--accent-soft);
   border-color: var(--accent);

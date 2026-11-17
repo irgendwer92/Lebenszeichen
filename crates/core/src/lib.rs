@@ -15,6 +15,7 @@ pub mod group;
 pub mod handover;
 mod hex;
 pub mod pairing;
+pub mod report;
 pub mod rules;
 pub mod store;
 

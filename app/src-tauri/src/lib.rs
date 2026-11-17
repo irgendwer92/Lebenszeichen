@@ -17,6 +17,8 @@ mod desktop;
 #[cfg(target_os = "android")]
 mod jni_bridge;
 mod lang;
+#[cfg(all(desktop, windows))]
+mod pipe;
 mod settings;
 
 /// Builds the command handler from the commands both systems share and,
@@ -48,6 +50,12 @@ macro_rules! handler {
             commands::respond,
             commands::remove,
             commands::set_rules,
+            commands::set_report_setting,
+            commands::clear_state,
+            commands::report_token,
+            commands::enable_report_token,
+            commands::renew_report_token,
+            commands::disable_report_token,
             commands::texts,
             commands::set_language,
             $($extra,)*

@@ -281,6 +281,7 @@ async function showDevice() {
     showError(String(error));
     return;
   }
+  showReportToken(status.packageName ?? "");
   const distributors = status.distributors ?? [];
   let push;
   if (status.distributorAcknowledged && status.endpoint) {
@@ -316,6 +317,56 @@ async function showDevice() {
     ),
   );
 }
+
+/// The switch for state reports from other apps (Android), with the token.
+async function showReportToken(packageName) {
+  let token;
+  try {
+    token = (await tauri.core.invoke("report_token")).value;
+  } catch (error) {
+    showError(String(error));
+    return;
+  }
+  applyReportToken(token, packageName);
+}
+
+let reportPackage = "";
+
+function applyReportToken(token, packageName = reportPackage) {
+  reportPackage = packageName;
+  $("report-token-on").checked = Boolean(token);
+  $("report-token-details").hidden = !token;
+  $("report-token").value = token ?? "";
+  $("report-token-intent").textContent = t("ui-report-token-intent", { package: packageName });
+}
+
+async function changeReportToken(command) {
+  try {
+    applyReportToken(await call(command));
+  } catch {
+    // `call` showed the error; show what holds.
+    showReportToken(reportPackage);
+  }
+}
+
+$("report-token-on").addEventListener("change", (event) =>
+  changeReportToken(event.target.checked ? "enable_report_token" : "disable_report_token"),
+);
+
+$("report-token-renew").addEventListener("click", () => changeReportToken("renew_report_token"));
+
+$("report-token-copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("report-token").value);
+    showError("");
+    $("report-token-copy").textContent = t("ui-copied");
+    setTimeout(() => ($("report-token-copy").textContent = t("ui-copy")), 2000);
+  } catch (error) {
+    showError(String(error));
+  }
+});
+
+$("report-token").addEventListener("focus", (event) => event.target.select());
 
 /// Shows the event log of the Kotlin layer, newest line first: what wake
 /// signals, fetches and answers did while the app was closed.
@@ -497,8 +548,73 @@ function settings(contact) {
     ),
   );
 
-  box.append(form, el("p", "note", t("ui-rules-peer-note", { name, rules: rules.peer })), danger);
+  box.append(
+    form,
+    el("p", "note", t("ui-rules-peer-note", { name, rules: rules.peer })),
+    reportsForm(contact),
+    danger,
+  );
   return box;
+}
+
+/// Whether this device answers the contact with the reported state, and
+/// after how many minutes. Unsaved values are kept in `drafts` like those
+/// of the rules.
+function reportsForm(contact) {
+  const name = contact.name;
+  const rules = contact.rules;
+  const draft = drafts.get(name) ?? {};
+  const form = el("form", "rules");
+  form.append(el("h3", "wide-field", t("ui-reports-heading")));
+
+  const allowed = el("input");
+  allowed.type = "checkbox";
+  allowed.name = "reportsAllowed";
+  allowed.checked = draft.reportsAllowed ?? rules.reports_allowed;
+  allowed.addEventListener("change", () => {
+    drafts.set(name, { ...(drafts.get(name) ?? {}), reportsAllowed: allowed.checked });
+  });
+  const check = el("label", "wide-field check");
+  check.append(allowed, document.createTextNode(` ${t("ui-reports-allowed", { name })}`));
+
+  const delay = el("input");
+  delay.type = "number";
+  delay.name = "reportsDelay";
+  delay.min = 1;
+  delay.max = 1440;
+  delay.step = 1;
+  delay.required = true;
+  delay.value = draft.reportsDelay ?? rules.report_delay_minutes;
+  delay.addEventListener("input", () => {
+    drafts.set(name, { ...(drafts.get(name) ?? {}), reportsDelay: delay.value });
+  });
+  const delayLabel = el("label", "", t("ui-reports-delay"));
+  delayLabel.append(delay);
+
+  const save = el("button", "wide-field", t("ui-save"));
+  save.type = "submit";
+  form.append(check, delayLabel, save, el("p", "note wide-field", t("ui-reports-note", { name })));
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    try {
+      await call("set_report_setting", {
+        name,
+        allowed: allowed.checked,
+        delayMinutes: Number(delay.value),
+      });
+      const rest = { ...(drafts.get(name) ?? {}) };
+      delete rest.reportsAllowed;
+      delete rest.reportsDelay;
+      drafts.set(name, rest);
+    } catch {
+      // Already shown by `call`.
+    } finally {
+      save.disabled = false;
+      await refresh();
+    }
+  });
+  return form;
 }
 
 /// The ⚙ button that folds the settings of a contact in and out.
@@ -679,6 +795,9 @@ async function refresh() {
     return;
   }
   refreshNotifications();
+  $("state-banner").hidden = !cards.state;
+  $("state-text").textContent = cards.state ?? "";
+  $("state-clear").setAttribute("aria-label", t("ui-clear-state"));
   const contacts = [...cards.contacts].sort((a, b) => rank(a) - rank(b));
   $("contacts").replaceChildren(...contacts.map(contactCard));
   $("invitations").replaceChildren(...cards.invitations.map(invitationCard));
@@ -1167,3 +1286,12 @@ tauri.core
     refresh();
     setInterval(refresh, REFRESH_MS);
   });
+
+$("state-clear").addEventListener("click", async () => {
+  try {
+    await call("clear_state");
+  } catch {
+    // Already shown by `call`.
+  }
+  await refresh();
+});
