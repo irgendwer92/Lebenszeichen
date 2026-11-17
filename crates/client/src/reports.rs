@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use lz_core::report::Invalid;
 use lz_core::store::ReportSetting;
-use lz_core::wire::{MessageId, ResponseKind};
+use lz_core::wire::{MessageId, Reason, ResponseKind};
 use rand_core::OsRng;
 
 use crate::ctx::{Ctx, Fail, Result, contact_mut, core};
@@ -38,6 +38,26 @@ fn invalid(t: Texts, error: Invalid) -> Fail {
 }
 
 impl<R: Relay> Ctx<R> {
+    /// Sets the reported state of this device for `minutes` from now.
+    pub fn set_state(&mut self, reason: &str, minutes: u32) -> Result<()> {
+        let t = self.texts();
+        let reason = Reason::new(reason.trim()).map_err(|_| fail!(t, "error-reason-long"))?;
+        let now = self.now();
+        self.update(|device| {
+            device
+                .set_state(reason, minutes, now)
+                .map_err(|error| invalid(t, error))
+        })
+    }
+
+    /// Ends the reported state of this device now.
+    pub fn clear_state(&mut self) -> Result<()> {
+        self.update(|device| {
+            device.clear_state();
+            Ok(())
+        })
+    }
+
     /// The setting for a contact: whether this device may answer it with a
     /// reported state, and after which waiting time.
     pub fn report_setting(&self, name: &str) -> Result<ReportSetting> {

@@ -25,7 +25,7 @@ fn text(id: &str) -> String {
     lang::texts().text(id, &[])
 }
 use lz_core::store::{JsonFile, Store};
-use lz_core::wire::{CodeKind, Rules, SetupCode, setup_code};
+use lz_core::wire::{CodeKind, SetupCode, setup_code};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -581,14 +581,21 @@ pub struct RulesCard {
     weekly_limit: u16,
     /// How often the own side may ask the contact, as text.
     peer: String,
+    /// Whether this device answers the contact with the reported state.
+    reports_allowed: bool,
+    /// After how many minutes without a manual answer.
+    report_delay_minutes: u32,
 }
 
-fn rules_card(own: &Rules, peer: &Rules, t: Texts) -> RulesCard {
+fn rules_card(view: &ContactView, t: Texts) -> RulesCard {
+    let own = &view.own_rules;
     RulesCard {
         interval_hours: f64::from(own.min_interval_minutes) / 60.0,
         expiry_hours: f64::from(own.expiry_minutes) / 60.0,
         weekly_limit: own.weekly_limit,
-        peer: show::rules(t, peer),
+        peer: show::rules(t, &view.peer_rules),
+        reports_allowed: view.reports_allowed,
+        report_delay_minutes: view.report_delay_minutes,
     }
 }
 
@@ -649,9 +656,12 @@ pub struct InvitationCard {
 pub struct Cards {
     contacts: Vec<Card>,
     invitations: Vec<InvitationCard>,
+    /// The reported state of this device as text, while it applies.
+    state: Option<String>,
 }
 
 fn card(view: ContactView, now: u64, t: Texts) -> Card {
+    let rules = (view.status == Status::Paired).then(|| rules_card(&view, t));
     let (status, code) = match view.status {
         Status::Paired => ("paired", None),
         Status::AwaitingReveal => ("awaiting_reveal", None),
@@ -700,13 +710,22 @@ fn card(view: ContactView, now: u64, t: Texts) -> Card {
             LastResponse::Manual { at } => format!("✓ {}", when(t, at, now)),
             LastResponse::Reported { reason } => reported(t, reason),
         }),
-        rules: paired.then(|| rules_card(&view.own_rules, &view.peer_rules, t)),
+        rules,
     }
 }
 
 fn cards(overview: Overview, t: Texts) -> Cards {
     let now = overview.now;
     Cards {
+        state: overview.state.map(|state| {
+            t.text(
+                "app-reported-state",
+                &[
+                    ("reason", Arg::Text(&show::reported_state(t, &state.reason))),
+                    ("until", Arg::Text(&when(t, state.until, now))),
+                ],
+            )
+        }),
         contacts: overview
             .contacts
             .into_iter()
@@ -806,6 +825,28 @@ pub async fn set_rules(
         ctx.rules(&name, interval, expiry, weekly_limit).await
     })
     .await
+}
+
+/// Whether this device answers a contact with the reported state, and
+/// after how many minutes.
+#[tauri::command]
+pub async fn set_report_setting(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    allowed: bool,
+    delay_minutes: u32,
+) -> Result<Reply<()>, String> {
+    run(path(&state), async move |ctx| {
+        ctx.set_report_setting(&name, allowed, Some(delay_minutes))
+            .map(drop)
+    })
+    .await
+}
+
+/// Ends the reported state of this device.
+#[tauri::command]
+pub async fn clear_state(state: tauri::State<'_, AppState>) -> Result<Reply<()>, String> {
+    run(path(&state), async |ctx| ctx.clear_state()).await
 }
 
 /// Generates a command that takes the name of a contact.
@@ -1115,20 +1156,26 @@ mod tests {
             last_response: None,
             own_rules: Rules::DEFAULT,
             peer_rules: Rules::DEFAULT,
+            reports_allowed: false,
+            report_delay_minutes: 15,
         }
     }
 
     #[test]
     fn rules_in_hours() {
-        let card = rules_card(
-            &Rules::DEFAULT,
-            &Rules {
+        let view = ContactView {
+            peer_rules: Rules {
                 min_interval_minutes: 90,
                 expiry_minutes: 60,
                 weekly_limit: 2,
             },
-            de(),
-        );
+            reports_allowed: true,
+            report_delay_minutes: 30,
+            ..paired()
+        };
+        let card = rules_card(&view, de());
+        assert!(card.reports_allowed);
+        assert_eq!(card.report_delay_minutes, 30);
         assert_eq!(card.interval_hours, 6.0);
         assert_eq!(card.expiry_hours, 24.0);
         assert_eq!(card.weekly_limit, 7);

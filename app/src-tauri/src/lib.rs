@@ -48,6 +48,8 @@ macro_rules! handler {
             commands::respond,
             commands::remove,
             commands::set_rules,
+            commands::set_report_setting,
+            commands::clear_state,
             commands::texts,
             commands::set_language,
             $($extra,)*
