@@ -91,7 +91,7 @@ Status:
 - Done: Notification on Linux via D-Bus (`src-tauri/src/desktop/notify.rs`): urgency "critical", without sound, stays until answered, with button "Send sign of life". Button, click and closing by hand send the sign of life; expiry and withdrawal by the app do not. If the request is no longer open, for example because it was answered in the window, the app withdraws the notification. If sending fails, it comes back. Checked on KDE Plasma (Wayland) against a local relay.
 - Done: Strict Content Security Policy for the app (only own files and Tauri's IPC, no inline code) instead of `"csp": null` from M1. The desktop interface runs with it; the Android prototype uses the same configuration and will be checked in M4.
 - Done: Invitation as QR code (`crates/client/src/qr.rs`, error correction M, alphanumeric mode; version 8 to 12). The desktop app shows it black on white above the text code, as SVG from the DOM, so the CSP stays unchanged; `lz invite --qr` shows it in the terminal. Scanned with a QR app on the phone, the text matches. Scanning in the app comes with M4.
-- Done: Settings per contact in the desktop app: how often the contact may ask (minimum interval and expiry in half hours up to one week, weekly limit 0 to 999), plus a read-only display of how often you may ask yourself. Only changed values are sent. Decided: The switch for reported responses comes with M7, together with the automation that uses it.
+- Done: Settings per contact in the desktop app: how often the contact may ask (minimum interval and expiry in half hours up to one week, weekly limit 0 to 999), plus a read-only display of how often you may ask yourself. Only changed values are sent. Decided: The switch for reported responses comes with M8, together with the automation that uses it.
 - Part of the done criterion met on 2026-11-14: desktop app and `lz` have requested and answered each other, against a local relay with freshly paired devices. The app asks via the button and receives the response in the background; `lz` asks, the app shows the request as a notification and in the window, the response arrives at `lz`. The lockouts afterwards follow the rules of both sides.
 - Done: Desktop interface reworked, with its own stylesheet (`style.css` stays with the Android prototype): contact list as main view, open requests highlighted at the top, verification codes large, settings and "Verbindung beenden" behind ⚙, invite and accept as fields from the header, history collapsed. Light and dark following the system, green accent. With this, the "interface reworked" part of the done criterion is met.
 - Done: Foreground window on X11 (`src-tauri/src/desktop/alert.rs`, `ui/alert.html`): instead of the notification, a small window above all others, without keyboard focus, not in the taskbar, one per request and slightly offset. Clicking into the window or closing it sends the sign of life, keys never do. If the request was answered another way, the app closes the window without a response; if it cannot be opened, the notification appears. The window may only fetch the text and response for its own request (own capability). Checked under XWayland on KDE Plasma (`GDK_BACKEND=x11`): above all windows, no focus, typing in another program sends nothing, click, closing, withdrawal and two windows at the same time. "On all workspaces" could not be checked with only one workspace.
@@ -141,13 +141,20 @@ Scope:
 - Installer, tray, foreground window, autostart.
 - **Done when:** M3 and M5 work the same on Windows.
 
-### M7 – Local interface
+### M7 – Answer notification
+- Feedback from a tester: the requester learns of the answer only in the app. A notification when the answer arrives: "Anna has answered" with the time, for a reported answer with the reason ("“asleep” (reported)").
+- Android: quiet notification on its own channel, which can be turned off in the system settings without touching the channel of requests. Desktop: an ordinary notification that expires on its own; closing it sends nothing.
+- Wording says that an answer came, not that the person is fine (see `concept.md`).
+- One notification per answer, also when another device of the same person answered.
+- **Done when:** on the phone and on the desktop, an answer to an own request appears as a notification, and the channel on Android can be turned off on its own.
+
+### M8 – Local interface
 - `setzen` and `löschen` via Unix socket, named pipe and Android intent.
 - Reported response after the waiting time has expired, approval per contact.
 - Example script.
 - **Done when:** a script reports "asleep" and the requester sees "“asleep” (reported)" after the waiting time.
 
-### M8 – Hardening
+### M9 – Hardening
 - Review of encryption and relay by a second person.
 - Guide for self-hosters, including logs turned off in the reverse proxy.
   - Note in it: The relay sends wake signals only to public addresses. ntfy has to be reachable from the internet anyway, otherwise the phone gets no wake signals when on the road. If relay and ntfy run on the same home server and the router cannot route connections to its own public address back (NAT loopback), a local DNS entry for the private address does not help, because the relay rejects it. The solution lies in the own network, for example turning on NAT loopback in the router.
@@ -163,7 +170,7 @@ Wanted, but without a date and without a decision between the approaches. The id
 
 **Approach A – satellite of a full client.** The microcontroller talks in the home network to a client that is already running (for example `cli` on a server), via a bridge script or home automation. Keys stay on the client.
 - Prerequisite: The local interface gets two more calls, "open request present?" and "answer". Not yet decided.
-- Low effort, possible from M7.
+- Low effort, possible from M8.
 - Works only as long as the client is reachable at home.
 
 **Approach B – standalone client.** The microcontroller speaks the protocol itself with the relay.
@@ -182,7 +189,7 @@ What is already being done for this now, without extra effort:
 - M1 deliberately comes before M2, although M2 is the foundation: M1 is the only place where the framework decision can still flip.
 - M2 and M1 can be worked on in parallel, because M1 only needs a placeholder function in the core.
 - M5 comes after M4, but the relay and the core know multiple devices already from M2. This way nothing has to be changed in the protocol later.
-- M6 and M7 are independent of each other and can be swapped.
+- M6, M7 and M8 are independent of each other and can be swapped.
 
 ## Open points
 

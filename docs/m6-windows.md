@@ -88,7 +88,7 @@ desktop session, so windows, tray and notifications are visible there.
 - Workflow "Windows release" on a tag `v*` and by hand, artifact
   `lebenszeichen-windows-setup`, with SHA-256 in the job summary.
 - Unsigned for now (decision 3): SmartScreen warns on first start. Signing
-  (for example SignPath for open source projects) is an open point for M8.
+  (for example SignPath for open source projects) is an open point for M9.
 - Checked on the PC: install, start from the Start menu, uninstall leaves
   no autostart entry behind.
 

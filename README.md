@@ -37,8 +37,9 @@ with a QR code and two check codes. Status in [docs/roadmap.md](docs/roadmap.md)
 | M4 | Android app |
 | M5 | Multiple devices |
 | M6 | Windows |
-| M7 | Local interface for status reports |
-| M8 | Hardening |
+| M7 | Notification when an answer arrives |
+| M8 | Local interface for status reports |
+| M9 | Hardening |
 
 ## Command line
 

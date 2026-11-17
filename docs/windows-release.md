@@ -9,7 +9,7 @@ gh workflow run windows-release.yml --ref main
 ```
 
 The installer is **not signed** (decision 3 in [m6-windows.md](m6-windows.md);
-signing is an open point for M8).
+signing is an open point for M9).
 
 ## Getting and checking the installer
 
