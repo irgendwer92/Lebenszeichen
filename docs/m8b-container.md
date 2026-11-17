@@ -37,6 +37,68 @@ Builds on M8 (`m8-local-interface.md`, guide `local-interface.md`).
   app in its own folder; `ingress: true`, `map: share:rw`, option
   `http_port`.
 
+## `lz-server`
+
+```
+lz-server [--state PATH]            state file (env LZ_STATE), default /data/device.json
+          --socket PATH             local interface, always with token
+          [--http ADDR]             same interface over TCP, token, warning in the log
+          [--page ADDR --page-allow IP ...]
+                                    the page; refuses every peer not listed
+          [--relay URL]             default relay for joining
+```
+
+- The token is created at the first start if there is none, written to
+  the log once, and kept in the state file (`Reports.token`).
+- Without a state file only the page runs (setup). After joining, the
+  process listens like `lz listen` and sends due reported answers; its
+  notices go to standard output (the app log in Home Assistant).
+- In Home Assistant: `--socket /share/lebenszeichen/lz.sock --page
+  0.0.0.0:8099 --page-allow 172.30.32.2`. Plain Docker: no page by
+  default; setup with `docker exec -it lebenszeichen lz device join …`.
+
+## Page API
+
+Relative URLs under the page (`api/…`), JSON, errors as
+`{"error": "<text in the language>"}` with 4xx/5xx.
+
+| Call | Body | Answer |
+|---|---|---|
+| `GET api/texts` | – | `{"lang":"en","texts":{"web-…":"…"}}` (raw `web-` texts, `{ $var }` placeholders) |
+| `GET api/status` | – | see below |
+| `POST api/join` | `{"relay":"https://…","name":"Home Assistant"}` | 202; the flow runs in the background |
+| `POST api/join/answer` | `{"matches":true}` | 204 |
+| `POST api/join/cancel` | – | 204 |
+| `PUT api/contacts/<name>/reports` | `{"allowed":true,"delay_minutes":15}` | 204 (name URL-encoded) |
+| `DELETE api/state` | – | 204 |
+| `POST api/token/renew` | – | `{"token":"<hex>"}` |
+
+`GET api/status`:
+
+```json
+{
+  "setup": "none | joining | ready",
+  "default_relay": "https://… or null",
+  "join": null,
+  "device": {"name": "Home Assistant", "others": ["Phone", "Laptop"]},
+  "state": {"reason": "asleep", "until": 1794962903, "text": "Reported state: “asleep” until today 07:00"},
+  "contacts": [
+    {"name": "Anna", "paired": true, "reports_allowed": false,
+     "report_delay_minutes": 15, "incoming": "Anna has been asking since … or null"}
+  ],
+  "token": "<64 hex digits>",
+  "socket": "/share/lebenszeichen/lz.sock",
+  "http": null
+}
+```
+
+While joining, `join` is
+`{"step": "device_code | check_device | confirm_device | check_handover | confirm_handover | done | failed",
+"code": "…", "qr": {"width": 33, "dark": [true, …]}, "progress": ["…"], "error": null}`
+(`qr` only with `device_code`, same format as `lz_client::qr::Qr`).
+`confirm_*` waits for `api/join/answer`. `device` is null before setup;
+`http` is `{"address": "0.0.0.0:8080"}` when the port is on.
+
 ## Facts checked against the Home Assistant docs (2026-11-17)
 
 - Ingress requests come only from the Supervisor at `172.30.32.2`; the app
