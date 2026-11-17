@@ -518,10 +518,6 @@ impl Shared {
         if let Event::Gone(Gone::Clicked) = event {
             // Some services leave the notification open after a click.
             self.close(id);
-            // Temporary for the test on Windows: shows that the click arrived.
-            let _ = self
-                .app
-                .emit(LINE_EVENT, format!("Answer notification {id} clicked"));
             // From the main thread, like the click on the tray icon.
             let app = self.app.clone();
             let _ = self
