@@ -7,6 +7,8 @@
 //! terminal, the app shows buttons, tests answer directly.
 
 use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use lz_core::handover::{Adding, NewDevice};
@@ -816,14 +818,20 @@ impl<R: Relay> Ctx<R> {
     }
 
     /// Sends the outbox to the sync mailbox. What the relay refuses stays
-    /// for the next fetch; after 24 hours it is dropped.
+    /// for the next fetch; after 24 hours it is dropped. A refusal is said
+    /// once, not again at every fetch while the outbox stays blocked for the
+    /// same reason.
     pub(crate) async fn flush_outbox(&mut self) -> Result<()> {
-        if let Some(error) = self.deliver_outbox().await? {
-            let text = tr!(
+        let refused = self.deliver_outbox().await?.map(|error| {
+            tr!(
                 self.texts(),
                 "warn-outbox-pending",
                 error = &error.text(self.texts())
-            );
+            )
+        });
+        if outbox_news(self.store.path(), refused.as_deref())
+            && let Some(text) = refused
+        {
             self.say(&text);
         }
         Ok(())
@@ -881,6 +889,36 @@ impl<R: Relay> Ctx<R> {
 }
 
 /// A failed relay call while joining.
+/// The refusal of the outbox last said, per state file. Kept for the life of
+/// the process: the app fetches in one process, and `lz sync` fetches once
+/// anyway.
+static OUTBOX_SAID: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
+
+/// Notes the state of the outbox of a state file: refused with `text`, or
+/// delivered (`None`). Whether a refusal is news and is to be said.
+fn outbox_news(path: &Path, text: Option<&str>) -> bool {
+    let mut said = OUTBOX_SAID
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let before = said.iter().position(|(p, _)| p == path);
+    match (before, text) {
+        (Some(i), Some(text)) if said[i].1 == text => false,
+        (Some(i), Some(text)) => {
+            said[i].1 = text.to_owned();
+            true
+        }
+        (None, Some(text)) => {
+            said.push((path.to_owned(), text.to_owned()));
+            true
+        }
+        (Some(i), None) => {
+            said.swap_remove(i);
+            false
+        }
+        (None, None) => false,
+    }
+}
+
 fn join_failed(t: Texts, error: RelayError, again: &str) -> Fail {
     match error {
         RelayError::HandoverExists => alarm(t, &tr!(t, "alarm-reply-taken", again = again)),
@@ -905,6 +943,20 @@ fn busy_or(t: Texts, error: RelayError) -> Fail {
 #[cfg(test)]
 mod tests {
     use super::{from_hex, to_hex, unique_name};
+
+    #[test]
+    fn a_blocked_outbox_is_said_once() {
+        use super::outbox_news;
+        let (a, b) = (std::path::Path::new("/a"), std::path::Path::new("/b"));
+        assert!(outbox_news(a, Some("full")));
+        assert!(!outbox_news(a, Some("full")));
+        // Another device, or another reason, is news.
+        assert!(outbox_news(b, Some("full")));
+        assert!(outbox_news(a, Some("rate limited")));
+        // Once delivered, the next refusal is news again.
+        assert!(!outbox_news(a, None));
+        assert!(outbox_news(a, Some("rate limited")));
+    }
 
     #[test]
     fn duplicate_names_get_a_number() {
