@@ -156,10 +156,17 @@ Scope:
 - **Done when:** on the phone and on the desktop, an answer to an own request appears as a notification, and the channel on Android can be turned off on its own.
 
 ### M8 – Local interface
-- `setzen` and `löschen` via Unix socket, named pipe and Android intent.
-- Reported response after the waiting time has expired, approval per contact.
+- `set` and `clear` via Unix socket, named pipe and Android intent with token.
+- Reported response after the waiting time, allowed per contact and device.
 - Example script.
+- Plan, decisions and test record in `m8-local-interface.md`.
 - **Done when:** a script reports "asleep" and the requester sees "“asleep” (reported)" after the waiting time.
+
+### M8b – Container and Home Assistant
+- Docker image of `lz listen` (amd64, aarch64 later), state in a volume, socket in a mounted directory.
+- Home Assistant add-on on the same image; socket in `/share/lebenszeichen/`, with token; `shell_command` with `curl --unix-socket`.
+- Optional in both: an HTTP port for the same interface, off by default, only with a token, with a warning that plain HTTP exposes the token on the network.
+- **Done when:** a Home Assistant automation and a host script each report "asleep" and the requester sees "“asleep” (reported)".
 
 ### M9 – Hardening
 - Review of encryption and relay by a second person.
@@ -202,5 +209,4 @@ What is already being done for this now, without extra effort:
 
 - Wording of the app store exception.
 - Protection of the keys on the device. The storage format is decided, see `concept.md`.
-- Extend the local interface by "open request present?" and "answer" (for microcontroller satellites).
 - Restricted device role for devices without secure storage.
