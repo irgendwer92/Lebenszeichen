@@ -164,11 +164,12 @@ Scope:
 - **Done when:** a script reports "asleep" and the requester sees "“asleep” (reported)" after the waiting time.
 - Done criterion met on 2026-11-17 on Linux (example script on the socket), Windows 10 (PowerShell script on the pipe) and a Fairphone 4 (Home Assistant broadcast with token): each answered a request of the test contact with the reported state after the waiting time; a later tap still sent ✓. Found on the way: the window's new commands were missing from the app's permissions.
 
-### M8b – Container and Home Assistant
+### M8b – Container and Home Assistant (completed on 2026-11-17)
 - Docker image of `lz listen` (amd64, aarch64 later), state in a volume, socket in a mounted directory.
 - Home Assistant add-on on the same image; socket in `/share/lebenszeichen/`, with token; `shell_command` with `curl --unix-socket`.
 - Optional in both: an HTTP port for the same interface, off by default, only with a token, with a warning that plain HTTP exposes the token on the network.
 - **Done when:** a Home Assistant automation and a host script each report "asleep" and the requester sees "“asleep” (reported)".
+- Plan, decisions, page API and test record in `m8b-container.md`. Done criterion met on 2026-11-17: a host script on the container's socket and a `shell_command` in Home Assistant OS each set a state, and the test contact received it as a reported answer after the waiting time.
 
 ### M8c – Handing a state to the own devices
 - A device can hand its reported state to the other own devices through the sync mailbox (new sync message, contacts and relay see nothing new); clearing is handed on the same way. Each receiving device answers its contacts after the waiting time where reported answers are allowed on it.

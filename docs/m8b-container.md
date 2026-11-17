@@ -130,5 +130,16 @@ While joining, `join` is
       device" and sent none.
 - Found: the image had no time zone data (times in UTC); `tzdata` added,
   `TZ` in the compose example.
-- [ ] Home Assistant app on HA OS: install from the repository, join from
-      the ingress page, `shell_command` reports "asleep".
+- [x] Image published by the workflow (`ghcr.io/irgendwer92/lebenszeichen:0.1.0`),
+      pulled anonymously.
+- [x] Home Assistant OS (amd64): repository
+      `https://github.com/irgendwer92/Lebenszeichen#m8b-container` added,
+      app installed and started, joined from the ingress page as a device
+      of the user's person. `shell_command` with the whole curl command in
+      `secrets.yaml` (`!secret` replaces only whole values) set the state
+      "ha" on `/share/lebenszeichen/lz.sock`; curl exists in the Home
+      Assistant container. A request of the test contact (22:00:29) was
+      answered with "“ha” (reported)" (22:01:38).
+- [x] Removing the device "testcontainer" from another device: the
+      container logged "This device was removed." and deleted its state
+      file.
