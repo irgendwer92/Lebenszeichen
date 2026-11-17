@@ -112,6 +112,23 @@ While joining, `join` is
   `returncode`; a non-zero exit code is no error, so automations check
   `returncode`.
 
-## Test record
+## Test record (2026-11-17)
 
-(to be filled)
+- [x] Image built locally (`docker build -f deploy/docker/Dockerfile .`),
+      run as uid 1000 with the page on `127.0.0.1` (`--page-allow
+      127.0.0.1`): socket 0600 in a 0700 directory; `401` without a state
+      file; page with the strict headers; `api/status` before setup.
+- [x] Joined from the page as the device "testcontainer" of the user's
+      person: device code, both check codes, contacts handed over; the
+      token was written to the log once. Per-contact setting on the page.
+- [x] Host script: `examples/report-state.sh set 30 container` with
+      `LZ_TOKEN` on the container's socket (401 without it); a request of
+      the test contact (21:35:24) was answered with "“container”
+      (reported)" (21:36:33).
+- [x] With a second device that still had a valid state, only one
+      reported answer went out; the container logged "Reported on another
+      device" and sent none.
+- Found: the image had no time zone data (times in UTC); `tzdata` added,
+  `TZ` in the compose example.
+- [ ] Home Assistant app on HA OS: install from the repository, join from
+      the ingress page, `shell_command` reports "asleep".
