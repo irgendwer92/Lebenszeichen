@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-enable-report-token"
+description = "Enables the enable_report_token command without any pre-configured scope."
+commands.allow = ["enable_report_token"]
+
+[[permission]]
+identifier = "deny-enable-report-token"
+description = "Denies the enable_report_token command without any pre-configured scope."
+commands.deny = ["enable_report_token"]
