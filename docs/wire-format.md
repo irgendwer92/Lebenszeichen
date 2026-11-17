@@ -354,7 +354,7 @@ Error codes:
 | 503 | `handovers_full` | 64 handovers are waiting on this relay |
 | 413 | `too_large` | Body longer than 512 bytes, for a handover longer than 64 KiB |
 | 429 | `mailbox_full` | Already 32 waiting messages |
-| 429 | `rate_limited` | More than 20 deliveries in the last hour |
+| 429 | `rate_limited` | More than 60 deliveries in the last hour |
 
 A voucher is valid for 10 minutes and for exactly one mailbox. The relay accepts arbitrary bodies up to 512 bytes and does not check their content.
 
@@ -479,7 +479,7 @@ Clarifications made during the implementation of the relay (`crates/relay`). The
 - **Voucher:** It is passed like a token in the header `Authorization: Bearer …`. An unknown, redeemed or expired voucher results in `401`. It is valid for exactly 600 seconds.
 - **Empty body** in `POST …/messages` results in `400 bad_request`. The `Content-Type` is not checked.
 - **Limits exceeded at the same time:** The rate limit is checked before the fill level, and `rate_limited` is returned. Rejected deliveries do not count. "Waiting" means: still stored, even if individual readers have already acknowledged it.
-- **Rate limit only in memory:** The relay keeps the arrival times for the limit of 20 per hour only in memory and only for one hour. After a restart, counting starts anew.
+- **Rate limit only in memory:** The relay keeps the arrival times for the limit of 60 per hour only in memory and only for one hour. After a restart, counting starts anew.
 - **Errors of the relay itself** report `500` with `{"error":"internal"}`.
 - **Readers:** At most 16 readers per mailbox, above that `400 bad_request`, because every reader can trigger a wake signal. A newly registered reader starts with acknowledgment 0 and receives all waiting messages; a repeated `PUT` only changes the push address. A body `{}` counts as `{"push_url":null}`. When a reader is unregistered, the relay immediately deletes the messages that all remaining readers have acknowledged.
 - **Push address:** at most 1024 bytes, only `https`, without user name and password, not `localhost`, and as an IP address only public ones. The relay resolves the host name itself when waking and connects only to the checked public addresses (IPv4 and IPv6), so that a second resolution cannot return anything different. No proxy, no redirects, timeout 5 seconds. `LZ_PUSH_ALLOWED_HOSTS` compares the host name exactly, case-insensitively and without subdomains. Invalid addresses result in `400 bad_request` on registration.

@@ -36,7 +36,7 @@ pub const MAX_HANDOVERS_PER_TOKEN: usize = 2;
 
 /// At most this many messages are accepted per mailbox within
 /// [`RATE_WINDOW_SECS`].
-pub const MAX_DELIVERIES_PER_WINDOW: usize = 20;
+pub const MAX_DELIVERIES_PER_WINDOW: usize = 60;
 
 /// Window for [`MAX_DELIVERIES_PER_WINDOW`].
 pub const RATE_WINDOW_SECS: i64 = 60 * 60;
