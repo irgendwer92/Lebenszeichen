@@ -69,6 +69,8 @@ pub fn setup(app: &mut tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>
         flow: Mutex::new(None),
     });
     spawn_listener(app.handle().clone(), path.clone());
+    #[cfg(all(desktop, unix))]
+    spawn_local_interface(path.clone());
     Ok(path)
 }
 
@@ -262,6 +264,40 @@ fn spawn_listener(app: AppHandle, path: PathBuf) {
                 }
             }
         });
+    });
+}
+
+/// Serves the local interface (`docs/m8-local-interface.md`) on
+/// `$XDG_RUNTIME_DIR/lebenszeichen/app.sock` for as long as the app runs.
+/// Only the state file changes; the background fetch sends reported
+/// answers when they are due. Without a socket the app works as before.
+#[cfg(all(desktop, unix))]
+fn spawn_local_interface(path: PathBuf) {
+    use lz_client::local::{Local, bind, default_socket_path, serve};
+    std::thread::spawn(move || {
+        let Some(socket) = default_socket_path("app") else {
+            eprintln!("lebenszeichen: no XDG_RUNTIME_DIR, no local interface");
+            return;
+        };
+        let listener = match bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!(
+                    "lebenszeichen: local interface {}: {error}",
+                    socket.display()
+                );
+                return;
+            }
+        };
+        let Ok(runtime) = runtime() else { return };
+        let local = Local {
+            store: JsonFile::new(path),
+            clock: Clock::System,
+            token: None,
+        };
+        if let Err(error) = runtime.block_on(serve(listener, local)) {
+            eprintln!("lebenszeichen: local interface: {error}");
+        }
     });
 }
 
