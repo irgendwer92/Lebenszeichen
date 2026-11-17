@@ -11,7 +11,6 @@ publish.workspace = true
 [dependencies]
 lz-core.workspace = true
 base64 = "0.22.1"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Without its default features: no image crate, only the module matrix.
 qrcode = { version = "0.14", default-features = false }
 # Reads invitations from camera frames (Android) and generated codes (tests).
@@ -33,6 +32,7 @@ serde_json = "1"
 sha2 = "0.10.9"
 tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "__rustls-tls"] }
+jiff = "1.0.0"
 
 [dev-dependencies]
 tempfile = "3"
