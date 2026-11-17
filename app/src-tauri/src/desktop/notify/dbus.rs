@@ -26,6 +26,9 @@ const CRITICAL: u8 = 2;
 /// Urgency "normal", for answers.
 const NORMAL: u8 = 1;
 
+/// Sound of an answer, from the freedesktop sound theme.
+const ANSWER_SOUND: &str = "message-new-instant";
+
 /// The notification service of the session.
 pub struct Service {
     proxy: Proxy<'static>,
@@ -74,7 +77,11 @@ impl Service {
                 vec![DEFAULT, action, RESPOND, action],
             ),
             Kind::Answer { open } => (
-                HashMap::from([("urgency", Value::U8(NORMAL))]),
+                HashMap::from([
+                    ("urgency", Value::U8(NORMAL)),
+                    // The services play nothing without a sound hint.
+                    ("sound-name", Value::from(ANSWER_SOUND)),
+                ]),
                 vec![DEFAULT, open],
             ),
         };
