@@ -3,6 +3,8 @@
 Done when: a script reports "asleep" and the requester sees
 "“asleep” (reported)" after the waiting time (roadmap).
 
+How to use it, with recipes: `local-interface.md`.
+
 ## Decisions (2026-11-17)
 
 1. Android: no own permission. An exported receiver behind a switch

@@ -160,6 +160,7 @@ Scope:
 - Reported response after the waiting time, allowed per contact and device.
 - Example script.
 - Plan, decisions and test record in `m8-local-interface.md`.
+- Guide for users with recipes: `local-interface.md`.
 - **Done when:** a script reports "asleep" and the requester sees "“asleep” (reported)" after the waiting time.
 
 ### M8b – Container and Home Assistant
