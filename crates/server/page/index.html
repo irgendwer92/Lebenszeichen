@@ -1,0 +1,27 @@
+<!doctype html>
+<!--
+  Page of lz-server. Relative URLs only: Home Assistant serves it under an
+  ingress path that differs per installation. No inline script or style (the
+  server sets a strict Content Security Policy). Texts come from api/texts.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lebenszeichen</title>
+    <link rel="stylesheet" href="page.css" />
+    <script src="page.js" defer></script>
+  </head>
+  <body>
+    <header class="top">
+      <h1>Lebenszeichen</h1>
+    </header>
+    <main>
+      <div id="error" class="banner error" role="alert" hidden>
+        <p id="error-text"></p>
+        <button type="button" id="error-close" class="icon">✕</button>
+      </div>
+      <div id="view" aria-live="polite">Loading …</div>
+    </main>
+  </body>
+</html>
