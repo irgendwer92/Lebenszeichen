@@ -1,0 +1,15 @@
+# Build context of deploy/docker/Dockerfile is the repository root.
+/target/
+/app/
+/.git/
+/.github/
+/.claude/
+/docs-de_after-m4/
+/docs/
+/examples/
+/deploy/home-assistant/
+**/*.md
+!/LICENSE
+.env
+*.keystore
+*.jks

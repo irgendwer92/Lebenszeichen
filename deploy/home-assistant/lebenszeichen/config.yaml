@@ -1,0 +1,31 @@
+name: Lebenszeichen
+version: "0.1.0"
+slug: lebenszeichen
+description: Answers "asleep" for you from Home Assistant when you can't, as a reported state
+url: https://github.com/irgendwer92/Lebenszeichen
+arch:
+  - amd64
+# The Supervisor pulls <image>:<version>; it builds nothing.
+image: ghcr.io/irgendwer92/lebenszeichen
+# The image has its own entrypoint, no s6 / init needed.
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:heart-pulse
+panel_title: Lebenszeichen
+# Socket for shell_command etc.: /share/lebenszeichen/lz.sock
+map:
+  - type: share
+    read_only: false
+options:
+  http: false
+  relay: ""
+schema:
+  http: bool
+  relay: str?
+# Optional HTTP port (off unless the option "http" is on; also needs a
+# host port set under Network).
+ports:
+  8080/tcp: null
+ports_description:
+  8080/tcp: Local interface over plain HTTP (token required, see Documentation)

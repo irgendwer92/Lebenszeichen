@@ -1,0 +1,49 @@
+# Example: lz-server in plain Docker (no Home Assistant).
+# Copy this file to a directory of your own and adapt it.
+
+services:
+  lebenszeichen:
+    image: ghcr.io/irgendwer92/lebenszeichen:latest   # or a version, e.g. :0.1.0
+    container_name: lebenszeichen
+    restart: unless-stopped
+
+    # Use the uid:gid of the host user who runs the scripts (`id -u`, `id -g`).
+    # The socket directory must be mode 0700 and owned by that user, so that
+    # only this user can reach the socket; it is created with the uid of the
+    # container process. ./data must be owned by the same uid.
+    user: "1000:1000"
+
+    environment:
+      LANG: en_US.UTF-8
+
+    volumes:
+      # State: device keys and contacts. Back this up and keep it private.
+      - ./data:/data
+      # Socket directory. Create it first, as that user:
+      #   install -d -m 0700 "$XDG_RUNTIME_DIR/lebenszeichen-docker"
+      # (a plain directory such as ~/.lebenszeichen-docker works too, but
+      # $XDG_RUNTIME_DIR is wiped at logout and is 0700 by default). Scripts
+      # then use LZ_SOCKET=$XDG_RUNTIME_DIR/lebenszeichen-docker/lz.sock
+      - ${XDG_RUNTIME_DIR}/lebenszeichen-docker:/run/lebenszeichen
+
+    # Optional: the same interface over HTTP. Needs the token, but plain HTTP
+    # sends the token in clear text: anyone on the network path can read it
+    # and report states. Use only in a network you trust, never on the
+    # internet. Also add `--http 0.0.0.0:8080` to the command below.
+    # ports:
+    #   - "127.0.0.1:8080:8080"
+    # command: ["--socket", "/run/lebenszeichen/lz.sock", "--http", "0.0.0.0:8080"]
+
+# Setup (once). Until /data/device.json exists, lz-server waits for it, so
+# use `exec` on the running container (the entrypoint is lz-server, so
+# `docker compose run … lz device join` would hand "lz" to lz-server):
+#
+#   docker compose up -d
+#   docker compose exec -it lebenszeichen lz device join --relay https://RELAY --name Server
+#
+# Alternative without a running server (override the entrypoint):
+#
+#   docker compose run --rm -it --entrypoint lz lebenszeichen device join --relay https://RELAY --name Server
+#
+# Show the reported state of the server:
+#   docker compose exec lebenszeichen lz state

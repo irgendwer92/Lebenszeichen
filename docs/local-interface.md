@@ -226,6 +226,31 @@ This only works while the phone is reachable for Home Assistant. A
 container and an add-on for Home Assistant that answer without the phone
 follow with M8b.
 
+## Docker and Home Assistant
+
+`lz-server` (image `ghcr.io/irgendwer92/lebenszeichen`) offers the same
+interface without a phone or desktop app: a local socket with token,
+optionally an HTTP port (token, plain HTTP: trusted network only), and in
+Home Assistant a setup page. Plain Docker, see
+`deploy/docker/compose.yaml`:
+
+```yaml
+services:
+  lebenszeichen:
+    image: ghcr.io/irgendwer92/lebenszeichen:latest
+    restart: unless-stopped
+    user: "1000:1000"   # uid of the host user who runs the scripts
+    volumes:
+      - ./data:/data
+      - ${XDG_RUNTIME_DIR}/lebenszeichen-docker:/run/lebenszeichen
+```
+
+Set up once with `docker compose exec -it lebenszeichen lz device join
+--relay https://RELAY --name Server`. The Home Assistant app (sidebar page,
+socket `/share/lebenszeichen/lz.sock`, `shell_command` example) is described
+in `deploy/home-assistant/lebenszeichen/DOCS.md`. Technical details:
+`m8b-container.md`.
+
 ## Troubleshooting
 
 - **The contact got nothing.** Check in this order: is a state set
