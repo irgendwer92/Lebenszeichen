@@ -143,7 +143,23 @@ pub fn bind(path: &Path) -> io::Result<LocalListener> {
     if !dir.exists() {
         DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     }
-    let mode = fs::metadata(dir)?.permissions().mode();
+    let meta = fs::metadata(dir)?;
+    // Someone else's directory, even with mode 0700, lets its owner in.
+    // On Linux `/proc/self` belongs to the user of this process.
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if meta.uid() != fs::metadata("/proc/self")?.uid() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "the socket directory {} belongs to another user",
+                    dir.display()
+                ),
+            ));
+        }
+    }
+    let mode = meta.permissions().mode();
     if mode & 0o077 != 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
