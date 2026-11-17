@@ -28,6 +28,10 @@ use windows::core::{HSTRING, IInspectable, Ref, w};
 use super::{Event, Gone, Text};
 
 type OnEvent = Arc<dyn Fn(u32, Event) + Send + Sync>;
+
+/// Group of all toasts of requests; with the id as tag, it finds a toast in
+/// the notification center.
+const GROUP: &str = "requests";
 type Toasts = Arc<Mutex<HashMap<u32, ToastNotification>>>;
 
 /// The toasts of this app.
@@ -80,6 +84,8 @@ impl Service {
         let xml = XmlDocument::new()?;
         xml.LoadXml(&HSTRING::from(toast_xml(text)))?;
         let toast = ToastNotification::CreateToastNotification(&xml)?;
+        toast.SetTag(&tag(id))?;
+        toast.SetGroup(&HSTRING::from(GROUP))?;
         if let Some(on_event) = self.on_event.get() {
             let report = Report {
                 id,
@@ -129,15 +135,28 @@ impl Service {
     /// Withdraws a toast; Windows reports it as `ApplicationHidden`. On a
     /// thread of its own, because a click into the foreground window
     /// arrives on the main thread, which may not use toasts made elsewhere.
+    ///
+    /// A toast that Focus Assist held back, or that the person left in the
+    /// notification center, is not on screen, and `Hide` does not reach it;
+    /// it goes from the history of the notification center. Either way one
+    /// of the two finds nothing, so their errors do not count.
     pub fn close(&self, id: u32) {
         let toast = lock(&self.toasts).remove(&id);
-        if let Some(toast) = toast {
-            let app_id = self.app_id.clone();
-            std::thread::spawn(move || {
+        let app_id = self.app_id.clone();
+        std::thread::spawn(move || {
+            if let Some(toast) = toast {
                 let _ = notifier(&app_id).and_then(|notifier| notifier.Hide(&toast));
+            }
+            let _ = ToastNotificationManager::History().and_then(|history| {
+                history.RemoveGroupedTagWithId(&tag(id), &HSTRING::from(GROUP), &app_id)
             });
-        }
+        });
     }
+}
+
+/// Tag of a toast: its id.
+fn tag(id: u32) -> HSTRING {
+    HSTRING::from(id.to_string())
 }
 
 /// The toast notifier of the app, for the calling thread.
