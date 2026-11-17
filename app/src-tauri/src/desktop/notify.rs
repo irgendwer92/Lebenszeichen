@@ -1,6 +1,9 @@
-//! Shows open requests on the desktop: as a foreground window where the app
-//! may put one in front (X11; Windows unless Do Not Disturb is on), as a
-//! notification otherwise, and whenever the window cannot be opened.
+//! Shows open requests on the desktop. On Linux as a foreground window where
+//! the app may put one in front (X11), as a notification otherwise and
+//! whenever the window cannot be opened. On Windows always as a
+//! notification, so that the request also waits in the notification center,
+//! and in addition as a foreground window unless Focus Assist or Do Not
+//! Disturb is on. When one of the two answers, the app withdraws the other.
 //!
 //! What counts as an answer is what the person did (see `docs/concept.md`):
 //! the button, a click on the notification or the window, and closing either
@@ -50,9 +53,14 @@ enum Handle {
     Window(u32),
 }
 
+/// Whether a request comes as notification and window at once (Windows),
+/// or as one of the two (Linux).
+const BOTH: bool = cfg!(windows);
+
 #[derive(Debug, PartialEq, Eq)]
 enum Entry {
-    Shown(Handle),
+    /// On screen, as one or two handles.
+    Shown(Vec<Handle>),
     /// Gone without an answer, or being answered; not shown again.
     Quiet,
 }
@@ -123,9 +131,11 @@ impl Screen {
         let mut withdraw = Vec::new();
         entries.retain(|key, entry| {
             let keep = open.contains(key);
-            if !keep && let Entry::Shown(handle) = entry {
-                handles.remove(handle);
-                withdraw.push(*handle);
+            if !keep && let Entry::Shown(shown) = entry {
+                for handle in shown.drain(..) {
+                    handles.remove(&handle);
+                    withdraw.push(handle);
+                }
             }
             keep
         });
@@ -139,14 +149,25 @@ impl Screen {
 
     fn shown(&mut self, key: Key, handle: Handle) {
         self.handles.insert(handle, key.clone());
-        self.entries.insert(key, Entry::Shown(handle));
+        match self.entries.get_mut(&key) {
+            Some(Entry::Shown(shown)) => shown.push(handle),
+            _ => {
+                self.entries.insert(key, Entry::Shown(vec![handle]));
+            }
+        }
     }
 
-    /// Takes back [`Screen::shown`] when showing failed; the next comparison
-    /// shows the request again.
+    /// Takes back [`Screen::shown`] when showing failed. Without anything
+    /// else on screen for the request, the next comparison shows it again.
     fn not_shown(&mut self, handle: Handle) {
-        if let Some(key) = self.handles.remove(&handle) {
-            self.entries.remove(&key);
+        let Some(key) = self.handles.remove(&handle) else {
+            return;
+        };
+        if let Some(Entry::Shown(shown)) = self.entries.get_mut(&key) {
+            shown.retain(|other| *other != handle);
+            if shown.is_empty() {
+                self.entries.remove(&key);
+            }
         }
     }
 
@@ -165,14 +186,34 @@ impl Screen {
         self.handles.get(&handle).map(|(name, _)| name.as_str())
     }
 
-    /// Notes that a notification or window went away. Returns the request to
-    /// answer, if that counts as an answer. Unknown handles, such as
+    /// Notes that a notification or window went away. If that counts as an
+    /// answer, returns the request to answer and what else still shows it,
+    /// to be withdrawn. Otherwise the rest stays on screen; once nothing is
+    /// left, the request is not shown again. Unknown handles, such as
     /// withdrawn ones or a second signal for the same notification, return
     /// nothing.
-    fn gone(&mut self, handle: Handle, how: &Gone) -> Option<Key> {
+    fn gone(&mut self, handle: Handle, how: &Gone) -> Option<(Key, Vec<Handle>)> {
         let key = self.handles.remove(&handle)?;
-        self.entries.insert(key.clone(), Entry::Quiet);
-        how.answers().then_some(key)
+        let mut rest = match self.entries.remove(&key) {
+            Some(Entry::Shown(shown)) => shown,
+            _ => Vec::new(),
+        };
+        rest.retain(|other| *other != handle);
+        if how.answers() {
+            for other in &rest {
+                self.handles.remove(other);
+            }
+            self.entries.insert(key.clone(), Entry::Quiet);
+            Some((key, rest))
+        } else {
+            let entry = if rest.is_empty() {
+                Entry::Quiet
+            } else {
+                Entry::Shown(rest)
+            };
+            self.entries.insert(key, entry);
+            None
+        }
     }
 
     /// The answer could not be sent; the request is shown again.
@@ -274,31 +315,43 @@ impl Shared {
         }
     }
 
-    /// Shows a request: as a foreground window if possible, else as a
-    /// notification. Asked for every request, because Do Not Disturb on
+    /// Shows a request: on Windows as a notification and, if possible, as a
+    /// foreground window; on Linux as a foreground window if possible, else
+    /// as a notification. Asked for every request, because Focus Assist on
     /// Windows changes while the app runs.
     fn show(&self, key: Key) {
-        if alert::possible() {
-            let number = self.next_window.fetch_add(1, Ordering::Relaxed);
-            let handle = Handle::Window(number);
-            // Noted before the window exists: its page asks for the name
-            // right away.
-            let stacked = {
-                let mut screen = self.screen();
-                let stacked = screen.windows();
-                screen.shown(key.clone(), handle);
-                stacked
-            };
-            let shared = self.clone();
-            let on_close = move || shared.gone(handle, &Gone::WindowClosed);
-            match alert::open(&self.app, number, stacked, on_close) {
-                Ok(()) => return,
-                Err(error) => {
-                    eprintln!("Foreground window failed: {error}");
-                    self.screen().not_shown(handle);
-                }
+        let window = alert::possible() && self.open_window(&key);
+        if BOTH || !window {
+            self.notify(key);
+        }
+    }
+
+    /// Opens a foreground window for a request; whether that worked.
+    fn open_window(&self, key: &Key) -> bool {
+        let number = self.next_window.fetch_add(1, Ordering::Relaxed);
+        let handle = Handle::Window(number);
+        // Noted before the window exists: its page asks for the name right
+        // away.
+        let stacked = {
+            let mut screen = self.screen();
+            let stacked = screen.windows();
+            screen.shown(key.clone(), handle);
+            stacked
+        };
+        let shared = self.clone();
+        let on_close = move || shared.gone(handle, &Gone::WindowClosed);
+        match alert::open(&self.app, number, stacked, on_close) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("Foreground window failed: {error}");
+                self.screen().not_shown(handle);
+                false
             }
         }
+    }
+
+    /// Shows a request as a notification, if the system has a service.
+    fn notify(&self, key: Key) {
         let Some(service) = &self.service else {
             return;
         };
@@ -336,7 +389,7 @@ impl Shared {
     }
 
     fn gone(&self, handle: Handle, how: &Gone) {
-        let Some(key) = self.screen().gone(handle, how) else {
+        let Some((key, rest)) = self.screen().gone(handle, how) else {
             return;
         };
         match (handle, how) {
@@ -345,6 +398,10 @@ impl Shared {
             // A clicked window goes; a closed one is going anyway.
             (Handle::Window(number), Gone::WindowClicked) => alert::close(&self.app, number),
             _ => {}
+        }
+        // The other display of the same request goes without answering.
+        for other in rest {
+            self.withdraw(other);
         }
         let shared = self.clone();
         std::thread::spawn(move || shared.answer(key));
@@ -457,9 +514,64 @@ mod tests {
     fn shows_again_after_a_failed_answer() {
         let mut screen = Screen::default();
         screen.shown(key("Bert", 10), WINDOW);
-        let answer = screen.gone(WINDOW, &Gone::WindowClosed).unwrap();
+        let (answer, _) = screen.gone(WINDOW, &Gone::WindowClosed).unwrap();
         screen.answer_failed(&answer);
         assert_eq!(screen.compare(&[key("Bert", 10)]).1, vec![key("Bert", 10)]);
+    }
+
+    #[test]
+    fn an_answer_withdraws_the_other_display() {
+        for (answering, other) in [(NOTE, WINDOW), (WINDOW, NOTE)] {
+            let mut screen = Screen::default();
+            screen.shown(key("Bert", 10), WINDOW);
+            screen.shown(key("Bert", 10), NOTE);
+            let how = match answering {
+                Handle::Window(_) => Gone::WindowClicked,
+                Handle::Notification(_) => Gone::Clicked,
+            };
+            assert_eq!(
+                screen.gone(answering, &how),
+                Some((key("Bert", 10), vec![other]))
+            );
+            // Its withdrawal reports back and answers nothing.
+            assert_eq!(screen.gone(other, &Gone::Vanished), None);
+            assert_eq!(screen.entries[&key("Bert", 10)], Entry::Quiet);
+            assert_eq!(screen.windows(), 0);
+        }
+    }
+
+    #[test]
+    fn the_other_display_stays_when_one_goes_without_answer() {
+        let mut screen = Screen::default();
+        screen.shown(key("Bert", 10), WINDOW);
+        screen.shown(key("Bert", 10), NOTE);
+        // The notification expires; the window still asks.
+        assert_eq!(screen.gone(NOTE, &Gone::Vanished), None);
+        assert_eq!(screen.entries[&key("Bert", 10)], Entry::Shown(vec![WINDOW]));
+        assert_eq!(screen.compare(&[key("Bert", 10)]), (vec![], vec![]));
+        assert_eq!(
+            screen.gone(WINDOW, &Gone::WindowClosed),
+            Some((key("Bert", 10), vec![]))
+        );
+    }
+
+    #[test]
+    fn withdraws_both_displays_of_a_closed_request() {
+        let mut screen = Screen::default();
+        screen.shown(key("Bert", 10), WINDOW);
+        screen.shown(key("Bert", 10), NOTE);
+        let (withdraw, _) = screen.compare(&[]);
+        assert_eq!(withdraw, vec![WINDOW, NOTE]);
+        assert!(screen.handles.is_empty());
+    }
+
+    #[test]
+    fn a_failed_notification_leaves_the_window() {
+        let mut screen = Screen::default();
+        screen.shown(key("Bert", 10), WINDOW);
+        screen.shown(key("Bert", 10), NOTE);
+        screen.not_shown(NOTE);
+        assert_eq!(screen.entries[&key("Bert", 10)], Entry::Shown(vec![WINDOW]));
     }
 
     #[test]
