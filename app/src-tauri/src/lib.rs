@@ -17,6 +17,8 @@ mod desktop;
 #[cfg(target_os = "android")]
 mod jni_bridge;
 mod lang;
+#[cfg(all(desktop, windows))]
+mod pipe;
 mod settings;
 
 /// Builds the command handler from the commands both systems share and,

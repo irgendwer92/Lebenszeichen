@@ -38,9 +38,22 @@ Done when: a script reports "asleep" and the requester sees
 - Linux: `$XDG_RUNTIME_DIR/lebenszeichen/app.sock` (desktop app) and
   `…/lz.sock` (`lz listen`), mode 0600; `--socket` sets another path.
   No token.
-- Windows: named pipe for the current user only (DACL with the user's
-  SID, remote clients rejected), same HTTP. Client: `lz state` or a
-  PowerShell example.
+- Windows (desktop app): named pipe `\\.\pipe\lebenszeichen-<SID>-app`,
+  `<SID>` the current user's SID as text (`S-1-5-21-…`), same HTTP. Pipe
+  names are global on a machine, so the SID gives each signed-in user an
+  interface of their own. Security descriptor `D:P(A;;GA;;;<SID>)`: a
+  protected DACL with one entry, full access for the user (the app needs
+  `FILE_CREATE_PIPE_INSTANCE` for further instances); nobody else, not
+  Everyone, not anonymous. Remote clients are rejected
+  (`PIPE_REJECT_REMOTE_CLIENTS`). The first instance is created with
+  `FILE_FLAG_FIRST_PIPE_INSTANCE`: if the name exists already (another
+  instance, or another user who took it first, as the SID is no secret),
+  the app logs it and does not serve, rather than share the name; while it
+  serves, one instance is always open, so the name stays taken. No token.
+  Client: `examples/report-state.ps1` (`set <minutes> <reason>`, `clear`,
+  `show`). `lz` has no interface on Windows in M8: `lz listen` serves none
+  and `lz state` says it is not available here; the desktop app is the
+  Windows end.
 - Android: a broadcast to the app (package `io.github.irgendwer92.lebenszeichen`,
   receiver `StateReceiver`, exported).
   - Actions: `io.github.irgendwer92.lebenszeichen.SET_STATE` and

@@ -11,8 +11,9 @@
 //!
 //! Only the state in the state file changes here. Sending reported answers
 //! is up to the caller. On Unix the interface listens on a socket that only
-//! its owner may use; the HTTP part works on any connection, so a Windows
-//! named pipe can reuse it.
+//! its owner may use; on Windows on a named pipe whose instances the caller
+//! creates with a security descriptor ([`serve_pipe`]). The HTTP part works
+//! on any connection.
 
 use std::convert::Infallible;
 use std::io;
@@ -51,7 +52,7 @@ const HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Most connections served at the same time; further ones are closed.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_CONNECTIONS: usize = 16;
 
 /// The only path of the interface.
@@ -266,6 +267,54 @@ pub async fn serve(listener: LocalListener, local: Local) -> io::Result<()> {
         let local = Arc::clone(&local);
         tokio::spawn(async move {
             serve_connection(stream, local).await;
+            drop(permit);
+        });
+    }
+}
+
+/// Serves a named pipe until the future is dropped, each connection in its
+/// own task.
+///
+/// `create(first)` makes a new server instance of the pipe; `first` is true
+/// only for the very first one, which should be created with
+/// `first_pipe_instance(true)` so that a pipe of the same name created by
+/// someone else beforehand makes it fail. The security descriptor of the
+/// pipe is up to `create`, which keeps the unsafe part out of this crate.
+///
+/// The next instance is always created before a connected one is handed
+/// on, so the name stays taken while the interface runs. An error creating
+/// the first instance is returned; later errors are retried after 100 ms.
+#[cfg(windows)]
+pub async fn serve_pipe(
+    mut create: impl FnMut(bool) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer>,
+    local: Local,
+) -> io::Result<()> {
+    let local = Arc::new(local);
+    let permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let mut server = create(true)?;
+    loop {
+        let connected = server.connect().await;
+        let next = loop {
+            match create(false) {
+                Ok(next) => break next,
+                // For example too many open handles: wait instead of spinning.
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        };
+        let pipe = std::mem::replace(&mut server, next);
+        if connected.is_err() {
+            // The client went away before the connection was complete.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+        // Beyond the limit the connection is closed right away.
+        let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
+            let _ = pipe.disconnect();
+            continue;
+        };
+        let local = Arc::clone(&local);
+        tokio::spawn(async move {
+            serve_connection(pipe, local).await;
             drop(permit);
         });
     }

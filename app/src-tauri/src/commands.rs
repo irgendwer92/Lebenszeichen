@@ -69,7 +69,7 @@ pub fn setup(app: &mut tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>
         flow: Mutex::new(None),
     });
     spawn_listener(app.handle().clone(), path.clone());
-    #[cfg(all(desktop, unix))]
+    #[cfg(all(desktop, any(unix, windows)))]
     spawn_local_interface(path.clone());
     Ok(path)
 }
@@ -297,6 +297,38 @@ fn spawn_local_interface(path: PathBuf) {
         };
         if let Err(error) = runtime.block_on(serve(listener, local)) {
             eprintln!("lebenszeichen: local interface: {error}");
+        }
+    });
+}
+
+/// Serves the local interface (`docs/m8-local-interface.md`) on the named
+/// pipe `\\.\pipe\lebenszeichen-<user SID>-app` (`pipe::pipe_name`) for
+/// as long as the app runs. Only the current user may open it, remote
+/// clients are rejected. If the name is taken already, by an app that runs
+/// or by someone else, the app does not serve and works as before.
+#[cfg(all(desktop, windows))]
+fn spawn_local_interface(path: PathBuf) {
+    use crate::pipe::{Descriptor, current_user_sid, pipe_name};
+    use lz_client::local::{Local, serve_pipe};
+    std::thread::spawn(move || {
+        let (name, descriptor) = match current_user_sid()
+            .and_then(|sid| Ok((pipe_name(&sid), Descriptor::for_user(&sid)?)))
+        {
+            Ok(found) => found,
+            Err(error) => {
+                eprintln!("lebenszeichen: local interface: {error}");
+                return;
+            }
+        };
+        let Ok(runtime) = runtime() else { return };
+        let local = Local {
+            store: JsonFile::new(path),
+            clock: Clock::System,
+            token: None,
+        };
+        let create = |first| descriptor.create(&name, first);
+        if let Err(error) = runtime.block_on(serve_pipe(create, local)) {
+            eprintln!("lebenszeichen: local interface {name}: {error}");
         }
     });
 }
