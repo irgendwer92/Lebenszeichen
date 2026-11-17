@@ -142,3 +142,88 @@ impl<R: Relay> Ctx<R> {
         Ok(())
     }
 }
+
+/// What `lz state` asks of the local interface of a running `lz listen`.
+#[cfg(unix)]
+pub enum StateCall<'a> {
+    Show,
+    Set { reason: &'a str, minutes: u32 },
+    Clear,
+}
+
+#[cfg(unix)]
+impl<R: Relay> Ctx<R> {
+    /// Shows, sets or clears the state through the socket at `socket`, so
+    /// that it takes the same way as every other program.
+    pub async fn state_call(
+        &mut self,
+        socket: &std::path::Path,
+        call: StateCall<'_>,
+    ) -> Result<()> {
+        let t = self.texts();
+        let (method, body) = match &call {
+            StateCall::Show => ("GET", None),
+            StateCall::Set { reason, minutes } => (
+                "POST",
+                Some(serde_json::json!({ "reason": reason, "minutes": minutes }).to_string()),
+            ),
+            StateCall::Clear => ("DELETE", None),
+        };
+        let (status, answer) = crate::local::request(socket, method, body.as_deref())
+            .await
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused => {
+                    fail!(t, "error-no-listener", path = &socket.display().to_string())
+                }
+                _ => Fail(error.to_string()),
+            })?;
+        let json: serde_json::Value = serde_json::from_str(&answer).unwrap_or_default();
+        let text = match (&call, status) {
+            (StateCall::Show, 404) => tr!(t, "out-state-none"),
+            (StateCall::Show, 200) => {
+                let reason = json["reason"].as_str().unwrap_or_default();
+                let until = json["until"].as_u64().unwrap_or_default();
+                tr!(
+                    t,
+                    "status-reported-state",
+                    reason = &crate::show::reported_state(t, reason),
+                    until = &crate::show::when(t, until, self.now())
+                )
+            }
+            (StateCall::Set { reason, minutes }, 204) => tr!(
+                t,
+                "out-state-set",
+                reason = &crate::show::reported_state(t, reason.trim()),
+                duration = &crate::show::minutes(t, *minutes)
+            ),
+            (StateCall::Clear, 204) => tr!(t, "out-state-cleared"),
+            _ => {
+                let error = json["error"].as_str().unwrap_or("unexpected answer");
+                return Err(Fail(format!("{status}: {error}")));
+            }
+        };
+        self.say(&text);
+        Ok(())
+    }
+}
+
+impl<R: Relay> Ctx<R> {
+    /// `lz state allow` and `lz state deny`: changes the setting and says
+    /// what holds now.
+    pub fn allow_reports(&mut self, name: &str, allowed: bool, delay: Option<u32>) -> Result<()> {
+        let t = self.texts();
+        let setting = self.set_report_setting(name, allowed, delay)?;
+        let text = if setting.allowed {
+            tr!(
+                t,
+                "out-reports-allowed",
+                name = name,
+                delay = &crate::show::minutes(t, setting.delay_minutes)
+            )
+        } else {
+            tr!(t, "out-reports-denied", name = name)
+        };
+        self.say(&text);
+        Ok(())
+    }
+}

@@ -86,7 +86,11 @@ enum Command {
     /// Fetches all waiting messages, then ends
     Sync,
     /// Stays connected and shows messages as they arrive
-    Listen,
+    Listen {
+        /// Socket of the local interface
+        #[arg(long, value_name = "PATH")]
+        socket: Option<PathBuf>,
+    },
     /// Lists contacts and open invitations
     Contacts,
     /// Asks for a sign of life
@@ -128,6 +132,14 @@ enum Command {
     /// Own devices: add, list, remove
     #[command(subcommand)]
     Device(DeviceCommand),
+    /// Shows the reported state, or sets, clears or allows it
+    State {
+        /// Socket of the local interface
+        #[arg(long, global = true, value_name = "PATH")]
+        socket: Option<PathBuf>,
+        #[command(subcommand)]
+        action: Option<StateCommand>,
+    },
     /// Sets the push address
     Push {
         /// Push address
@@ -136,6 +148,33 @@ enum Command {
         /// Remove the push address
         #[arg(long, conflicts_with = "url")]
         remove: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum StateCommand {
+    /// Reports a state through the running lz listen
+    Set {
+        /// How long the state applies, in minutes
+        minutes: u32,
+        /// Short reason the contact sees, such as asleep
+        #[arg(num_args = 1.., required = true)]
+        reason: Vec<String>,
+    },
+    /// Ends the reported state
+    Clear,
+    /// Answers the contact with the reported state from this device
+    Allow {
+        /// Name of the contact
+        name: String,
+        /// Waiting time in minutes before that
+        #[arg(long, value_name = "N")]
+        wait: Option<u32>,
+    },
+    /// Never answers the contact with the reported state from this device
+    Deny {
+        /// Name of the contact
+        name: String,
     },
 }
 
@@ -297,7 +336,7 @@ pub async fn run() -> Result<()> {
         Command::Confirm { name } => ctx.confirm(&name).await,
         Command::Reject { name } => ctx.reject(&name).await,
         Command::Sync => ctx.sync().await.map(drop),
-        Command::Listen => ctx.listen().await,
+        Command::Listen { socket } => listen(&mut ctx, socket).await,
         Command::Contacts => ctx.contacts(),
         Command::Request { name } => ctx.request(&name).await,
         Command::Respond { name } => ctx.respond(&name).await,
@@ -310,6 +349,11 @@ pub async fn run() -> Result<()> {
         } => ctx.rules(&name, interval_min, expiry_min, weekly).await,
         Command::Remove { name } => ctx.remove(&name).await,
         Command::Push { url, .. } => ctx.set_push_url(url.as_deref()).await,
+        Command::State { socket, action } => match action {
+            Some(StateCommand::Allow { name, wait }) => ctx.allow_reports(&name, true, wait),
+            Some(StateCommand::Deny { name }) => ctx.allow_reports(&name, false, None),
+            other => state_call(&mut ctx, socket, other).await,
+        },
         Command::Device(DeviceCommand::Join { relay, name }) => {
             ctx.join_device(&relay, &name, None, &mut Terminal(t)).await
         }
@@ -319,6 +363,89 @@ pub async fn run() -> Result<()> {
         Command::Device(DeviceCommand::List) => ctx.list_devices(),
         Command::Device(DeviceCommand::Rename { name }) => ctx.rename_device(&name).await,
         Command::Device(DeviceCommand::Remove { name }) => ctx.remove_device(&name).await,
+    }
+}
+
+/// The socket given, or the default one of `lz`.
+#[cfg(unix)]
+fn socket_path(socket: Option<PathBuf>, t: Texts) -> Result<PathBuf> {
+    socket
+        .or_else(|| lz_client::local::default_socket_path("lz"))
+        .ok_or_else(|| ctx::Fail(t.text("error-no-socket-path", &[])))
+}
+
+/// `lz listen`, with the local interface next to it where there is one.
+async fn listen(ctx: &mut Ctx<Http>, socket: Option<PathBuf>) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let t = ctx.texts();
+        let bound = socket_path(socket, t).and_then(|path| {
+            lz_client::local::bind(&path)
+                .map_err(|error| ctx::Fail(format!("{}: {error}", path.display())))
+        });
+        match bound {
+            Ok(listener) => {
+                let local = lz_client::local::Local {
+                    store: ctx.store.clone(),
+                    clock: Clock::System,
+                    token: None,
+                };
+                return tokio::select! {
+                    result = ctx.listen() => result,
+                    result = lz_client::local::serve(listener, local) => {
+                        result.map_err(|error| ctx::Fail(error.to_string()))
+                    }
+                };
+            }
+            // Fetching matters more than the interface: go on without it.
+            Err(error) => eprintln!(
+                "lz: {}",
+                t.text(
+                    "warn-no-interface",
+                    &[("error", lz_client::i18n::Arg::Text(&error.0))]
+                )
+            ),
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = socket;
+    ctx.listen().await
+}
+
+/// `lz state`, `lz state set` and `lz state clear` through the socket.
+async fn state_call(
+    ctx: &mut Ctx<Http>,
+    socket: Option<PathBuf>,
+    action: Option<StateCommand>,
+) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use lz_client::reports::StateCall;
+        let path = socket_path(socket, ctx.texts())?;
+        let reason;
+        let call = match action {
+            None => StateCall::Show,
+            Some(StateCommand::Set {
+                minutes,
+                reason: words,
+            }) => {
+                reason = words.join(" ");
+                StateCall::Set {
+                    reason: &reason,
+                    minutes,
+                }
+            }
+            Some(StateCommand::Clear) => StateCall::Clear,
+            Some(StateCommand::Allow { .. } | StateCommand::Deny { .. }) => {
+                unreachable!("handled by the caller")
+            }
+        };
+        ctx.state_call(&path, call).await
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (socket, action);
+        Err(ctx::Fail(ctx.texts().text("error-no-interface-here", &[])))
     }
 }
 

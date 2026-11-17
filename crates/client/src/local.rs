@@ -213,6 +213,36 @@ pub fn bind(path: &Path) -> io::Result<LocalListener> {
     })
 }
 
+/// Sends one request to the interface at `path` and returns the status code
+/// and the body. Used by `lz state`; scripts use curl.
+#[cfg(unix)]
+pub async fn request(path: &Path, method: &str, body: Option<&str>) -> io::Result<(u16, String)> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut stream = tokio::net::UnixStream::connect(path).await?;
+    let body = body.unwrap_or("");
+    let head = format!(
+        "{method} {STATE_PATH} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(body.as_bytes()).await?;
+    let mut answer = Vec::new();
+    tokio::time::timeout(CONNECTION_TIMEOUT, stream.read_to_end(&mut answer))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "no answer"))??;
+    let answer = String::from_utf8_lossy(&answer);
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "not an HTTP answer");
+    let (head, body) = answer.split_once("\r\n\r\n").ok_or_else(invalid)?;
+    let status = head
+        .split(' ')
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .ok_or_else(invalid)?;
+    Ok((status, body.to_owned()))
+}
+
 /// Serves the socket until the future is dropped, each connection in its
 /// own task. Fails only if the listener cannot join the tokio runtime.
 #[cfg(unix)]
