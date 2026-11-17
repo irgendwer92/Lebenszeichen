@@ -16,7 +16,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lz_core::contact::ContactState;
 use lz_core::pairing::{Address, PairingState, PendingInvitation, accept};
-use lz_core::store::{Device, JsonFile, RelayAccount, Store, StoredContact, StoredInvitation};
+use lz_core::store::{
+    Device, JsonFile, RelayAccount, ReportSetting, Store, StoredContact, StoredInvitation,
+};
 use lz_core::wire::invitation::MAX_TEXT_LEN;
 use lz_core::wire::{
     ENVELOPE_LEN, Error as WireError, Invitation, MailboxId, Reason, RelayUrl, ResponseKind, Rules,
@@ -821,7 +823,7 @@ impl<R: Relay> Ctx<R> {
 
     /// Identifier of the own mailbox for a contact, the contact identifier
     /// between own devices.
-    fn own_mailbox_of(&self, name: &str) -> Result<MailboxId> {
+    pub(crate) fn own_mailbox_of(&self, name: &str) -> Result<MailboxId> {
         let device = self.load()?;
         let contact = device
             .contacts
@@ -849,7 +851,10 @@ impl<R: Relay> Ctx<R> {
         let contacts = device
             .contacts
             .iter()
-            .map(|contact| contact_view(contact, now))
+            .map(|contact| {
+                let setting = device.report_setting(&contact.state.contact.own_mailbox);
+                contact_view(contact, setting, now)
+            })
             .collect();
         let invitations = device
             .invitations
@@ -860,10 +865,15 @@ impl<R: Relay> Ctx<R> {
                 expired: invitation.pending.expires_at < now,
             })
             .collect();
+        let state = device.current_state(now).map(|s| StateView {
+            reason: s.reason.as_str().to_owned(),
+            until: s.until,
+        });
         Ok(Overview {
             now,
             contacts,
             invitations,
+            state,
         })
     }
 
@@ -873,6 +883,14 @@ impl<R: Relay> Ctx<R> {
         let overview = self.overview()?;
         let now = overview.now;
         let mut lines = Vec::new();
+        if let Some(state) = &overview.state {
+            lines.push(tr!(
+                t,
+                "status-reported-state",
+                reason = &show::reported_state(t, &state.reason),
+                until = &when(t, state.until, now)
+            ));
+        }
         for contact in &overview.contacts {
             let name = &contact.name;
             let status = match &contact.status {
@@ -937,6 +955,13 @@ impl<R: Relay> Ctx<R> {
                     at = &when(t, contact.next_request_at, now)
                 ));
             }
+            if contact.reports_allowed {
+                lines.push(tr!(
+                    t,
+                    "status-reports-allowed",
+                    delay = &show::minutes(t, contact.report_delay_minutes)
+                ));
+            }
             if let Some(last) = &contact.last_response {
                 let text = match last {
                     LastResponse::Manual { at } => show::response_manual(t, *at, now),
@@ -980,7 +1005,7 @@ impl<R: Relay> Ctx<R> {
     ///
     /// If the first delivery fails, the change is rolled back unless
     /// something else changed the contact in between.
-    async fn change_and_send<T>(
+    pub(crate) async fn change_and_send<T>(
         &mut self,
         name: &str,
         change: impl FnOnce(&mut ContactState, u64) -> Result<(T, Vec<[u8; ENVELOPE_LEN]>)>,
@@ -1057,6 +1082,15 @@ pub struct Overview {
     pub now: u64,
     pub contacts: Vec<ContactView>,
     pub invitations: Vec<InvitationView>,
+    /// The reported state of this device, while it applies.
+    pub state: Option<StateView>,
+}
+
+/// A reported state as shown to the person.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct StateView {
+    pub reason: String,
+    pub until: u64,
 }
 
 /// One contact as shown to the person.
@@ -1076,6 +1110,10 @@ pub struct ContactView {
     pub own_rules: Rules,
     /// How often the own side may ask this contact; set by the contact.
     pub peer_rules: Rules,
+    /// Whether this device may answer with the reported state.
+    pub reports_allowed: bool,
+    /// Waiting time before it does, in minutes.
+    pub report_delay_minutes: u32,
 }
 
 /// Where a contact stands.
@@ -1121,7 +1159,7 @@ pub struct InvitationView {
     pub expired: bool,
 }
 
-fn contact_view(contact: &StoredContact, now: u64) -> ContactView {
+fn contact_view(contact: &StoredContact, reports: ReportSetting, now: u64) -> ContactView {
     let state = &contact.state;
     let code = state.contact.verification_code();
     let status = if state.ended {
@@ -1168,6 +1206,8 @@ fn contact_view(contact: &StoredContact, now: u64) -> ContactView {
         last_response,
         own_rules: state.own_rules,
         peer_rules: state.peer_rules,
+        reports_allowed: reports.allowed,
+        report_delay_minutes: reports.delay_minutes,
     }
 }
 

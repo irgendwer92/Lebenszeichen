@@ -89,6 +89,11 @@ pub fn reported(t: Texts, reason: impl std::fmt::Display) -> String {
     tr!(t, "response-reported", reason = &reason.to_string())
 }
 
+/// The reason of the own reported state, quoted.
+pub fn reported_state(t: Texts, reason: &str) -> String {
+    tr!(t, "state-reason", reason = reason)
+}
+
 /// Shown next to every verification code of a pairing: someone who controls
 /// the channel of the invitation could pass the digits on as well.
 pub fn compare_hint(t: Texts) -> String {
@@ -185,6 +190,12 @@ pub enum Notice {
         name: String,
         kind: ResponseKind,
         at: u64,
+    },
+    /// This device answered a request of the contact with the reported
+    /// state, because the waiting time passed without a manual answer.
+    Reported {
+        name: String,
+        reason: String,
     },
     /// The other side ended the contact, by `end` or because its mailbox is
     /// gone.
@@ -308,6 +319,17 @@ impl Notice {
                 "notice-response",
                 name = name,
                 response = &response(t, kind, *at, now)
+            ),
+            Self::Reported { name, reason } => with_hints(
+                tr!(
+                    t,
+                    "notice-reported",
+                    name = name,
+                    reason = &reported(t, reason)
+                ),
+                hints,
+                t,
+                &[Hint::Respond(name)],
             ),
             Self::Ended { name } => tr!(t, "notice-ended", name = name),
             Self::Rejected { name } => tr!(t, "notice-rejected", name = name),

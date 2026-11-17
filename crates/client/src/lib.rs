@@ -13,6 +13,7 @@ pub mod devices;
 pub mod push;
 pub mod qr;
 pub mod relay;
+pub mod reports;
 pub mod show;
 pub mod sync;
 

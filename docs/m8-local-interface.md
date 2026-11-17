@@ -58,8 +58,11 @@ Done when: a script reports "asleep" and the requester sees
   state is valid, the device sends `reported` and tells its other
   devices (as `lz report` does today). A state set after the moment is
   still used while the request is open.
-- Desktop and `lz listen`: checked in the listen tick and right after a
-  state is set. Android: a WorkManager job with the delay when a request
+- Desktop and `lz listen`: checked after every fetch and in the listen
+  tick (every 10 seconds), so a newly set state is used within that tick;
+  the interface only writes the state file and stays independent of the
+  fetch loop. A failed delivery is rolled back and tried again; the
+  problem is shown once per run. Android: a WorkManager job with the delay when a request
   arrives, and a check when a state is set; under Doze it may run late.
 
 ## Test record
