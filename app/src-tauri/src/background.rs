@@ -295,8 +295,7 @@ mod tests {
 
     use super::{
         Applied, External, Outcome, check_battery, fetch, open_requests, report_from_app,
-        report_wait, respond,
-        set_push_url, title,
+        report_wait, respond, set_push_url, title,
     };
 
     fn device() -> (tempfile::TempDir, std::path::PathBuf) {
