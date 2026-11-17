@@ -24,7 +24,7 @@ use windows::UI::Notifications::{
 };
 use windows::Win32::System::Com::CoIncrementMTAUsage;
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW};
-use windows::core::{HSTRING, IInspectable, Ref, w};
+use windows::core::{HSTRING, IInspectable, PCWSTR, Ref};
 
 use super::{Event, Gone, Kind, Text};
 
@@ -60,6 +60,7 @@ impl Service {
         unsafe { CoIncrementMTAUsage() }.map_err(|error| error.to_string())?;
         let id = app.config().identifier.as_str();
         register(id, &app.package_info().name);
+        register_scheme();
         let app_id = HSTRING::from(id);
         // Only to learn here whether Windows offers notifications at all.
         notifier(&app_id).map_err(|error| error.to_string())?;
@@ -214,24 +215,55 @@ fn lock(toasts: &Toasts) -> MutexGuard<'_, HashMap<u32, ToastNotification>> {
 /// Registers the app identifier with its display name, so that Windows
 /// shows toasts of a build that was not installed.
 fn register(id: &str, name: &str) {
-    let key = HSTRING::from(format!(r"Software\Classes\AppUserModelId\{id}"));
-    let value: Vec<u16> = name.encode_utf16().chain([0]).collect();
-    let Ok(size) = u32::try_from(value.len() * 2) else {
+    let key = format!(r"Software\Classes\AppUserModelId\{id}");
+    if let Err(error) = set_value(&key, Some("DisplayName"), name) {
+        eprintln!("Could not register the app for notifications: {error}");
+    }
+}
+
+/// Scheme the toast of an answer opens. Windows starts the app with it,
+/// also from the notification center, where a click does not reach the
+/// running app; the single-instance check hands it to the running app,
+/// which only shows its window. The argument is never read.
+const OPEN_SCHEME: &str = "lebenszeichen-open";
+
+/// Registers [`OPEN_SCHEME`] for the user, at every start, so that it
+/// follows the path of the installed program.
+fn register_scheme() {
+    let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let status = unsafe {
+    let key = format!(r"Software\Classes\{OPEN_SCHEME}");
+    let command = format!(r#""{}" "%1""#, exe.display());
+    let result = set_value(&key, None, "URL:Lebenszeichen")
+        .and_then(|()| set_value(&key, Some("URL Protocol"), ""))
+        .and_then(|()| set_value(&format!(r"{key}\shell\open\command"), None, &command));
+    if let Err(error) = result {
+        eprintln!("Could not register {OPEN_SCHEME}: {error}");
+    }
+}
+
+/// Sets a text value under `HKEY_CURRENT_USER`, the default value of the
+/// key without `name`.
+fn set_value(key: &str, name: Option<&str>, value: &str) -> windows::core::Result<()> {
+    let key = HSTRING::from(key);
+    let name = name.map(HSTRING::from);
+    let name = name
+        .as_ref()
+        .map_or(PCWSTR::null(), |name| PCWSTR(name.as_ptr()));
+    let value: Vec<u16> = value.encode_utf16().chain([0]).collect();
+    let size = u32::try_from(value.len() * 2).map_err(|_| windows::core::Error::empty())?;
+    unsafe {
         RegSetKeyValueW(
             HKEY_CURRENT_USER,
             &key,
-            w!("DisplayName"),
+            name,
             REG_SZ.0,
             Some(value.as_ptr().cast()),
             size,
         )
-    };
-    if let Err(error) = status.ok() {
-        eprintln!("Could not register the app for notifications: {error}");
     }
+    .ok()
 }
 
 /// The toast of a request: silent, staying until the person acts, with one
@@ -259,7 +291,9 @@ fn toast_xml(text: &Text) -> String {
             visual,
             escape(action),
         ),
-        Kind::Answer { .. } => format!(r#"<toast launch="open">{visual}</toast>"#),
+        Kind::Answer { .. } => {
+            format!(r#"<toast activationType="protocol" launch="{OPEN_SCHEME}:">{visual}</toast>"#)
+        }
     }
 }
 
@@ -322,5 +356,6 @@ mod tests {
         assert!(!xml.contains("<audio"));
         assert!(!xml.contains("<actions>"));
         assert!(!xml.contains("reminder"));
+        assert!(xml.contains(r#"activationType="protocol" launch="lebenszeichen-open:""#));
     }
 }
