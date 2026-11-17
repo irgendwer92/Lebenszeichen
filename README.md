@@ -27,8 +27,8 @@ via their own relay with wake signals, and the CI builds a signed APK. M5
 (multiple devices) is complete: a person's phone and computer share contacts,
 an answer on one withdraws the request on the other, and new devices are added
 with a QR code and two check codes. M6 (Windows) is done: an installer from
-the CI, notification and foreground window, start at login; two checks are
-still open (Do Not Disturb on Windows 11, Linux after the changes). Status in [docs/roadmap.md](docs/roadmap.md).
+the CI, notification and foreground window, start at login; still to check
+is Do Not Disturb on Windows 11. Status in [docs/roadmap.md](docs/roadmap.md).
 
 | Milestone | Content |
 |---|---|

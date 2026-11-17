@@ -141,7 +141,8 @@ Scope:
 - Installer, tray, foreground window, autostart.
 - Plan, decisions and test record in `m6-windows.md`.
 - Done on 2026-11-17, checked on a Windows 10 PC with the installer from the CI ("Windows release"): installer per user, tray, foreground window without keyboard focus together with a notification that stays, Focus Assist respected, start at login into the tray (also on Linux), the Windows app as second device of a person. The relay now accepts 60 messages per hour and mailbox.
-- Still open in M6: Do Not Disturb on Windows 11; check on Linux that notifications, the start into the tray and autostart work as before.
+- Checked on Linux the same day: notifications, start with the window, "Start at login" and tray work as before.
+- Still open in M6: Do Not Disturb on Windows 11.
 - **Done when:** M3 and M5 work the same on Windows.
 
 ### M7 – Answer notification

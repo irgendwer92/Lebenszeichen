@@ -143,9 +143,17 @@ desktop session, so windows, tray and notifications are visible there.
   other, and exactly one answer arrives (window, button, click on the
   notification, closing it with ✕, click in the notification center).
 - Focus Assist "Alarms only" and "Priority only": notification only, no
-  window.
+  window. A notification held back into the notification center is
+  withdrawn from there too when the request is answered on another device
+  (Windows reports it as `TimedOut`; the app keeps it, and removes it from
+  the history by tag).
 - Windows app as second device of a person (M5): adding, check codes, an
   answer on one withdraws the request on the other.
 
-Still open: Do Not Disturb on Windows 11; on Linux, a check that the split
-notification code, the start into the tray and autostart work as before.
+Linux, checked the same day on KDE Plasma (Wayland): the window appears at
+the start, the notification over D-Bus comes with its button, an answer
+there withdraws the request on the other devices, "Start at login" creates
+and removes `~/.config/autostart/Lebenszeichen.desktop` with `--hidden`, and
+the tray works as before.
+
+Still open: Do Not Disturb on Windows 11.
