@@ -2,10 +2,13 @@
 # Build context: the repository root.
 #   docker build -f deploy/docker/Dockerfile -t lebenszeichen .
 
-FROM rust:1.89-slim-bookworm AS build
+# Current stable, like the CI (dtolnay/rust-toolchain@stable).
+FROM rust:1-slim-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# lz-client compiles its texts in from here.
+COPY locales ./locales
 RUN cargo build --release --locked -p lz-server -p lz-cli \
  && install -D -t /out target/release/lz-server target/release/lz
 

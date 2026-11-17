@@ -2,12 +2,12 @@
 # Entry point of the image.
 #
 # Plain Docker: runs lz-server with the arguments given (the CMD).
-# Home Assistant app (the Supervisor sets SUPERVISOR_TOKEN and writes
-# /data/options.json): builds the arguments from the app options and ignores
-# the CMD.
+# Home Assistant app (the Supervisor writes the app options to
+# /data/options.json): builds the arguments from them and ignores the CMD.
+# Plain Docker has no such file.
 set -eu
 
-if [ -z "${SUPERVISOR_TOKEN:-}" ] || [ ! -r /data/options.json ]; then
+if [ ! -r /data/options.json ]; then
     exec lz-server "$@"
 fi
 

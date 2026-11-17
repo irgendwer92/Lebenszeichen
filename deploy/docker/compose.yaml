@@ -6,6 +6,8 @@ services:
     image: ghcr.io/irgendwer92/lebenszeichen:latest   # or a version, e.g. :0.1.0
     container_name: lebenszeichen
     restart: unless-stopped
+    # Passes the stop signal on to lz-server, which has no init of its own.
+    init: true
 
     # Use the uid:gid of the host user who runs the scripts (`id -u`, `id -g`).
     # The socket directory must be mode 0700 and owned by that user, so that
