@@ -281,6 +281,7 @@ async function showDevice() {
     showError(String(error));
     return;
   }
+  showReportToken(status.packageName ?? "");
   const distributors = status.distributors ?? [];
   let push;
   if (status.distributorAcknowledged && status.endpoint) {
@@ -316,6 +317,56 @@ async function showDevice() {
     ),
   );
 }
+
+/// The switch for state reports from other apps (Android), with the token.
+async function showReportToken(packageName) {
+  let token;
+  try {
+    token = (await tauri.core.invoke("report_token")).value;
+  } catch (error) {
+    showError(String(error));
+    return;
+  }
+  applyReportToken(token, packageName);
+}
+
+let reportPackage = "";
+
+function applyReportToken(token, packageName = reportPackage) {
+  reportPackage = packageName;
+  $("report-token-on").checked = Boolean(token);
+  $("report-token-details").hidden = !token;
+  $("report-token").value = token ?? "";
+  $("report-token-intent").textContent = t("ui-report-token-intent", { package: packageName });
+}
+
+async function changeReportToken(command) {
+  try {
+    applyReportToken(await call(command));
+  } catch {
+    // `call` showed the error; show what holds.
+    showReportToken(reportPackage);
+  }
+}
+
+$("report-token-on").addEventListener("change", (event) =>
+  changeReportToken(event.target.checked ? "enable_report_token" : "disable_report_token"),
+);
+
+$("report-token-renew").addEventListener("click", () => changeReportToken("renew_report_token"));
+
+$("report-token-copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("report-token").value);
+    showError("");
+    $("report-token-copy").textContent = t("ui-copied");
+    setTimeout(() => ($("report-token-copy").textContent = t("ui-copy")), 2000);
+  } catch (error) {
+    showError(String(error));
+  }
+});
+
+$("report-token").addEventListener("focus", (event) => event.target.select());
 
 /// Shows the event log of the Kotlin layer, newest line first: what wake
 /// signals, fetches and answers did while the app was closed.

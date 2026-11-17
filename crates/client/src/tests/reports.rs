@@ -136,3 +136,59 @@ async fn overview_and_listing_show_state_and_setting() {
         .unwrap_err();
     assert!(error.0.contains("Wartezeit"), "{error:?}");
 }
+
+#[test]
+fn token_for_reports_from_other_apps() {
+    let world = World::new();
+    let mut anna = world.person(None);
+    assert_eq!(anna.ctx.report_token().unwrap(), None);
+    assert!(!anna.ctx.report_token_matches(&"0".repeat(64)).unwrap());
+
+    let first = anna.ctx.enable_report_token().unwrap();
+    assert_eq!(first.len(), 64);
+    assert!(
+        first
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    );
+    // Enabling again keeps it.
+    assert_eq!(anna.ctx.enable_report_token().unwrap(), first);
+    assert_eq!(anna.ctx.report_token().unwrap(), Some(first.clone()));
+    assert!(anna.ctx.report_token_matches(&first).unwrap());
+    assert!(
+        anna.ctx
+            .report_token_matches(&first.to_uppercase())
+            .unwrap()
+    );
+    assert!(!anna.ctx.report_token_matches(&first[..63]).unwrap());
+    assert!(!anna.ctx.report_token_matches("").unwrap());
+    assert!(!anna.ctx.report_token_matches(&"é".repeat(32)).unwrap());
+
+    let second = anna.ctx.renew_report_token().unwrap();
+    assert_ne!(second, first);
+    assert!(!anna.ctx.report_token_matches(&first).unwrap());
+    assert!(anna.ctx.report_token_matches(&second).unwrap());
+
+    anna.ctx.disable_report_token().unwrap();
+    assert_eq!(anna.ctx.report_token().unwrap(), None);
+    assert!(!anna.ctx.report_token_matches(&second).unwrap());
+}
+
+#[tokio::test]
+async fn report_wait_follows_state_and_arrival() {
+    let world = World::new();
+    let (mut anna, mut bert) = paired(&world).await;
+    anna.ctx.set_report_setting("Bert", true, None).unwrap();
+    assert_eq!(anna.ctx.report_wait().unwrap(), None);
+    set_state(&anna, "schläft", 480, world.now());
+    // A state alone: no request, nothing to wait for.
+    assert_eq!(anna.ctx.report_wait().unwrap(), None);
+
+    bert.ctx.request("Anna").await.unwrap();
+    anna.sync().await;
+    assert_eq!(anna.ctx.report_wait().unwrap(), Some(15 * MINUTE));
+    world.advance(5 * MINUTE);
+    assert_eq!(anna.ctx.report_wait().unwrap(), Some(10 * MINUTE));
+    world.advance(10 * MINUTE);
+    assert_eq!(anna.ctx.report_wait().unwrap(), Some(0));
+}

@@ -885,6 +885,45 @@ pub async fn clear_state(state: tauri::State<'_, AppState>) -> Result<Reply<()>,
     run(path(&state), async |ctx| ctx.clear_state()).await
 }
 
+/// The token for state reports from other apps (Android), or `None` if
+/// they are not accepted.
+#[tauri::command]
+pub async fn report_token(
+    state: tauri::State<'_, AppState>,
+) -> Result<Reply<Option<String>>, String> {
+    run(path(&state), async |ctx| ctx.report_token()).await
+}
+
+/// Accepts state reports from other apps; keeps an existing token.
+#[tauri::command]
+pub async fn enable_report_token(
+    state: tauri::State<'_, AppState>,
+) -> Result<Reply<Option<String>>, String> {
+    run(path(&state), async |ctx| {
+        ctx.enable_report_token().map(Some)
+    })
+    .await
+}
+
+/// Replaces the token for state reports from other apps.
+#[tauri::command]
+pub async fn renew_report_token(
+    state: tauri::State<'_, AppState>,
+) -> Result<Reply<Option<String>>, String> {
+    run(path(&state), async |ctx| ctx.renew_report_token().map(Some)).await
+}
+
+/// Stops accepting state reports from other apps.
+#[tauri::command]
+pub async fn disable_report_token(
+    state: tauri::State<'_, AppState>,
+) -> Result<Reply<Option<String>>, String> {
+    run(path(&state), async |ctx| {
+        ctx.disable_report_token().map(|()| None)
+    })
+    .await
+}
+
 /// Generates a command that takes the name of a contact.
 macro_rules! name_command {
     ($($(#[$doc:meta])* $command:ident => $method:ident;)*) => {$(

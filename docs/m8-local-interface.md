@@ -41,9 +41,44 @@ Done when: a script reports "asleep" and the requester sees
 - Windows: named pipe for the current user only (DACL with the user's
   SID, remote clients rejected), same HTTP. Client: `lz state` or a
   PowerShell example.
-- Android: explicit broadcast to the app, actions `SET_STATE` and
-  `CLEAR_STATE`, extras `token`, `reason`, `minutes`. Wrong or missing
-  token, or the switch off: dropped silently.
+- Android: a broadcast to the app (package `io.github.irgendwer92.lebenszeichen`,
+  receiver `StateReceiver`, exported).
+  - Actions: `io.github.irgendwer92.lebenszeichen.SET_STATE` and
+    `io.github.irgendwer92.lebenszeichen.CLEAR_STATE`.
+  - Extras: `token` (String, 64 hex digits; both actions), `reason`
+    (String; `SET_STATE`), `minutes` (`SET_STATE`; an Int or a String that
+    parses as a whole number, since Tasker and Home Assistant send text;
+    1 to 10080, no decimals).
+  - Settings, switch "Accept state reports from other apps" (off by
+    default): shows the token with Copy and Renew. The token is 32 random
+    bytes in the state file; renewing makes the old one stop working;
+    switching off deletes it.
+  - A report with the switch off, a missing or wrong token (compared in
+    constant time), or invalid values is dropped silently; nothing of it
+    (token, reason) goes into the log.
+  - After a state is set, and after every fetch, the app plans a WorkManager
+    job (`report-due`) for the moment the next reported answer is due; if
+    one is due already, it fetches at once. A fetch sends due reports, as
+    on the desktop. Under Doze the job may run late.
+  - Home Assistant (Companion app, `command_broadcast_intent`; check field
+    names against the Companion docs, they have changed between versions):
+
+    ```yaml
+    action: notify.mobile_app_<phone>
+    data:
+      message: command_broadcast_intent
+      data:
+        intent_package_name: io.github.irgendwer92.lebenszeichen
+        intent_action: io.github.irgendwer92.lebenszeichen.SET_STATE
+        intent_extras: "token:<token>,reason:asleep,minutes:480"
+    ```
+
+    The extras are comma separated `key:value` pairs, so `reason` cannot
+    contain a comma. For `CLEAR_STATE` send only `token`.
+  - Tasker: action "Send Intent", Action `io.github.irgendwer92.lebenszeichen.SET_STATE`,
+    Package `io.github.irgendwer92.lebenszeichen`, Target "Broadcast
+    Receiver", Extras `token:<token>` , `reason:asleep`, `minutes:480`
+    (one per extra field). Leave Class empty.
 - `lz state set <minutes> <reason>`, `lz state clear`, `lz state`:
   client for the socket of `lz listen`.
 

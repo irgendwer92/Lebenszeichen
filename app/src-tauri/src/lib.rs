@@ -50,6 +50,10 @@ macro_rules! handler {
             commands::set_rules,
             commands::set_report_setting,
             commands::clear_state,
+            commands::report_token,
+            commands::enable_report_token,
+            commands::renew_report_token,
+            commands::disable_report_token,
             commands::texts,
             commands::set_language,
             $($extra,)*

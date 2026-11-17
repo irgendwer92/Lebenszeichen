@@ -410,6 +410,21 @@
               the notification this holds only if Android hides sensitive content on the lock
               screen (Settings → Notifications → Lock screen).
             </p>
+            <div id="report-token-box">
+              <label>
+                <input type="checkbox" id="report-token-on" />
+                <span data-i18n="ui-report-token-on">Accept state reports from other apps</span>
+              </label>
+              <div id="report-token-details" hidden>
+                <textarea id="report-token" class="code" readonly rows="2"></textarea>
+                <button id="report-token-copy" type="button" data-i18n="ui-copy">Copy</button>
+                <button id="report-token-renew" type="button" class="quiet" data-i18n="ui-report-token-renew">Renew</button>
+                <p class="note" data-i18n="ui-report-token-note">
+                  Other apps report a state with a broadcast to this app.
+                </p>
+                <p class="note"><code id="report-token-intent"></code></p>
+              </div>
+            </div>
             <details class="history">
               <summary data-i18n="ui-log">Log</summary>
               <button id="device-log-clear" type="button" class="quiet" data-i18n="ui-clear">

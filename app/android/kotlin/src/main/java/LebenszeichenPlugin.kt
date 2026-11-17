@@ -103,6 +103,7 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
             }
         val result = JSObject()
         result.put("sdk", Build.VERSION.SDK_INT)
+        result.put("packageName", activity.packageName)
         result.put("device", "${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}")
         result.put("distributors", JSArray(UnifiedPush.getDistributors(activity)))
         result.put("distributor", UnifiedPush.getSavedDistributor(activity) ?: "")

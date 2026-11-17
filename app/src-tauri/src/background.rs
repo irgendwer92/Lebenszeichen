@@ -35,6 +35,11 @@ pub struct Requests {
     pub answers: Vec<Answer>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Seconds until a reported answer is due; `Some(0)` if one is due now
+    /// (after a fetch: it could not be sent). `None`: nothing pending. Only
+    /// set by [`fetch`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_wait: Option<u64>,
 }
 
 /// Result of an answer or of setting the push address.
@@ -120,6 +125,7 @@ pub fn fetch(path: &Path) -> Requests {
             .collect())
     });
     let mut requests = open_requests(path);
+    requests.report_wait = report_wait(path);
     match fetched {
         Ok(answers) => requests.answers = answers,
         Err(error) => {
@@ -127,6 +133,70 @@ pub fn fetch(path: &Path) -> Requests {
         }
     }
     requests
+}
+
+/// Seconds until the next reported answer is due, see [`Requests::report_wait`].
+pub fn report_wait(path: &Path) -> Option<u64> {
+    quiet_ctx(path).ok()?.report_wait().ok()?
+}
+
+/// A state report from another app.
+#[derive(Debug, Clone, Copy)]
+pub enum External<'a> {
+    /// `minutes` as the sender gave it: Tasker and Home Assistant send text.
+    Set {
+        reason: Option<&'a str>,
+        minutes: Option<&'a str>,
+    },
+    Clear,
+}
+
+/// What became of a state report from another app.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct Applied {
+    pub applied: bool,
+    /// As [`Requests::report_wait`], after the change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_wait: Option<u64>,
+}
+
+impl Applied {
+    const DROPPED: Self = Self {
+        applied: false,
+        report_wait: None,
+    };
+}
+
+/// Applies a state report from another app. Dropped without a trace in the
+/// answer if reports are off, the token is missing or wrong, or the values
+/// are not valid.
+pub fn report_from_app(path: &Path, token: Option<&str>, call: External<'_>) -> Applied {
+    let Some(token) = token else {
+        return Applied::DROPPED;
+    };
+    let Ok(mut ctx) = quiet_ctx(path) else {
+        return Applied::DROPPED;
+    };
+    if !ctx.report_token_matches(token).unwrap_or(false) {
+        return Applied::DROPPED;
+    }
+    let done = match call {
+        External::Set { reason, minutes } => {
+            let minutes = minutes.and_then(|text| text.trim().parse::<u32>().ok());
+            match (reason, minutes) {
+                (Some(reason), Some(minutes)) => ctx.set_state(reason, minutes),
+                _ => return Applied::DROPPED,
+            }
+        }
+        External::Clear => ctx.clear_state(),
+    };
+    if done.is_err() {
+        return Applied::DROPPED;
+    }
+    Applied {
+        applied: true,
+        report_wait: ctx.report_wait().ok().flatten(),
+    }
 }
 
 fn is_open(path: &Path, name: &str, since: u64) -> Result<bool, String> {
@@ -178,9 +248,12 @@ pub fn set_push_url(path: &Path, url: Option<&str>) -> Outcome {
 mod tests {
     use lz_client::ctx;
     use lz_client::i18n::Language;
-    use lz_core::store::JsonFile;
+    use lz_core::store::{JsonFile, Store};
 
-    use super::{Outcome, fetch, open_requests, respond, set_push_url, title};
+    use super::{
+        Applied, External, Outcome, fetch, open_requests, report_from_app, report_wait, respond,
+        set_push_url, title,
+    };
 
     fn device() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -236,5 +309,119 @@ mod tests {
     fn title_names_the_contact() {
         crate::lang::set_current(Language::De);
         assert_eq!(title("Anna"), "Anna fragt nach einem Lebenszeichen");
+    }
+
+    fn state_of(path: &std::path::Path) -> Option<String> {
+        let device = JsonFile::new(path).load().unwrap();
+        device
+            .reports
+            .state
+            .map(|s| format!("{}:{}", s.reason, s.until))
+    }
+
+    fn set<'a>(reason: &'a str, minutes: &'a str) -> External<'a> {
+        External::Set {
+            reason: Some(reason),
+            minutes: Some(minutes),
+        }
+    }
+
+    fn token_of(path: &std::path::Path) -> String {
+        let mut ctx = super::quiet_ctx(path).unwrap();
+        ctx.enable_report_token().unwrap()
+    }
+
+    #[test]
+    fn report_with_the_right_token_sets_the_state() {
+        let (_dir, path) = device();
+        let token = token_of(&path);
+        let applied = report_from_app(&path, Some(&token), set("asleep", "480"));
+        assert!(applied.applied);
+        assert_eq!(applied.report_wait, None);
+        assert!(state_of(&path).unwrap().starts_with("asleep:"));
+        // Cleared again with the same token.
+        let applied = report_from_app(&path, Some(&token), External::Clear);
+        assert!(applied.applied);
+        assert_eq!(state_of(&path), None);
+    }
+
+    #[test]
+    fn minutes_as_text_or_number_alike() {
+        let (_dir, path) = device();
+        let token = token_of(&path);
+        for text in ["60", " 60 "] {
+            assert!(report_from_app(&path, Some(&token), set("asleep", text)).applied);
+        }
+        // Not a number, zero, too long: dropped, the old state stays.
+        for text in ["", "abc", "6.5", "-1", "0", "99999999"] {
+            assert_eq!(
+                report_from_app(&path, Some(&token), set("other", text)),
+                Applied::DROPPED,
+                "{text}"
+            );
+        }
+        let missing = External::Set {
+            reason: Some("other"),
+            minutes: None,
+        };
+        assert_eq!(
+            report_from_app(&path, Some(&token), missing),
+            Applied::DROPPED
+        );
+        let no_reason = External::Set {
+            reason: None,
+            minutes: Some("5"),
+        };
+        assert_eq!(
+            report_from_app(&path, Some(&token), no_reason),
+            Applied::DROPPED
+        );
+        assert!(state_of(&path).unwrap().starts_with("asleep:"));
+    }
+
+    #[test]
+    fn wrong_missing_or_switched_off_token_changes_nothing() {
+        let (_dir, path) = device();
+        // Switch off from the start: any token, any call.
+        assert_eq!(
+            report_from_app(&path, Some(&"0".repeat(64)), set("asleep", "60")),
+            Applied::DROPPED
+        );
+        let token = token_of(&path);
+        assert!(report_from_app(&path, Some(&token), set("asleep", "60")).applied);
+        let before = state_of(&path);
+        let wrong = "f".repeat(64);
+        for given in [None, Some(wrong.as_str()), Some(""), Some("short")] {
+            assert_eq!(
+                report_from_app(&path, given, set("other", "5")),
+                Applied::DROPPED
+            );
+            assert_eq!(
+                report_from_app(&path, given, External::Clear),
+                Applied::DROPPED
+            );
+        }
+        assert_eq!(state_of(&path), before);
+        // Switched off: the token that worked before no longer does.
+        super::quiet_ctx(&path)
+            .unwrap()
+            .disable_report_token()
+            .unwrap();
+        assert_eq!(
+            report_from_app(&path, Some(&token), External::Clear),
+            Applied::DROPPED
+        );
+        assert_eq!(state_of(&path), before);
+    }
+
+    #[test]
+    fn wait_is_none_without_a_pending_report() {
+        let (_dir, path) = device();
+        assert_eq!(report_wait(&path), None);
+        assert_eq!(fetch(&path).report_wait, None);
+        assert_eq!(
+            report_wait(std::path::Path::new("/nonexistent/x.json")),
+            None
+        );
     }
 }

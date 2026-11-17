@@ -22,13 +22,20 @@ object Work {
      * network access in Doze; before Android 12 they would need a
      * foreground service, so they are left out there.
      */
-    fun networked(worker: Class<out ListenableWorker>, data: Data = Data.EMPTY): OneTimeWorkRequest {
+    fun networked(
+        worker: Class<out ListenableWorker>,
+        data: Data = Data.EMPTY,
+        delaySeconds: Long = 0,
+    ): OneTimeWorkRequest {
         val builder =
             OneTimeWorkRequest.Builder(worker)
                 .setInputData(data)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-        if (Build.VERSION.SDK_INT >= 31) {
+        if (delaySeconds > 0) {
+            builder.setInitialDelay(delaySeconds, TimeUnit.SECONDS)
+        } else if (Build.VERSION.SDK_INT >= 31) {
+            // A job with a delay cannot be expedited.
             builder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
         }
         return builder.build()
@@ -45,18 +52,56 @@ class FetchWorker(context: Context, params: WorkerParameters) : Worker(context, 
         val answer = CoreBridge.fetch(app)
         Answer.parseAll(answer).forEach { AnswerPresenter.show(app, it) }
         Requests.update(app, answer, "fetch")
-        val failed = answer.errorText() != null
-        return if (failed && runAttemptCount + 1 < MAX_ATTEMPTS) Result.retry() else Result.success()
+        // A reported answer still due right now could not be sent (no
+        // network, relay down): try again like after an error.
+        val wait = if (answer.has("report_wait")) answer.optLong("report_wait") else null
+        val failed = answer.errorText() != null || wait == 0L
+        if (failed && runAttemptCount + 1 < MAX_ATTEMPTS) return Result.retry()
+        // Out of attempts: try again later rather than never.
+        ReportWorker.schedule(app, if (wait == 0L) RETRY_LATER_SECONDS else wait)
+        return Result.success()
     }
 
     companion object {
         private const val MAX_ATTEMPTS = 4
+        private const val RETRY_LATER_SECONDS = 900L
 
         fun enqueue(context: Context, source: String) {
             EventLog.add(context, Requests.NO_REQUEST, "fetch-queued", source)
             WorkManager.getInstance(context)
                 .enqueueUniqueWork("fetch", ExistingWorkPolicy.APPEND_OR_REPLACE, Work.networked(FetchWorker::class.java))
         }
+    }
+}
+
+/**
+ * Fetches once when a reported answer becomes due. A fetch sends the
+ * reported answers that are due (the core does that in every sync), so this
+ * is the same job as [FetchWorker] with a delay and a name of its own.
+ * Under Doze it may run late.
+ */
+object ReportWorker {
+    private const val NAME = "report-due"
+
+    /** Margin so the core surely sees the moment as reached. */
+    private const val MARGIN_SECONDS = 1L
+
+    /** Plans the fetch for in [waitSeconds], or cancels it with `null`. */
+    fun schedule(context: Context, waitSeconds: Long?) {
+        val work = WorkManager.getInstance(context)
+        if (waitSeconds == null) {
+            work.cancelUniqueWork(NAME)
+            return
+        }
+        EventLog.add(context, Requests.NO_REQUEST, "report-planned", "in ${waitSeconds}s")
+        val request = Work.networked(FetchWorker::class.java, delaySeconds = waitSeconds + MARGIN_SECONDS)
+        work.enqueueUniqueWork(NAME, ExistingWorkPolicy.REPLACE, request)
+    }
+
+    /** Fetches now (something is due) and plans the next one. */
+    fun now(context: Context) {
+        EventLog.add(context, Requests.NO_REQUEST, "report-due", "now")
+        FetchWorker.enqueue(context, "state")
     }
 }
 

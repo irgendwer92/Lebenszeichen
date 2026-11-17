@@ -8,12 +8,13 @@ use std::collections::HashSet;
 
 use lz_core::report::Invalid;
 use lz_core::store::ReportSetting;
-use lz_core::wire::{MessageId, Reason, ResponseKind};
-use rand_core::OsRng;
+use lz_core::wire::{MessageId, Reason, ResponseKind, Token};
+use rand_core::{OsRng, RngCore};
+use subtle::ConstantTimeEq;
 
 use crate::ctx::{Ctx, Fail, Result, contact_mut, core};
 use crate::i18n::Texts;
-use crate::relay::Relay;
+use crate::relay::{Relay, hex};
 use crate::show::Notice;
 
 /// Requests for which sending a reported answer failed in this run, so the
@@ -37,6 +38,24 @@ fn invalid(t: Texts, error: Invalid) -> Fail {
     }
 }
 
+fn new_token() -> Token {
+    let mut token = [0; 32];
+    OsRng.fill_bytes(&mut token);
+    token
+}
+
+/// 64 hex digits (either case) to bytes.
+fn unhex(text: &str) -> Option<Token> {
+    if text.len() != 64 || !text.is_ascii() {
+        return None;
+    }
+    let mut out = [0; 32];
+    for (byte, pair) in out.iter_mut().zip(text.as_bytes().chunks(2)) {
+        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(out)
+}
+
 impl<R: Relay> Ctx<R> {
     /// Sets the reported state of this device for `minutes` from now.
     pub fn set_state(&mut self, reason: &str, minutes: u32) -> Result<()> {
@@ -55,6 +74,70 @@ impl<R: Relay> Ctx<R> {
         self.update(|device| {
             device.clear_state();
             Ok(())
+        })
+    }
+
+    /// The token for state reports from other apps as 64 hex digits, if
+    /// they are accepted.
+    pub fn report_token(&self) -> Result<Option<String>> {
+        Ok(self.load()?.reports.token.map(|token| hex(&token)))
+    }
+
+    /// Accepts state reports from other apps. An existing token stays; the
+    /// token is returned as hex.
+    pub fn enable_report_token(&mut self) -> Result<String> {
+        let token = self.update(|device| {
+            let token = *device.reports.token.get_or_insert_with(new_token);
+            Ok(token)
+        })?;
+        Ok(hex(&token))
+    }
+
+    /// Replaces the token; the old one stops working. Turns reports on if
+    /// they were off.
+    pub fn renew_report_token(&mut self) -> Result<String> {
+        let token = self.update(|device| {
+            let token = new_token();
+            device.reports.token = Some(token);
+            Ok(token)
+        })?;
+        Ok(hex(&token))
+    }
+
+    /// Stops accepting state reports from other apps.
+    pub fn disable_report_token(&mut self) -> Result<()> {
+        self.update(|device| {
+            device.reports.token = None;
+            Ok(())
+        })
+    }
+
+    /// Whether `given` is the token that is set. Compared in constant time;
+    /// false if none is set or `given` is not 64 hex digits.
+    pub fn report_token_matches(&self, given: &str) -> Result<bool> {
+        let Some(token) = self.load()?.reports.token else {
+            return Ok(false);
+        };
+        let Some(given) = unhex(given) else {
+            return Ok(false);
+        };
+        Ok(token.ct_eq(&given).into())
+    }
+
+    /// Seconds until a reported answer is due, for a device that has to
+    /// schedule a wake-up: `Some(0)` if one is due now, `None` if nothing is
+    /// pending.
+    pub fn report_wait(&self) -> Result<Option<u64>> {
+        let now = self.now();
+        self.update(|device| {
+            device.refresh_arrivals(now);
+            Ok(if device.due_reports(now).is_empty() {
+                device
+                    .next_report_due(now)
+                    .map(|due| due.saturating_sub(now))
+            } else {
+                Some(0)
+            })
         })
     }
 
