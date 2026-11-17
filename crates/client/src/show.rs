@@ -1,6 +1,7 @@
 //! Human-readable output: times in local time, rules, events.
 
-use chrono::{DateTime, Datelike, Local, TimeZone, Timelike};
+use jiff::tz::TimeZone;
+use jiff::{Timestamp, ZonedDateTime};
 use lz_core::wire::{ResponseKind, Rules};
 
 use crate::i18n::Texts;
@@ -15,9 +16,11 @@ pub fn when(t: Texts, at: u64, now: u64) -> String {
     let (Some(local_at), Some(local_now)) = (local(at), local(now)) else {
         return tr!(t, "time-unix", at = &at.to_string());
     };
+    let Ok(days) = local_at.date().since(local_now.date()) else {
+        return tr!(t, "time-unix", at = &at.to_string());
+    };
     let time = format!("{:02}:{:02}", local_at.hour(), local_at.minute());
-    let days = (local_at.date_naive() - local_now.date_naive()).num_days();
-    let id = match days {
+    let id = match days.get_days() {
         -1 => "time-yesterday",
         0 => "time-today",
         1 => "time-tomorrow",
@@ -25,7 +28,7 @@ pub fn when(t: Texts, at: u64, now: u64) -> String {
         _ => "time-date-year",
     };
     let weekday = t.text(
-        &format!("time-weekday-{}", local_at.weekday().number_from_monday()),
+        &format!("time-weekday-{}", local_at.weekday().to_monday_one_offset()),
         &[],
     );
     let month_name = t.text(&format!("time-month-{}", local_at.month()), &[]);
@@ -42,8 +45,11 @@ pub fn when(t: Texts, at: u64, now: u64) -> String {
     )
 }
 
-fn local(at: u64) -> Option<DateTime<Local>> {
-    Local.timestamp_opt(i64::try_from(at).ok()?, 0).single()
+/// The point in time in the time zone of the system; UTC if the system names
+/// none.
+fn local(at: u64) -> Option<ZonedDateTime> {
+    let at = Timestamp::from_second(i64::try_from(at).ok()?).ok()?;
+    Some(at.to_zoned_datetime(TimeZone::system()))
 }
 
 /// A duration in minutes, in hours where that is exact.
@@ -421,13 +427,13 @@ mod tests {
 
     #[test]
     fn dates_and_clock_times() {
-        use chrono::{Local, TimeZone};
         let at = |y, m, d, h, min| {
-            Local
-                .with_ymd_and_hms(y, m, d, h, min, 0)
-                .single()
+            jiff::civil::date(y, m, d)
+                .at(h, min, 0, 0)
+                .to_zoned_datetime(jiff::tz::TimeZone::system())
                 .unwrap()
-                .timestamp() as u64
+                .timestamp()
+                .as_second() as u64
         };
         let now = at(2026, 11, 16, 9, 0);
         let (de, en) = (Language::De.texts(), Language::En.texts());
