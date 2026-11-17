@@ -11,6 +11,7 @@ const COMMANDS: &[&str] = &[
     "setup_code",
     "code_kind",
     "devices",
+    "device_rename",
     "device_remove",
     "device_join",
     "device_add",

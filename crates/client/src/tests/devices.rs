@@ -626,6 +626,24 @@ async fn removed_contact_is_removed_on_the_other_device() {
 }
 
 #[tokio::test]
+async fn renamed_device_is_known_by_its_new_name_elsewhere() {
+    let world = World::new();
+    let (mut phone, mut laptop, _bert) = family(&world).await;
+    // The name of another own device is taken.
+    assert!(phone.ctx.rename_device("Laptop").await.is_err());
+    phone.ctx.rename_device("Phone").await.unwrap();
+    assert_eq!(phone.device().name.as_deref(), Some("Phone"));
+    laptop.sync().await;
+    let names: Vec<_> = laptop
+        .device()
+        .devices
+        .iter()
+        .map(|d| d.name.clone())
+        .collect();
+    assert_eq!(names, vec!["Phone".to_owned()]);
+}
+
+#[tokio::test]
 async fn removed_device_deletes_its_state() {
     let world = World::new();
     let (mut phone, mut laptop, _bert) = family(&world).await;

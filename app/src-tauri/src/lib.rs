@@ -31,6 +31,7 @@ macro_rules! handler {
             commands::setup_code,
             commands::code_kind,
             commands::devices,
+            commands::device_rename,
             commands::device_remove,
             commands::device_join,
             commands::device_add,

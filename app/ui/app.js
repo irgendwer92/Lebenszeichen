@@ -982,10 +982,12 @@ async function showDevices() {
     return;
   }
   const form = $("add-device-form");
-  if (!form.elements.name.value) {
-    // A device that has a name already keeps it.
-    form.elements.name.value = list.find((d) => d.this)?.name ?? "";
-  }
+  const own = list.find((d) => d.this)?.name ?? "";
+  // The name field of the add form names this device. Once it has a name,
+  // the field goes, so that adding never renames it by accident; renaming
+  // is the button in the list.
+  $("add-name-row").hidden = own !== "";
+  if (own || !form.elements.name.value) form.elements.name.value = own;
   $("devices").replaceChildren(
     ...list.map((device) => {
       const item = el("li", "card");
@@ -993,6 +995,9 @@ async function showDevices() {
       if (device.this) {
         parts.push(el("span", "this-device", t("ui-this-device-tag")));
         parts.push(spacer());
+        if (device.name) {
+          parts.push(button(t("ui-rename"), async () => renameForm(item, device.name)));
+        }
       } else {
         parts.push(
           spacer(),
@@ -1021,6 +1026,36 @@ async function showDevices() {
     $("setup-code-details").hidden = true;
     $("setup-code-details").open = false;
   }
+}
+
+/// Turns the entry of this device into a field for its new name.
+function renameForm(item, name) {
+  const form = el("form", "row");
+  const input = el("input");
+  input.name = "name";
+  input.required = true;
+  input.maxLength = 32;
+  input.value = name;
+  input.setAttribute("aria-label", t("ui-rename"));
+  const save = el("button", "primary", t("ui-save"));
+  save.type = "submit";
+  const cancel = el("button", "", t("ui-cancel"));
+  cancel.type = "button";
+  cancel.addEventListener("click", () => showDevices());
+  form.append(input, save, cancel);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    try {
+      await call("device_rename", { name: input.value });
+    } catch {
+      // Already shown by `call`.
+    } finally {
+      await showDevices();
+    }
+  });
+  item.replaceChildren(form);
+  input.focus();
 }
 
 $("setup-code-details").addEventListener("toggle", (event) => {
