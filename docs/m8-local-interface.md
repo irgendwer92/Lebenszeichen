@@ -62,8 +62,9 @@ Done when: a script reports "asleep" and the requester sees
   tick (every 10 seconds), so a newly set state is used within that tick;
   the interface only writes the state file and stays independent of the
   fetch loop. A failed delivery is rolled back and tried again; the
-  problem is shown once per run. Android: a WorkManager job with the delay when a request
-  arrives, and a check when a state is set; under Doze it may run late.
+  problem is shown once per run.
+- Android: a WorkManager job with the delay when a request arrives, and a
+  check when a state is set; under Doze it may run late.
 
 ## Test record
 
