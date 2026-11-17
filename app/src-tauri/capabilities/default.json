@@ -30,6 +30,8 @@
     "allow-remove",
     "allow-set-rules",
     "allow-texts",
-    "allow-set-language"
+    "allow-set-language",
+    "allow-autostart",
+    "allow-set-autostart"
   ]
 }

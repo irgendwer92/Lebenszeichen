@@ -26,7 +26,9 @@ systems. M4 (Android app) is complete: phone and desktop request each other
 via their own relay with wake signals, and the CI builds a signed APK. M5
 (multiple devices) is complete: a person's phone and computer share contacts,
 an answer on one withdraws the request on the other, and new devices are added
-with a QR code and two check codes. Status in [docs/roadmap.md](docs/roadmap.md).
+with a QR code and two check codes. M6 (Windows) is done: an installer from
+the CI, notification and foreground window, start at login; still to check
+is Do Not Disturb on Windows 11. Status in [docs/roadmap.md](docs/roadmap.md).
 
 | Milestone | Content |
 |---|---|
@@ -37,15 +39,17 @@ with a QR code and two check codes. Status in [docs/roadmap.md](docs/roadmap.md)
 | M4 | Android app |
 | M5 | Multiple devices |
 | M6 | Windows |
-| M7 | Local interface for status reports |
-| M8 | Hardening |
+| M7 | Notification when an answer arrives |
+| M8 | Local interface for status reports |
+| M9 | Hardening |
 
 ## Command line
 
 `lz` is the client without a UI. Each device has a state file, selectable
 with `--state <path>` or `LZ_STATE`; the default is
 `$XDG_DATA_HOME/lebenszeichen/device.json` (otherwise
-`~/.local/share/lebenszeichen/device.json`).
+`~/.local/share/lebenszeichen/device.json`), on Windows
+`%APPDATA%\lebenszeichen\device.json`.
 
 ```sh
 # Once: create the device. With an access token it can invite.
@@ -100,14 +104,15 @@ crates/
 ├── cli/     Client without a UI (program: lz)
 └── relay/   Relay server (program: lz-relay)
 app/
-├── src-tauri/   Tauri shell for Linux desktop and Android
+├── src-tauri/   Tauri shell for the Linux and Windows desktop and Android
 ├── ui/          UI for both (plain HTML without a build step)
 └── android/     Kotlin layer: UnifiedPush, full-screen display, notifications
-docs/        Concept, protocol, roadmap, walking skeleton M1, Android release, draft of the license exception
+docs/        Concept, protocol, roadmap, walking skeleton M1, Android release, Windows release, draft of the license exception
 ```
 
-`app/` is not part of the Cargo workspace. The desktop app for Linux is built
-and started locally (needs WebKitGTK 4.1 and GTK 3):
+`app/` is not part of the Cargo workspace. The desktop app is built and
+started locally, on Linux with WebKitGTK 4.1 and GTK 3, on Windows with the
+Visual Studio Build Tools (WebView2 is part of Windows 10 and 11):
 
 ```sh
 cd app/src-tauri
@@ -132,6 +137,8 @@ that touch `app/` or `crates/`, or by hand:
 attached there as an artifact. The signed APK is built by the workflow "Android release" on
 a tag `v*`; setup and verification in
 [docs/android-release.md](docs/android-release.md).
+The Windows installer (unsigned, per user) is built by the workflow "Windows release";
+see [docs/windows-release.md](docs/windows-release.md).
 
 ## Development
 
@@ -156,7 +163,10 @@ embedded by `crates/client/src/i18n.rs`. `lz` picks the language from
 a variant to `Language` and to `Language::ALL` in `i18n.rs`; the tests check
 that the file parses and has every message id of the English one. The app
 follows the system language by default; ⚙ → Language sets it per device
-(`settings.json` next to the state file, never synced).
+(`settings.json` next to the state file, never synced). On the desktop the
+app turns "Start at login" on at the first start, because it only shows
+requests while it runs; it then starts straight into the tray (`--hidden`).
+⚙ → Start at login turns it off, and it stays off.
 
 ## License
 

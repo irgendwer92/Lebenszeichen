@@ -4,6 +4,7 @@
     "windows": [
       {
         "title": "Lebenszeichen",
+        "visible": false,
         "width": 520,
         "height": 760
       }

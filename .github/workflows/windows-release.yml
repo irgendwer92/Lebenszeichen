@@ -1,0 +1,74 @@
+name: Windows release
+
+# Builds the unsigned NSIS installer (per user, no administrator rights).
+# Only for a tag v* and by hand, never for pull requests. Usage and
+# verification in docs/windows-release.md.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  installer:
+    name: Installer (NSIS)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          key: release
+
+      # Same pinned version as for Android (app/package-lock.json).
+      - name: Install the Tauri CLI
+        working-directory: app
+        run: npm ci
+
+      - name: Build the installer
+        working-directory: app
+        env:
+          LZ_DEFAULT_RELAY: ${{ vars.LZ_DEFAULT_RELAY }}
+        run: npm run tauri build
+
+      - name: Find the installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          setup="$(find app/src-tauri/target/release/bundle/nsis -name '*-setup.exe' -print -quit)"
+          test -n "$setup"
+          echo "SETUP=$setup" >> "$GITHUB_ENV"
+
+      - name: Checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          sum="$(sha256sum "$SETUP" | cut -d' ' -f1)"
+          {
+            echo "### $(basename "$SETUP")"
+            echo
+            echo "SHA-256: \`$sum\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$sum  $(basename "$SETUP")"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lebenszeichen-windows-setup
+          path: ${{ env.SETUP }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

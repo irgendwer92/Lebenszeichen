@@ -3,27 +3,31 @@
 
 use std::path::PathBuf;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod alert;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod notify;
 
-use lz_client::i18n::Arg;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WindowEvent, Wry};
 
-use crate::lang;
+use tauri_plugin_autostart::ManagerExt;
+
+use crate::{lang, settings};
 
 use crate::commands::spawn_sync;
 
 /// Label of the main window.
 const MAIN_WINDOW: &str = "main";
 
+/// Launch argument of "Start at login": the app goes straight into the tray.
+pub const HIDDEN_ARG: &str = "--hidden";
+
 /// What only the desktop keeps.
 pub struct Desktop {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     notifier: Option<notify::Notifier>,
     tray: TrayItems,
 }
@@ -53,13 +57,13 @@ pub fn language_changed(app: &AppHandle) {
 
 /// Requests may have come or gone; the notifications follow.
 pub fn poke(app: &AppHandle) {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     if let Some(desktop) = app.try_state::<Desktop>()
         && let Some(notifier) = &desktop.notifier
     {
         notifier.poke();
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     let _ = app;
 }
 
@@ -68,14 +72,53 @@ pub fn poke(app: &AppHandle) {
 pub fn setup(app: &mut tauri::App, path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let tray = build_tray(app, path.clone())?;
     keep_running_when_closed(app);
+    show_unless_hidden(app);
+    offer_autostart(app, &path);
     app.manage(Desktop {
         tray,
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         notifier: notify::start(app.handle().clone(), path),
     });
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     let _ = path;
     Ok(())
+}
+
+/// Shows the main window unless the app was started with `--hidden`. The
+/// window is created invisible (`visible: false` in the platform
+/// configuration), so a start into the tray never flashes a window.
+fn show_unless_hidden(app: &tauri::App) {
+    if !std::env::args().any(|arg| arg == HIDDEN_ARG) {
+        show_window(app.handle());
+    }
+}
+
+/// Turns "Start at login" on at the very first start, once; if the person
+/// turns it off later, it stays off. The flag is only set when it worked, so
+/// a failure is tried again at the next start.
+fn offer_autostart(app: &tauri::App, state: &std::path::Path) {
+    // Development builds never put themselves into autostart.
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let file = settings::path(state);
+    if settings::load(&file).autostart_offered {
+        return;
+    }
+    let outcome = app
+        .autolaunch()
+        .enable()
+        .map_err(|error| error.to_string())
+        .and_then(|()| {
+            settings::update(&file, |settings| settings.autostart_offered = true)
+                .map_err(|error| error.to_string())
+        });
+    if let Err(error) = outcome {
+        eprintln!(
+            "{}: {error}",
+            lang::texts().text("app-error-autostart", &[])
+        );
+    }
 }
 
 /// Brings the window back, for the tray and for a second start of the app.
@@ -87,8 +130,9 @@ pub fn show_window(app: &AppHandle) {
     }
 }
 
-/// Puts the app into the tray. Tray icons on Linux get no clicks, so
-/// everything goes through the menu.
+/// Puts the app into the tray. On Windows a left click shows the window and
+/// the menu stays on the right click; tray icons on Linux get no clicks, so
+/// there everything goes through the menu.
 fn build_tray(app: &tauri::App, path: PathBuf) -> tauri::Result<TrayItems> {
     let t = lang::texts();
     let item = |id, text_id| MenuItem::with_id(app, id, t.text(text_id, &[]), true, None::<&str>);
@@ -99,6 +143,17 @@ fn build_tray(app: &tauri::App, path: PathBuf) -> tauri::Result<TrayItems> {
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("Lebenszeichen")
         .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_window(tray.app_handle());
+            }
+        })
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "show" => show_window(app),
             "sync" => spawn_sync(app.clone(), path.clone()),
@@ -137,7 +192,7 @@ pub struct AlertText {
 
 /// The request a foreground window shows, from its label. A window can only
 /// ever see and answer its own request.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn alert_of<'a>(
     window: &tauri::WebviewWindow,
     state: &'a tauri::State<'_, Desktop>,
@@ -157,7 +212,7 @@ pub fn alert_text(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, Desktop>,
 ) -> Result<AlertText, String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     {
         let (notifier, number) = alert_of(&window, &state)?;
         let t = lang::texts();
@@ -166,11 +221,14 @@ pub fn alert_text(
             .ok_or_else(|| t.text("app-error-request-closed", &[]))?;
         Ok(AlertText {
             lang: t.language().tag(),
-            title: t.text("app-alert-title", &[("name", Arg::Text(&name))]),
+            title: t.text(
+                "app-alert-title",
+                &[("name", lz_client::i18n::Arg::Text(&name))],
+            ),
             hint: t.text("app-alert-hint", &[]),
         })
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = (window, state);
         Err(lang::texts().text("app-error-no-alert-here", &[]))
@@ -183,13 +241,13 @@ pub fn alert_answer(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, Desktop>,
 ) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     {
         let (notifier, number) = alert_of(&window, &state)?;
         notifier.alert_clicked(number);
         Ok(())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = (window, state);
         Err(lang::texts().text("app-error-no-alert-here", &[]))

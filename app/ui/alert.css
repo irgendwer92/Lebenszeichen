@@ -1,4 +1,4 @@
-/* Foreground window for an open request (X11). Same colors as app.css. */
+/* Foreground window for an open request (X11, Windows). Same colors as app.css. */
 
 :root {
   color-scheme: light dark;
@@ -43,6 +43,8 @@ body {
 
 main {
   height: 100%;
+  /* The padding inside the height, else the page overflows the window. */
+  box-sizing: border-box;
   display: grid;
   place-content: center;
   justify-items: center;

@@ -8,7 +8,6 @@
 
 use std::fmt;
 use std::io::{self, Write};
-use std::path::Path;
 #[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]
@@ -1166,15 +1165,20 @@ fn contact_view(contact: &StoredContact, now: u64) -> ContactView {
     }
 }
 
-/// Path of the state file if none is given: `$XDG_DATA_HOME/lebenszeichen/device.json`,
-/// falling back to `~/.local/share/lebenszeichen/device.json`.
+/// Path of the state file if none is given: on Windows
+/// `%APPDATA%\lebenszeichen\device.json`, elsewhere
+/// `$XDG_DATA_HOME/lebenszeichen/device.json`, falling back to
+/// `~/.local/share/lebenszeichen/device.json`.
 pub fn default_state_path(t: Texts) -> Result<std::path::PathBuf> {
-    let data = std::env::var_os("XDG_DATA_HOME")
-        .filter(|v| !v.is_empty())
+    let var = |name| std::env::var_os(name).filter(|v| !v.is_empty());
+    #[cfg(windows)]
+    let data = var("APPDATA").map(std::path::PathBuf::from);
+    #[cfg(not(windows))]
+    let data = var("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME").map(|home| Path::new(&home).join(".local").join("share"))
-        })
-        .ok_or_else(|| fail!(t, "error-no-data-dir"))?;
+            var("HOME").map(|home| std::path::PathBuf::from(home).join(".local").join("share"))
+        });
+    let data = data.ok_or_else(|| fail!(t, "error-no-data-dir"))?;
     Ok(data.join("lebenszeichen").join("device.json"))
 }

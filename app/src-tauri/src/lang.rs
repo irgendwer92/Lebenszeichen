@@ -6,15 +6,14 @@
 //! the one of the OS, on Android the first locale of the application
 //! context. Languages without a translation give English.
 
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use lz_client::i18n::{Language, Texts};
 use serde::{Deserialize, Serialize};
 
-/// Name of the settings file, next to the state file.
-pub const SETTINGS_FILE: &str = "settings.json";
+use crate::settings;
 
 /// What the person chose for the language.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,39 +45,19 @@ impl Choice {
     }
 }
 
-/// The content of `settings.json`: `{"language":"system"|"en"|"de"}`.
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct Settings {
-    #[serde(default)]
-    language: Choice,
-}
-
 /// The settings file that belongs to a state file.
 pub fn settings_path(state: &Path) -> PathBuf {
-    state.with_file_name(SETTINGS_FILE)
+    settings::path(state)
 }
 
 /// The language setting; a missing or unreadable file means `system`.
 pub fn load(path: &Path) -> Choice {
-    std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok())
-        .unwrap_or_default()
-        .language
+    settings::load(path).language
 }
 
-/// Stores the language setting. Writes a temporary file and renames it over
-/// the old one, so a crash leaves either the old or the new file.
+/// Stores the language setting; the other settings stay as they are.
 pub fn save(path: &Path, language: Choice) -> io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    let json = serde_json::to_vec(&Settings { language }).map_err(io::Error::other)?;
-    let mut file = std::fs::File::create(&tmp)?;
-    file.write_all(&json)?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(&tmp, path)
+    settings::update(path, |settings| settings.language = language)
 }
 
 /// The language that a setting stands for; `system` asks `system`.
@@ -134,6 +113,7 @@ pub fn apply(state: &Path) -> Language {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::SETTINGS_FILE;
 
     #[test]
     fn missing_or_unreadable_file_means_system() {

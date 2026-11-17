@@ -183,7 +183,7 @@ The push service (ntfy) only sees when a device is woken.
 
 - Mailboxes only with access token, voucher, or derived from a voucher mailbox (at most 10 each, not chainable).
 - At most 64 handover slots on the relay and two per authorizing token.
-- At most 32 waiting messages and 20 deliveries per hour per mailbox (32 since 2026-11-16 for the sync mailbox of several devices; before that 8, decided on 2026-11-14; before that 6, which could block the `end` during normal use through pairing, rule changes and responses). The limit counts all messages because the relay does not know the types; it is not a substitute for the rules for requests.
+- At most 32 waiting messages and 60 deliveries per hour per mailbox (60 since 2026-11-17, because the own devices of a person share their sync mailbox and setting them up hit 20; 32 since 2026-11-16 for the sync mailbox of several devices; before that 8, decided on 2026-11-14; before that 6, which could block the `end` during normal use through pairing, rule changes and responses). The limit counts all messages because the relay does not know the types; it is not a substitute for the rules for requests.
 - Mailboxes without retrieval for 90 days are deleted.
 
 These limits only protect the relay. The rules for requests are enforced by the requested party's device, because the relay does not know the message types.

@@ -63,7 +63,7 @@ The wake signal from the relay to the device is invisible. Only what the app dis
 | Platform | Implementation | Limitation |
 |---|---|---|
 | Android | Notification with full-screen intent, like alarm clock and phone call | Full screen only when the screen is locked or off; during use a banner appears. The permission is active when sideloaded; when installed via the Play Store, users would have to enable it themselves. |
-| Windows | Own window above all others | – |
+| Windows | Notification that stays until acted on, and in addition an own window above all others | The window only while Focus Assist (Do Not Disturb), presentations and full-screen programs are off. Focus Assist has no documented interface; the app reads it through an undocumented one and shows the window if that fails. |
 | Linux, X11 | Own window above all others | – |
 | Linux, Wayland | Not reliable: apps may not bring themselves to the front | Fallback to a notification with urgency "critical" that stays visible. On KDE Plasma, a KWin window rule helps locally. |
 | macOS (later) | Own window | – |
@@ -75,7 +75,9 @@ Rules for the foreground display:
   such notifications even during "Do Not Disturb". Anyone who does not want
   that turns it off in the system settings. The foreground window on
   X11 also always appears, because "Do Not Disturb" cannot be queried
-  consistently there.
+  consistently there. On Windows the notification always comes and Windows
+  holds it back as set; the window appears only while Focus Assist is off.
+  When one of the two is answered, the app withdraws the other.
 - On the desktop the window takes no keyboard focus. Only a click or tap on the window, or closing it, counts as a response; a keypress in the middle of typing must never count as a sign of life.
 
 ### Sound and vibration

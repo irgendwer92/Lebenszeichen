@@ -1,10 +1,13 @@
-//! Foreground window for an open request, under X11 (see `docs/concept.md`):
+//! Foreground window for an open request, under X11 and on Windows (see
+//! `docs/concept.md`):
 //! above all other windows, on every workspace, and without keyboard focus,
 //! so that a key pressed while typing elsewhere never counts as a sign of
 //! life. A click into the window or closing it answers.
 //!
 //! Under Wayland an app may not bring itself to the front; there requests
-//! come as notifications only.
+//! come as notifications only. On Windows a request always comes as a
+//! notification too, and the window only while Focus Assist and Do Not
+//! Disturb are off.
 
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
@@ -28,13 +31,70 @@ pub fn number(label: &str) -> Option<u32> {
 }
 
 /// Whether the app runs on X11, where a window may put itself in front.
+#[cfg(target_os = "linux")]
 pub fn possible() -> bool {
     let var = |name| std::env::var(name).ok().filter(|v| !v.is_empty());
     on_x11(var("GDK_BACKEND"), var("WAYLAND_DISPLAY"), var("DISPLAY"))
 }
 
+/// Whether a window may come to the front on Windows: not during Focus
+/// Assist or Do Not Disturb, a presentation or a full-screen program. The
+/// request comes as a notification either way.
+#[cfg(windows)]
+pub fn possible() -> bool {
+    use windows::Win32::UI::Shell::{QUNS_ACCEPTS_NOTIFICATIONS, SHQueryUserNotificationState};
+    let accepts = unsafe { SHQueryUserNotificationState() }
+        .is_ok_and(|state| state == QUNS_ACCEPTS_NOTIFICATIONS);
+    accepts && !focus_assist::on()
+}
+
+/// Focus Assist (Windows 10; whether Do Not Disturb of Windows 11 shows here
+/// too is still to be checked). Windows offers no documented way to ask for
+/// it; this reads the state the shell publishes, as other tools do. If that fails, it counts as off, and the
+/// window appears as before.
+#[cfg(windows)]
+mod focus_assist {
+    use std::ffi::c_void;
+
+    /// `WNF_SHEL_QUIETHOURS_ACTIVE_PROFILE_CHANGED`: 0 off, 1 priority only,
+    /// 2 alarms only.
+    const STATE_NAME: u64 = 0x0D83_063E_A3BF_1C75;
+
+    #[link(name = "ntdll", kind = "raw-dylib")]
+    unsafe extern "system" {
+        fn NtQueryWnfStateData(
+            state_name: *const u64,
+            type_id: *const c_void,
+            explicit_scope: *const c_void,
+            change_stamp: *mut u32,
+            buffer: *mut c_void,
+            buffer_size: *mut u32,
+        ) -> i32;
+    }
+
+    pub fn on() -> bool {
+        let mut stamp = 0u32;
+        let mut profile = 0u32;
+        let mut size = u32::try_from(size_of::<u32>()).unwrap_or(4);
+        // Safety: every pointer is valid for the call, and the buffer holds
+        // `size` bytes.
+        let status = unsafe {
+            NtQueryWnfStateData(
+                &STATE_NAME,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut stamp,
+                (&raw mut profile).cast(),
+                &mut size,
+            )
+        };
+        status >= 0 && size == 4 && profile != 0
+    }
+}
+
 /// GTK picks Wayland if the session offers it, unless `GDK_BACKEND` names
 /// another backend first; XWayland counts as X11 then.
+#[cfg(any(target_os = "linux", test))]
 fn on_x11(backend: Option<String>, wayland: Option<String>, display: Option<String>) -> bool {
     let first = backend
         .as_deref()

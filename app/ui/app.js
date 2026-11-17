@@ -222,6 +222,25 @@ $("language").addEventListener("change", async (event) => {
   refresh();
 });
 
+/// "Start at login", desktop only: the row stays hidden on Android.
+$("autostart").addEventListener("change", async (event) => {
+  try {
+    event.target.checked = await tauri.core.invoke("set_autostart", { on: event.target.checked });
+  } catch (error) {
+    showError(String(error));
+    showAutostart();
+  }
+});
+
+/// Shows whether the app starts at login.
+async function showAutostart() {
+  try {
+    $("autostart").checked = await tauri.core.invoke("autostart");
+  } catch (error) {
+    showError(String(error));
+  }
+}
+
 // ---------------------------------------------------------------- Device (Android)
 
 const PLUGIN = "plugin:lebenszeichen|";
@@ -343,6 +362,8 @@ tauri.core.invoke("platform").then((platform) => {
   isAndroid = platform === "android";
   // The ⚙ panel holds the language setting on both; the rest is Android's.
   $("device-android").hidden = !isAndroid;
+  $("autostart-row").hidden = isAndroid;
+  if (!isAndroid) showAutostart();
   $("scan").hidden = !isAndroid;
   $("setup-scan").hidden = !isAndroid;
   $("add-scan").hidden = !isAndroid;
