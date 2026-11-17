@@ -146,11 +146,13 @@ Scope:
 - Still open in M6: Do Not Disturb on Windows 11.
 - **Done when:** M3 and M5 work the same on Windows.
 
-### M7 – Answer notification
+### M7 – Answer notification (completed on 2026-11-17)
 - Feedback from a tester: the requester learns of the answer only in the app. A notification when the answer arrives: "Anna has answered" with the time, for a reported answer with the reason ("“asleep” (reported)").
-- Android: quiet notification on its own channel, which can be turned off in the system settings without touching the channel of requests. Desktop: an ordinary notification that expires on its own; closing it sends nothing.
+- Android: notification on its own channel, which can be turned off in the system settings without touching the channel of requests. Desktop: an ordinary notification that expires on its own; closing it sends nothing.
 - Wording says that an answer came, not that the person is fine (see `concept.md`).
 - One notification per answer, also when another device of the same person answered.
+- Plan, decisions and test record in `m7-answer-notification.md`. Decided on 2026-11-17: answer notifications have sound on all systems, the name shows on the Android lock screen, and a newer answer of a contact replaces the older notification on Android.
+- Done criterion met on 2026-11-17 on Linux (KDE Plasma), Windows 10 and a Fairphone 4 with the release APK: manual and reported answers notify with sound on each device once; a click opens the app; the channel "Answers" turned off on the phone silences answers while requests still arrive. Found on the way: Plasma plays a sound only with a `sound-name` hint; on Windows a click in the notification center reaches the app only through a link scheme (`lebenszeichen-open:`).
 - **Done when:** on the phone and on the desktop, an answer to an own request appears as a notification, and the channel on Android can be turned off on its own.
 
 ### M8 – Local interface

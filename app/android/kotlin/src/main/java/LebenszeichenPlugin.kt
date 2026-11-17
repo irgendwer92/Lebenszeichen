@@ -40,6 +40,7 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
      */
     override fun load(webView: WebView) {
         RequestPresenter.ensureChannel(activity)
+        AnswerPresenter.ensureChannel(activity)
         try {
             if (UnifiedPush.getAckDistributor(activity) != null) {
                 UnifiedPush.register(activity, messageForDistributor = MESSAGE_FOR_DISTRIBUTOR)
@@ -74,6 +75,20 @@ class LebenszeichenPlugin(private val activity: Activity) : Plugin(activity) {
             Requests.refresh(app, "app")
             invoke.resolve()
         }.start()
+    }
+
+    /**
+     * A contact answered an own request while the app is open; called by
+     * the core (`answer.rs`), not by the interface.
+     */
+    @Command
+    fun showAnswer(invoke: Invoke) {
+        try {
+            AnswerPresenter.show(activity, Answer.parse(invoke.getArgs()))
+            invoke.resolve()
+        } catch (e: org.json.JSONException) {
+            invoke.reject(e.toString())
+        }
     }
 
     @Command

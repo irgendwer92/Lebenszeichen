@@ -95,6 +95,7 @@ impl World {
                 idle: Duration::from_millis(20),
                 hints: test_hints,
                 lang: Language::De,
+                on_notice: None,
             },
             out,
             _dir: dir,
@@ -126,6 +127,7 @@ impl World {
                 idle: Duration::from_millis(20),
                 hints: test_hints,
                 lang: Language::De,
+                on_notice: None,
             },
             out,
             _dir: dir,
@@ -231,6 +233,27 @@ async fn paired(world: &World) -> (Person, Person) {
     anna.out.take();
     bert.out.take();
     (anna, bert)
+}
+
+#[tokio::test]
+async fn the_hook_sees_every_notice_once() {
+    let world = World::new();
+    let (mut anna, mut bert) = paired(&world).await;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    bert.ctx.on_notice = Some(Box::new(move |notice: &Notice| {
+        sink.lock().unwrap().push(notice.clone());
+    }));
+    bert.ctx.request("Anna").await.unwrap();
+    anna.sync().await;
+    anna.ctx.respond("Bert").await.unwrap();
+    let returned = bert.sync().await;
+    assert_eq!(*seen.lock().unwrap(), returned);
+    assert!(matches!(returned[..], [Notice::Response { .. }]));
+    // Nothing more: the answer is not notified a second time.
+    seen.lock().unwrap().clear();
+    bert.sync().await;
+    assert!(seen.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

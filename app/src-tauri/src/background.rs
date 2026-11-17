@@ -12,6 +12,7 @@ use lz_client::i18n::Arg;
 use lz_client::relay::Http;
 use serde::Serialize;
 
+use crate::answer::Answer;
 use crate::commands::{new_ctx, runtime};
 
 /// A request of a contact that waits for an answer.
@@ -29,6 +30,9 @@ pub struct OpenRequest {
 #[derive(Debug, Default, Serialize)]
 pub struct Requests {
     pub requests: Vec<OpenRequest>,
+    /// Answers to own requests that this fetch received.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub answers: Vec<Answer>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -93,11 +97,11 @@ pub fn open_requests(path: &Path) -> Requests {
     match quiet_ctx(path).and_then(|ctx| list(&ctx)) {
         Ok(requests) => Requests {
             requests,
-            error: None,
+            ..Requests::default()
         },
         Err(error) => Requests {
-            requests: Vec::new(),
             error: Some(error),
+            ..Requests::default()
         },
     }
 }
@@ -106,14 +110,21 @@ pub fn open_requests(path: &Path) -> Requests {
 /// fetch still lists what the state file has.
 pub fn fetch(path: &Path) -> Requests {
     let fetched = quiet_ctx(path).and_then(|mut ctx| {
-        runtime()?
+        let notices = runtime()?
             .block_on(ctx.sync())
-            .map(drop)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        let (t, now) = (ctx.texts(), ctx.now());
+        Ok(notices
+            .iter()
+            .filter_map(|notice| Answer::from_notice(t, notice, now))
+            .collect())
     });
     let mut requests = open_requests(path);
-    if let Err(error) = fetched {
-        requests.error.get_or_insert(error);
+    match fetched {
+        Ok(answers) => requests.answers = answers,
+        Err(error) => {
+            requests.error.get_or_insert(error);
+        }
     }
     requests
 }

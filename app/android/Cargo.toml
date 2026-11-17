@@ -15,4 +15,5 @@ links = "tauri-plugin-lebenszeichen"
 tauri-plugin = { version = "2.7", features = ["build"] }
 
 [dependencies]
+serde = "1"
 tauri = { version = "2.12" }

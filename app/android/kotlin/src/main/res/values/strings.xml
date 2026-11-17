@@ -4,6 +4,8 @@
     <!-- Notification channel -->
     <string name="lz_notification_channel_name">Requests</string>
     <string name="lz_notification_channel_description">Requests for a sign of life. Silent by default, no vibration.</string>
+    <string name="lz_answer_channel_name">Answers</string>
+    <string name="lz_answer_channel_description">When a contact answers your request. Turning this off does not affect requests.</string>
 
     <!-- Notification and full-screen display. The neutral title is all the lock screen shows. -->
     <string name="lz_neutral_title">Lebenszeichen?</string>

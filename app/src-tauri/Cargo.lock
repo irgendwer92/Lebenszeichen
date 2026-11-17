@@ -4394,6 +4394,7 @@ dependencies = [
 name = "tauri-plugin-lebenszeichen"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "tauri",
  "tauri-plugin",
 ]

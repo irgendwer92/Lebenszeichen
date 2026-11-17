@@ -102,6 +102,14 @@ Dismissing counts as a response, automatic expiry never does.
 
 When one device responds, the display is withdrawn on the other devices of the same person.
 
+## Notification of an answer
+
+The asking side learns of an answer by a notification on each of its devices: "Anna has answered" with the time, or for a reported answer with the reason ("“asleep” (reported)"). It says that an answer came, not that the person is fine.
+
+- An ordinary notification with the sound of the system; it expires on its own, and clicking or closing it sends nothing. A click opens the app.
+- Android: a channel of its own ("Answers"), default importance, with the name on the lock screen. It can be turned off in the system settings without touching the channel of requests.
+- One notification per answer: the core drops an answer that arrives again. A reported answer and a later manual one are two answers; on Android the newer replaces the older notification of the same contact.
+
 ## Local interface for status reports
 
 External programs (sleep detection, home automation, a script on the CPAP device) report a state to the app on the same device.

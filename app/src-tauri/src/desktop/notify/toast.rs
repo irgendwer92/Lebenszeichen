@@ -24,15 +24,18 @@ use windows::UI::Notifications::{
 };
 use windows::Win32::System::Com::CoIncrementMTAUsage;
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW};
-use windows::core::{HSTRING, IInspectable, Ref, w};
+use windows::core::{HSTRING, IInspectable, PCWSTR, Ref};
 
-use super::{Event, Gone, Text};
+use super::{Event, Gone, Kind, Text};
 
 type OnEvent = Arc<dyn Fn(u32, Event) + Send + Sync>;
 
 /// Group of all toasts of requests; with the id as tag, it finds a toast in
 /// the notification center.
 const GROUP: &str = "requests";
+
+/// Group of the toasts of answers, which the app never withdraws.
+const ANSWERS: &str = "answers";
 type Toasts = Arc<Mutex<HashMap<u32, ToastNotification>>>;
 
 /// The toasts of this app.
@@ -57,6 +60,7 @@ impl Service {
         unsafe { CoIncrementMTAUsage() }.map_err(|error| error.to_string())?;
         let id = app.config().identifier.as_str();
         register(id, &app.package_info().name);
+        register_scheme();
         let app_id = HSTRING::from(id);
         // Only to learn here whether Windows offers notifications at all.
         notifier(&app_id).map_err(|error| error.to_string())?;
@@ -86,7 +90,11 @@ impl Service {
         xml.LoadXml(&HSTRING::from(toast_xml(text)))?;
         let toast = ToastNotification::CreateToastNotification(&xml)?;
         toast.SetTag(&tag(id))?;
-        toast.SetGroup(&HSTRING::from(GROUP))?;
+        let group = match text.kind {
+            Kind::Request { .. } => GROUP,
+            Kind::Answer { .. } => ANSWERS,
+        };
+        toast.SetGroup(&HSTRING::from(group))?;
         if let Some(on_event) = self.on_event.get() {
             let report = Report {
                 id,
@@ -207,42 +215,86 @@ fn lock(toasts: &Toasts) -> MutexGuard<'_, HashMap<u32, ToastNotification>> {
 /// Registers the app identifier with its display name, so that Windows
 /// shows toasts of a build that was not installed.
 fn register(id: &str, name: &str) {
-    let key = HSTRING::from(format!(r"Software\Classes\AppUserModelId\{id}"));
-    let value: Vec<u16> = name.encode_utf16().chain([0]).collect();
-    let Ok(size) = u32::try_from(value.len() * 2) else {
-        return;
-    };
-    let status = unsafe {
-        RegSetKeyValueW(
-            HKEY_CURRENT_USER,
-            &key,
-            w!("DisplayName"),
-            REG_SZ.0,
-            Some(value.as_ptr().cast()),
-            size,
-        )
-    };
-    if let Err(error) = status.ok() {
+    let key = format!(r"Software\Classes\AppUserModelId\{id}");
+    if let Err(error) = set_value(&key, Some("DisplayName"), name) {
         eprintln!("Could not register the app for notifications: {error}");
     }
 }
 
-/// The toast: silent, staying until the person acts, with one button.
+/// Scheme the toast of an answer opens. Windows starts the app with it,
+/// also from the notification center, where a click does not reach the
+/// running app; the single-instance check hands it to the running app,
+/// which only shows its window. The argument is never read.
+const OPEN_SCHEME: &str = "lebenszeichen-open";
+
+/// Registers [`OPEN_SCHEME`] for the user, at every start, so that it
+/// follows the path of the installed program.
+fn register_scheme() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let key = format!(r"Software\Classes\{OPEN_SCHEME}");
+    let command = format!(r#""{}" "%1""#, exe.display());
+    let result = set_value(&key, None, "URL:Lebenszeichen")
+        .and_then(|()| set_value(&key, Some("URL Protocol"), ""))
+        .and_then(|()| set_value(&format!(r"{key}\shell\open\command"), None, &command));
+    if let Err(error) = result {
+        eprintln!("Could not register {OPEN_SCHEME}: {error}");
+    }
+}
+
+/// Sets a text value under `HKEY_CURRENT_USER`, the default value of the
+/// key without `name`.
+fn set_value(key: &str, name: Option<&str>, value: &str) -> windows::core::Result<()> {
+    let key = HSTRING::from(key);
+    let name = name.map(HSTRING::from);
+    let name = name
+        .as_ref()
+        .map_or(PCWSTR::null(), |name| PCWSTR(name.as_ptr()));
+    let value: Vec<u16> = value.encode_utf16().chain([0]).collect();
+    let size = u32::try_from(value.len() * 2).map_err(|_| windows::core::Error::empty())?;
+    unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            &key,
+            name,
+            REG_SZ.0,
+            Some(value.as_ptr().cast()),
+            size,
+        )
+    }
+    .ok()
+}
+
+/// The toast of a request: silent, staying until the person acts, with one
+/// button. That of an answer: an ordinary toast with the sound of the
+/// system, which goes on its own; a click shows the main window.
 fn toast_xml(text: &Text) -> String {
-    format!(
+    let visual = format!(
         concat!(
-            r#"<toast scenario="reminder" launch="respond">"#,
             r#"<visual><binding template="ToastGeneric">"#,
             "<text>{}</text><text>{}</text>",
             "</binding></visual>",
-            r#"<actions><action content="{}" arguments="respond" activationType="foreground"/></actions>"#,
-            r#"<audio silent="true"/>"#,
-            "</toast>",
         ),
         escape(&text.title),
         escape(&text.hint),
-        escape(&text.action),
-    )
+    );
+    match &text.kind {
+        Kind::Request { action } => format!(
+            concat!(
+                r#"<toast scenario="reminder" launch="respond">"#,
+                "{}",
+                r#"<actions><action content="{}" arguments="respond" activationType="foreground"/></actions>"#,
+                r#"<audio silent="true"/>"#,
+                "</toast>",
+            ),
+            visual,
+            escape(action),
+        ),
+        Kind::Answer { .. } => {
+            format!(r#"<toast activationType="protocol" launch="{OPEN_SCHEME}:">{visual}</toast>"#)
+        }
+    }
 }
 
 /// Escapes text for XML content and attribute values.
@@ -263,7 +315,7 @@ fn escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Text, ToastDismissalReason, dismissal, escape, toast_xml};
+    use super::{Kind, Text, ToastDismissalReason, dismissal, escape, toast_xml};
 
     #[test]
     fn only_the_person_dismisses() {
@@ -283,10 +335,27 @@ mod tests {
         let xml = toast_xml(&Text {
             title: "A&B</text><text>".into(),
             hint: "hint".into(),
-            action: r#"go" x="1"#.into(),
+            kind: Kind::Request {
+                action: r#"go" x="1"#.into(),
+            },
         });
         assert!(xml.contains("<text>A&amp;B&lt;/text&gt;&lt;text&gt;</text>"));
         assert!(xml.contains(r#"content="go&quot; x=&quot;1""#));
         assert_eq!(xml.matches("<text>").count(), 2);
+    }
+
+    #[test]
+    fn an_answer_has_sound_and_no_button() {
+        let xml = toast_xml(&Text {
+            title: "Anna has answered".into(),
+            hint: "✓ today 14:32".into(),
+            kind: Kind::Answer {
+                open: "Open".into(),
+            },
+        });
+        assert!(!xml.contains("<audio"));
+        assert!(!xml.contains("<actions>"));
+        assert!(!xml.contains("reminder"));
+        assert!(xml.contains(r#"activationType="protocol" launch="lebenszeichen-open:""#));
     }
 }
