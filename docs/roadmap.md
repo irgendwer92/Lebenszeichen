@@ -155,13 +155,14 @@ Scope:
 - Done criterion met on 2026-11-17 on Linux (KDE Plasma), Windows 10 and a Fairphone 4 with the release APK: manual and reported answers notify with sound on each device once; a click opens the app; the channel "Answers" turned off on the phone silences answers while requests still arrive. Found on the way: Plasma plays a sound only with a `sound-name` hint; on Windows a click in the notification center reaches the app only through a link scheme (`lebenszeichen-open:`).
 - **Done when:** on the phone and on the desktop, an answer to an own request appears as a notification, and the channel on Android can be turned off on its own.
 
-### M8 – Local interface
+### M8 – Local interface (completed on 2026-11-17)
 - `set` and `clear` via Unix socket, named pipe and Android intent with token.
 - Reported response after the waiting time, allowed per contact and device.
 - Example script.
 - Plan, decisions and test record in `m8-local-interface.md`.
 - Guide for users with recipes: `local-interface.md`.
 - **Done when:** a script reports "asleep" and the requester sees "“asleep” (reported)" after the waiting time.
+- Done criterion met on 2026-11-17 on Linux (example script on the socket), Windows 10 (PowerShell script on the pipe) and a Fairphone 4 (Home Assistant broadcast with token): each answered a request of the test contact with the reported state after the waiting time; a later tap still sent ✓. Found on the way: the window's new commands were missing from the app's permissions.
 
 ### M8b – Container and Home Assistant
 - Docker image of `lz listen` (amd64, aarch64 later), state in a volume, socket in a mounted directory.

@@ -134,8 +134,10 @@ Requests from Claude's `lz` test contact to the user's devices.
       ✓ (19:22:15). Found on the way: the new commands of the window
       (report setting, report token) were missing from `build.rs` and the
       main capability, so the window could not call them; fixed.
-- [ ] Windows: same with `examples/report-state.ps1`, owner check of the
-      pipe.
+- [x] Windows 10 (installer from the branch): `report-state.ps1 set 30
+      asleep` through the pipe (owner check passed); with the states on
+      Linux and the phone cleared, the request sent 20:51:15 was answered
+      with "“asleep” (reported)" at 20:52:26.
 - [x] Phone (Fairphone 4, signed release APK from the branch): switch on,
       token shown. `adb shell am broadcast` with a wrong token and without
       a token: dropped, no state. State "testa" set from Home Assistant
