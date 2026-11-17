@@ -34,7 +34,7 @@ fn invalid(t: Texts, error: Invalid) -> Fail {
             "error-report-delay",
             max = &lz_core::report::MAX_DELAY_MINUTES.to_string()
         ),
-        Invalid::UnknownContact => Fail(error.to_string()),
+        Invalid::UnknownContact | Invalid::Encrypt => Fail(error.to_string()),
     }
 }
 
@@ -57,23 +57,82 @@ fn unhex(text: &str) -> Option<Token> {
 }
 
 impl<R: Relay> Ctx<R> {
-    /// Sets the reported state of this device for `minutes` from now.
-    pub fn set_state(&mut self, reason: &str, minutes: u32) -> Result<()> {
+    /// Sets the reported state of this device for `minutes` from now; with
+    /// `share` also on the other own devices (sent with the next fetch).
+    pub fn set_state(&mut self, reason: &str, minutes: u32, share: bool) -> Result<()> {
         let t = self.texts();
         let reason = Reason::new(reason.trim()).map_err(|_| fail!(t, "error-reason-long"))?;
         let now = self.now();
         self.update(|device| {
+            if share {
+                device.share_state(reason, minutes, now, &mut OsRng)
+            } else {
+                device.set_state(reason, minutes, now)
+            }
+            .map_err(|error| invalid(t, error))
+        })
+    }
+
+    /// Ends the own reported state of this device now; with `share` also
+    /// the handed state and the shared state on the other own devices.
+    pub fn clear_state(&mut self, share: bool) -> Result<()> {
+        let t = self.texts();
+        let now = self.now();
+        self.update(|device| {
+            if share {
+                device
+                    .clear_shared_state(now, &mut OsRng)
+                    .map_err(|error| invalid(t, error))
+            } else {
+                device.clear_state();
+                Ok(())
+            }
+        })
+    }
+
+    /// Ends the state that applies now, on all own devices if it is the
+    /// shared one. For the ✕ next to the state.
+    pub fn end_state(&mut self) -> Result<()> {
+        let t = self.texts();
+        let now = self.now();
+        self.update(|device| {
             device
-                .set_state(reason, minutes, now)
+                .end_current_state(now, &mut OsRng)
                 .map_err(|error| invalid(t, error))
         })
     }
 
-    /// Ends the reported state of this device now.
-    pub fn clear_state(&mut self) -> Result<()> {
+    /// The reason handed over when the battery is low, if that is on.
+    pub fn battery_reason(&self) -> Result<Option<String>> {
+        Ok(self
+            .load()?
+            .reports
+            .battery
+            .map(|b| b.reason.as_str().to_owned()))
+    }
+
+    /// Turns handing over a state at low battery on with `reason`, or off.
+    pub fn set_battery(&mut self, reason: Option<&str>) -> Result<()> {
+        let t = self.texts();
+        let reason = reason
+            .map(|r| Reason::new(r.trim()).map_err(|_| fail!(t, "error-reason-long")))
+            .transpose()?;
+        self.update(|device| device.set_battery(reason).map_err(|e| invalid(t, e)))
+    }
+
+    /// Checks the battery level against the battery setting; a change is
+    /// sent with the next fetch.
+    pub fn check_battery(
+        &mut self,
+        percent: u8,
+        charging: bool,
+    ) -> Result<lz_core::report::BatteryChange> {
+        let t = self.texts();
+        let now = self.now();
         self.update(|device| {
-            device.clear_state();
-            Ok(())
+            device
+                .check_battery(percent, charging, now, &mut OsRng)
+                .map_err(|e| invalid(t, e))
         })
     }
 
@@ -230,8 +289,14 @@ impl<R: Relay> Ctx<R> {
 #[cfg(unix)]
 pub enum StateCall<'a> {
     Show,
-    Set { reason: &'a str, minutes: u32 },
-    Clear,
+    Set {
+        reason: &'a str,
+        minutes: u32,
+        share: bool,
+    },
+    Clear {
+        share: bool,
+    },
 }
 
 #[cfg(unix)]
@@ -244,15 +309,24 @@ impl<R: Relay> Ctx<R> {
         call: StateCall<'_>,
     ) -> Result<()> {
         let t = self.texts();
-        let (method, body) = match &call {
-            StateCall::Show => ("GET", None),
-            StateCall::Set { reason, minutes } => (
+        let (method, query, body) = match &call {
+            StateCall::Show => ("GET", "", None),
+            StateCall::Set {
+                reason,
+                minutes,
+                share,
+            } => (
                 "POST",
-                Some(serde_json::json!({ "reason": reason, "minutes": minutes }).to_string()),
+                "",
+                Some(
+                    serde_json::json!({ "reason": reason, "minutes": minutes, "share": share })
+                        .to_string(),
+                ),
             ),
-            StateCall::Clear => ("DELETE", None),
+            StateCall::Clear { share: false } => ("DELETE", "", None),
+            StateCall::Clear { share: true } => ("DELETE", "share=true", None),
         };
-        let (status, answer) = crate::local::request(socket, method, body.as_deref())
+        let (status, answer) = crate::local::request(socket, method, query, body.as_deref())
             .await
             .map_err(|error| match error.kind() {
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused => {
@@ -266,20 +340,35 @@ impl<R: Relay> Ctx<R> {
             (StateCall::Show, 200) => {
                 let reason = json["reason"].as_str().unwrap_or_default();
                 let until = json["until"].as_u64().unwrap_or_default();
+                let shared = json["shared"].as_bool().unwrap_or_default();
+                let handed = json["handed"].as_bool().unwrap_or_default();
                 tr!(
                     t,
                     "status-reported-state",
                     reason = &crate::show::reported_state(t, reason),
-                    until = &crate::show::when(t, until, self.now())
+                    until = &crate::show::when(t, until, self.now()),
+                    origin = &crate::show::state_origin(t, shared, handed)
                 )
             }
-            (StateCall::Set { reason, minutes }, 204) => tr!(
+            (
+                StateCall::Set {
+                    reason,
+                    minutes,
+                    share,
+                },
+                204,
+            ) => tr!(
                 t,
-                "out-state-set",
+                if *share {
+                    "out-state-shared"
+                } else {
+                    "out-state-set"
+                },
                 reason = &crate::show::reported_state(t, reason.trim()),
                 duration = &crate::show::minutes(t, *minutes)
             ),
-            (StateCall::Clear, 204) => tr!(t, "out-state-cleared"),
+            (StateCall::Clear { share: false }, 204) => tr!(t, "out-state-cleared"),
+            (StateCall::Clear { share: true }, 204) => tr!(t, "out-state-cleared-everywhere"),
             _ => {
                 let error = json["error"].as_str().unwrap_or("unexpected answer");
                 return Err(Fail(format!("{status}: {error}")));

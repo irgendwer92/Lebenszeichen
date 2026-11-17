@@ -425,6 +425,23 @@
                 <p class="note"><code id="report-token-intent"></code></p>
               </div>
             </div>
+            <div id="battery-box">
+              <label>
+                <input type="checkbox" id="battery-on" />
+                <span data-i18n="ui-battery-on">Hand over a state when the battery is low</span>
+              </label>
+              <div id="battery-details" hidden>
+                <input
+                  type="text"
+                  id="battery-reason"
+                  maxlength="64"
+                  data-i18n-aria-label="ui-battery-reason"
+                />
+                <p class="note" data-i18n="ui-battery-note">
+                  At 2% the state goes to your other devices for 24 hours; at 5% or when charging it ends there.
+                </p>
+              </div>
+            </div>
             <details class="history">
               <summary data-i18n="ui-log">Log</summary>
               <button id="device-log-clear" type="button" class="quiet" data-i18n="ui-clear">

@@ -36,6 +36,8 @@
     "allow-enable-report-token",
     "allow-renew-report-token",
     "allow-disable-report-token",
+    "allow-battery-reason",
+    "allow-set-battery-reason",
     "allow-texts",
     "allow-set-language",
     "allow-autostart",

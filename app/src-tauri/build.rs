@@ -33,6 +33,8 @@ const COMMANDS: &[&str] = &[
     "enable_report_token",
     "renew_report_token",
     "disable_report_token",
+    "battery_reason",
+    "set_battery_reason",
     "texts",
     "set_language",
     "autostart",

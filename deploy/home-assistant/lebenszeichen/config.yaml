@@ -1,5 +1,5 @@
 name: Lebenszeichen
-version: "0.1.0"
+version: "0.2.0"
 slug: lebenszeichen
 description: Answers "asleep" for you from Home Assistant when you can't, as a reported state
 url: https://github.com/irgendwer92/Lebenszeichen

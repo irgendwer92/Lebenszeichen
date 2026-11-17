@@ -33,6 +33,8 @@ pub mod kind {
     pub const RULES_SET: u8 = 68;
     pub const CONTACT_PART: u8 = 69;
     pub const CONTACT_REMOVED: u8 = 70;
+    pub const STATE_SHARED: u8 = 71;
+    pub const STATE_CLEARED: u8 = 72;
 }
 
 /// A decoded plaintext.
@@ -66,6 +68,10 @@ pub enum Body {
     ContactPart(ContactPart),
     /// Another device ended the contact with this own mailbox identifier.
     ContactRemoved(MailboxId),
+    /// Another device handed its reported state to this one.
+    StateShared(StateShared),
+    /// Another device ended the state it handed on.
+    StateCleared,
     /// A type this version does not know. Receivers ignore it; it cannot be
     /// encoded.
     Unknown(u8),
@@ -104,6 +110,15 @@ pub struct Responded {
 pub struct RulesSet {
     pub contact: MailboxId,
     pub rules: Rules,
+}
+
+/// `state_shared`: another device of the person hands on its reported
+/// state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StateShared {
+    pub reason: Reason,
+    /// End of the state in Unix seconds.
+    pub until: u64,
 }
 
 /// `contact_part`: one part of the record of a newly paired contact.
@@ -285,6 +300,8 @@ impl Body {
             Self::RulesSet(_) => kind::RULES_SET,
             Self::ContactPart(_) => kind::CONTACT_PART,
             Self::ContactRemoved(_) => kind::CONTACT_REMOVED,
+            Self::StateShared(_) => kind::STATE_SHARED,
+            Self::StateCleared => kind::STATE_CLEARED,
             Self::Unknown(_) => return Err(Error::InvalidValue),
         })
     }
@@ -349,6 +366,11 @@ impl Body {
                 w.put(part.data.as_bytes())
             }
             Self::ContactRemoved(contact) => w.put(contact),
+            Self::StateShared(state) => {
+                w.text(&state.reason)?;
+                w.put(&state.until.to_be_bytes())
+            }
+            Self::StateCleared => Ok(()),
             Self::Unknown(_) => Err(Error::InvalidValue),
         }
     }
@@ -403,6 +425,11 @@ impl Body {
                 })
             }
             kind::CONTACT_REMOVED => Self::ContactRemoved(r.array()?),
+            kind::STATE_SHARED => Self::StateShared(StateShared {
+                reason: r.text()?,
+                until: r.u64()?,
+            }),
+            kind::STATE_CLEARED => Self::StateCleared,
             other => Self::Unknown(other),
         })
     }
@@ -452,7 +479,7 @@ impl ResponseKind {
 mod tests {
     use super::{
         Body, ContactPart, DeviceAnnounce, HEADER_LEN, Hello, Message, PartData, Requested,
-        Responded, Response, ResponseKind, Rules, RulesSet, contact_part_ids, kind,
+        Responded, Response, ResponseKind, Rules, RulesSet, StateShared, contact_part_ids, kind,
     };
     use crate::{
         DeviceName, Error, MAX_DEVICE_NAME_LEN, MAX_PART_LEN, MAX_REASON_LEN, MAX_RELAY_URL_LEN,
@@ -616,7 +643,7 @@ mod tests {
         }
     }
 
-    fn sync_bodies() -> [Body; 8] {
+    fn sync_bodies() -> [Body; 9] {
         [
             Body::Device(DeviceAnnounce {
                 reader: [1; 16],
@@ -646,6 +673,10 @@ mod tests {
             }),
             Body::ContactPart(longest_part()),
             Body::ContactRemoved([8; 32]),
+            Body::StateShared(StateShared {
+                reason: Reason::new(&"p".repeat(MAX_REASON_LEN)).unwrap(),
+                until: 9,
+            }),
         ]
     }
 
@@ -669,6 +700,7 @@ mod tests {
             rules_set,
             part,
             contact_removed,
+            state_shared,
         ] = sync_bodies().map(|body| round_trip(body, PADDED_PLAINTEXT_LEN));
 
         assert_eq!(device[0], 64);
@@ -711,6 +743,21 @@ mod tests {
         assert_eq!(contact_removed[0], 70);
         assert_eq!(&contact_removed[25..27], &[0, 32]);
         assert_eq!(&contact_removed[27..59], &[8; 32]);
+
+        assert_eq!(state_shared[0], 71);
+        assert_eq!(&state_shared[25..27], &[0, 73]);
+        assert_eq!(state_shared[27], 64);
+        assert_eq!(&state_shared[28..92], &[b'p'; 64]);
+        assert_eq!(&state_shared[92..100], &9u64.to_be_bytes());
+    }
+
+    #[test]
+    fn state_cleared_is_an_empty_sync_body() {
+        assert!(Body::StateCleared.is_sync());
+        assert_eq!(Body::StateCleared.sync_contact(), None);
+        let buf = round_trip(Body::StateCleared, PADDED_PLAINTEXT_LEN);
+        assert_eq!(buf[0], 72);
+        assert_eq!(&buf[25..27], &[0, 0]);
     }
 
     #[test]

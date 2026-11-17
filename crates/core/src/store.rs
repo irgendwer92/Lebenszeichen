@@ -19,7 +19,7 @@ use crate::contact::{ContactState, Seen};
 use crate::crypto::GroupKey;
 use crate::pairing::{Address, PendingInvitation};
 use crate::wire::{
-    ENVELOPE_LEN, MailboxId, MessageId, READER_ID_LEN, ReaderId, Reason, RelayUrl, Token,
+    ENVELOPE_LEN, MailboxId, MessageId, READER_ID_LEN, ReaderId, Reason, RelayUrl, Stamp, Token,
     TransferId,
 };
 
@@ -192,9 +192,20 @@ pub struct StoredContact {
 /// What this device does with reported states. See `report.rs`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reports {
-    /// The reported state while set; may lie in the past, then unused.
+    /// The own reported state while set; may lie in the past, then unused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<ReportedState>,
+    /// The state another own device handed to this one (M8c).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed: Option<ReportedState>,
+    /// Sending time and identifier of the newest `state_shared` or
+    /// `state_cleared` sent or applied here; older ones are ignored.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::contact::is_unset",
+        with = "crate::contact::stamp"
+    )]
+    pub share_stamp: Stamp,
     /// Per contact, only where it differs from the default.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub contacts: Vec<ReportSetting>,
@@ -210,6 +221,18 @@ pub struct Reports {
         with = "crate::hex::option"
     )]
     pub token: Option<Token>,
+    /// Hand over a state when the battery is low (Android). `None`: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery: Option<BatterySetting>,
+}
+
+/// The battery setting: the reason to hand over, and whether it was handed
+/// over and waits for the battery to recover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatterySetting {
+    pub reason: Reason,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub low: bool,
 }
 
 impl Reports {
@@ -224,6 +247,13 @@ pub struct ReportedState {
     pub reason: Reason,
     /// End of the state, Unix seconds; it applies while `now < until`.
     pub until: u64,
+    /// When it was set, Unix seconds; of two valid states the one set last
+    /// applies. For a handed state the sending time of `state_shared`.
+    #[serde(default)]
+    pub since: u64,
+    /// An own state that was handed to the other devices.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
 }
 
 /// Whether reported answers go to a contact from this device, and after

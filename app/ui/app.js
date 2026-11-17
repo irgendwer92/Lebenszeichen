@@ -282,6 +282,7 @@ async function showDevice() {
     return;
   }
   showReportToken(status.packageName ?? "");
+  showBattery();
   const distributors = status.distributors ?? [];
   let push;
   if (status.distributorAcknowledged && status.endpoint) {
@@ -367,6 +368,45 @@ $("report-token-copy").addEventListener("click", async () => {
 });
 
 $("report-token").addEventListener("focus", (event) => event.target.select());
+
+/// The switch "Hand over a state when the battery is low" (Android), with
+/// the reason. The core decides when the state goes out; Kotlin only reads
+/// the battery level.
+async function showBattery() {
+  try {
+    applyBattery((await tauri.core.invoke("battery_reason")).value);
+  } catch (error) {
+    showError(String(error));
+  }
+}
+
+function applyBattery(reason) {
+  const on = reason !== null && reason !== undefined;
+  $("battery-on").checked = on;
+  $("battery-details").hidden = !on;
+  $("battery-reason").value = on ? reason : "";
+}
+
+async function changeBattery(reason) {
+  try {
+    applyBattery(await call("set_battery_reason", { reason }));
+    // Lets the Android side start its battery check now.
+    refreshNotifications();
+  } catch {
+    // `call` showed the error; show what holds.
+    showBattery();
+  }
+}
+
+$("battery-on").addEventListener("change", (event) =>
+  changeBattery(event.target.checked ? t("ui-battery-default") : null),
+);
+
+$("battery-reason").addEventListener("change", (event) => {
+  const reason = event.target.value.trim();
+  // An empty reason would end the setting; keep the default instead.
+  changeBattery(reason || t("ui-battery-default"));
+});
 
 /// Shows the event log of the Kotlin layer, newest line first: what wake
 /// signals, fetches and answers did while the app was closed.

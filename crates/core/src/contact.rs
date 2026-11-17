@@ -41,12 +41,12 @@ pub struct ContactState {
     pub peer_rules_stamp: Stamp,
 }
 
-fn is_unset(stamp: &Stamp) -> bool {
+pub(crate) fn is_unset(stamp: &Stamp) -> bool {
     *stamp == Stamp::default()
 }
 
 /// [`Stamp`] in stored JSON: `{"at": …, "id": "<hex>"}`.
-mod stamp {
+pub(crate) mod stamp {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     use crate::wire::{MessageId, Stamp};
@@ -417,7 +417,9 @@ impl ContactState {
             | Body::Responded(_)
             | Body::RulesSet(_)
             | Body::ContactPart(_)
-            | Body::ContactRemoved(_) => Event::Ignored(Ignored::NotExpected),
+            | Body::ContactRemoved(_)
+            | Body::StateShared(_)
+            | Body::StateCleared => Event::Ignored(Ignored::NotExpected),
             Body::Unknown(_) => Event::Ignored(Ignored::UnknownType),
         })
     }

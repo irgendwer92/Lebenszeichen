@@ -7,17 +7,46 @@
 //! a manual answer. Sending is up to the caller, through
 //! [`ContactState::report`](crate::contact::ContactState::report).
 //!
-//! Everything here is local and never leaves the device.
+//! A state may also be shared (M8c): it then goes to the other own devices
+//! as `state_shared`, and each of them answers its contacts with it as if
+//! it had been reported there ("handed" state). All shared states of the
+//! person form one: a newer `state_shared` replaces it everywhere, and
+//! `state_cleared` ends it everywhere, while an own state that was never
+//! shared stays. The settings per contact and the arrivals never leave the
+//! device.
 
+use rand_core::CryptoRngCore;
+
+use crate::contact::next_stamp;
 use crate::defaults::REPORTED_ANSWER_DELAY_MINUTES;
-use crate::store::{Arrival, Device, ReportSetting, ReportedState};
-use crate::wire::{MailboxId, MessageId, Reason};
+use crate::group::{SyncEvent, SyncIgnored};
+use crate::store::{Arrival, BatterySetting, Device, ReportSetting, ReportedState};
+use crate::wire::{Body, MailboxId, Message, MessageId, Reason, Stamp, StateShared};
 
 /// Longest time a state may apply: one week.
 pub const MAX_STATE_MINUTES: u32 = 7 * 24 * 60;
 
 /// Longest waiting time before a reported answer: one day.
 pub const MAX_DELAY_MINUTES: u32 = 24 * 60;
+
+/// At this battery level or below the battery state is handed over.
+pub const BATTERY_LOW_PERCENT: u8 = 2;
+
+/// At this level or above, or while charging, it is ended again.
+pub const BATTERY_OK_PERCENT: u8 = 5;
+
+/// How long the battery state applies if nobody ends it: one day.
+pub const BATTERY_STATE_MINUTES: u32 = 24 * 60;
+
+/// What a battery check did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BatteryChange {
+    None,
+    /// The battery state was set and handed over.
+    Shared,
+    /// The battery state was ended on all devices.
+    Cleared,
+}
 
 /// Why a state or setting was not accepted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +59,9 @@ pub enum Invalid {
     Delay,
     /// No contact with this mailbox.
     UnknownContact,
+    /// The state could not be encrypted for the other devices. Does not
+    /// happen with a valid group key.
+    Encrypt,
 }
 
 impl std::fmt::Display for Invalid {
@@ -42,6 +74,7 @@ impl std::fmt::Display for Invalid {
                 "the waiting time must be 1 to {MAX_DELAY_MINUTES} minutes"
             ),
             Self::UnknownContact => f.write_str("no such contact"),
+            Self::Encrypt => f.write_str("the state could not be encrypted"),
         }
     }
 }
@@ -63,30 +96,250 @@ impl ReportSetting {
     }
 }
 
+/// The state that applies now, and where it came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CurrentState {
+    pub reason: Reason,
+    /// End of the state, Unix seconds.
+    pub until: u64,
+    /// Set on this device and handed to the other devices.
+    pub shared: bool,
+    /// Handed to this device by another one.
+    pub handed: bool,
+}
+
+impl CurrentState {
+    /// Whether the state is the person's shared one, so that ending it here
+    /// should end it on all devices.
+    pub fn everywhere(&self) -> bool {
+        self.shared || self.handed
+    }
+}
+
+fn new_state(
+    reason: Reason,
+    minutes: u32,
+    now: u64,
+    shared: bool,
+) -> Result<ReportedState, Invalid> {
+    if reason.as_str().trim().is_empty() {
+        return Err(Invalid::EmptyReason);
+    }
+    if !(1..=MAX_STATE_MINUTES).contains(&minutes) {
+        return Err(Invalid::Duration);
+    }
+    Ok(ReportedState {
+        reason,
+        until: now + u64::from(minutes) * 60,
+        since: now,
+        shared,
+    })
+}
+
 impl Device {
-    /// Sets the state for `minutes` from `now`, replacing any earlier one.
+    /// Sets the own state for `minutes` from `now`, replacing any earlier
+    /// own one. Only this device uses it.
     pub fn set_state(&mut self, reason: Reason, minutes: u32, now: u64) -> Result<(), Invalid> {
-        if reason.as_str().trim().is_empty() {
-            return Err(Invalid::EmptyReason);
-        }
-        if !(1..=MAX_STATE_MINUTES).contains(&minutes) {
-            return Err(Invalid::Duration);
-        }
-        self.reports.state = Some(ReportedState {
-            reason,
-            until: now + u64::from(minutes) * 60,
-        });
+        self.reports.state = Some(new_state(reason, minutes, now, false)?);
         Ok(())
     }
 
-    /// Ends the state now.
+    /// Sets the own state as [`Self::set_state`] does and hands it to the
+    /// other devices (`state_shared` into the outbox). It replaces the
+    /// handed state here, as it does on the other devices. Without other
+    /// devices it is only set here.
+    pub fn share_state(
+        &mut self,
+        reason: Reason,
+        minutes: u32,
+        now: u64,
+        rng: &mut impl CryptoRngCore,
+    ) -> Result<(), Invalid> {
+        let state = new_state(reason, minutes, now, true)?;
+        let body = Body::StateShared(StateShared {
+            reason,
+            until: state.until,
+        });
+        self.queue_share(body, now, rng)?;
+        self.reports.handed = None;
+        self.reports.state = Some(state);
+        Ok(())
+    }
+
+    /// Ends the own state here; a handed state stays.
     pub fn clear_state(&mut self) {
         self.reports.state = None;
     }
 
-    /// The state, if one applies at `now`.
-    pub fn current_state(&self, now: u64) -> Option<&ReportedState> {
-        self.reports.state.as_ref().filter(|s| now < s.until)
+    /// Ends the own and the handed state here and the shared state on the
+    /// other devices (`state_cleared` into the outbox). An own state that
+    /// another device never received stays there.
+    pub fn clear_shared_state(
+        &mut self,
+        now: u64,
+        rng: &mut impl CryptoRngCore,
+    ) -> Result<(), Invalid> {
+        self.queue_share(Body::StateCleared, now, rng)?;
+        self.reports.state = None;
+        self.reports.handed = None;
+        Ok(())
+    }
+
+    /// Ends the state that applies now: on all devices if it is the shared
+    /// one, otherwise only here. For the ✕ next to the state.
+    pub fn end_current_state(
+        &mut self,
+        now: u64,
+        rng: &mut impl CryptoRngCore,
+    ) -> Result<(), Invalid> {
+        match self.current_state(now) {
+            Some(state) if state.everywhere() => {
+                self.queue_share(Body::StateCleared, now, rng)?;
+                let reports = &mut self.reports;
+                reports.handed = None;
+                if reports.state.is_some_and(|s| s.shared) {
+                    reports.state = None;
+                }
+            }
+            Some(_) => self.reports.state = None,
+            None => {}
+        }
+        Ok(())
+    }
+
+    /// Turns the battery setting on with `reason`, or off with `None`.
+    /// Turning it off leaves a state that was handed over already.
+    pub fn set_battery(&mut self, reason: Option<Reason>) -> Result<(), Invalid> {
+        self.reports.battery = match reason {
+            Some(reason) if reason.as_str().trim().is_empty() => {
+                return Err(Invalid::EmptyReason);
+            }
+            Some(reason) => Some(BatterySetting {
+                reason,
+                low: self.reports.battery.is_some_and(|b| b.low),
+            }),
+            None => None,
+        };
+        Ok(())
+    }
+
+    /// Checks the battery level: at [`BATTERY_LOW_PERCENT`] or below, not
+    /// charging, the battery state is shared once; at
+    /// [`BATTERY_OK_PERCENT`] or above, or while charging, it is ended on
+    /// all devices, but only if it is still the shared state here (not
+    /// replaced by another device's state or ended in the meantime).
+    pub fn check_battery(
+        &mut self,
+        percent: u8,
+        charging: bool,
+        now: u64,
+        rng: &mut impl CryptoRngCore,
+    ) -> Result<BatteryChange, Invalid> {
+        let Some(setting) = self.reports.battery else {
+            return Ok(BatteryChange::None);
+        };
+        if !setting.low && !charging && percent <= BATTERY_LOW_PERCENT {
+            self.share_state(setting.reason, BATTERY_STATE_MINUTES, now, rng)?;
+            self.set_battery_low(true);
+            return Ok(BatteryChange::Shared);
+        }
+        if setting.low && (charging || percent >= BATTERY_OK_PERCENT) {
+            let still = self
+                .reports
+                .state
+                .is_some_and(|s| s.shared && s.reason == setting.reason && now < s.until);
+            if still {
+                self.clear_shared_state(now, rng)?;
+            }
+            self.set_battery_low(false);
+            return Ok(if still {
+                BatteryChange::Cleared
+            } else {
+                BatteryChange::None
+            });
+        }
+        Ok(BatteryChange::None)
+    }
+
+    fn set_battery_low(&mut self, low: bool) {
+        if let Some(battery) = &mut self.reports.battery {
+            battery.low = low;
+        }
+    }
+
+    /// Queues `state_shared` or `state_cleared` with a stamp newer than any
+    /// seen here, and keeps the stamp.
+    fn queue_share(
+        &mut self,
+        body: Body,
+        now: u64,
+        rng: &mut impl CryptoRngCore,
+    ) -> Result<(), Invalid> {
+        let stamp = next_stamp(self.reports.share_stamp, now, rng);
+        let message = Message {
+            id: stamp.id,
+            sent_at: stamp.at,
+            body,
+        };
+        self.queue_sync(&message, now, rng)
+            .map_err(|_| Invalid::Encrypt)?;
+        self.reports.share_stamp = stamp;
+        Ok(())
+    }
+
+    /// Applies `state_shared` (`Some`) or `state_cleared` (`None`) from
+    /// another device, if newer than the last one.
+    pub(crate) fn apply_shared_state(
+        &mut self,
+        shared: Option<StateShared>,
+        stamp: Stamp,
+    ) -> SyncEvent {
+        let reports = &mut self.reports;
+        if stamp <= reports.share_stamp {
+            return SyncEvent::Ignored(SyncIgnored::Outdated);
+        }
+        reports.share_stamp = stamp;
+        if reports.state.is_some_and(|s| s.shared) {
+            reports.state = None;
+        }
+        reports.handed = shared.as_ref().map(|s| ReportedState {
+            reason: s.reason,
+            until: s.until,
+            since: stamp.at,
+            shared: false,
+        });
+        SyncEvent::StateHanded {
+            reason: shared.map(|s| s.reason.as_str().to_owned()),
+        }
+    }
+
+    /// The state that applies at `now`: of the own and the handed one, the
+    /// valid one set last; the own one if both were set at the same time.
+    pub fn current_state(&self, now: u64) -> Option<CurrentState> {
+        let valid = |s: &Option<ReportedState>| s.filter(|s| now < s.until);
+        let own = valid(&self.reports.state).map(|s| CurrentState {
+            reason: s.reason,
+            until: s.until,
+            shared: s.shared,
+            handed: false,
+        });
+        let handed = valid(&self.reports.handed).map(|s| CurrentState {
+            reason: s.reason,
+            until: s.until,
+            shared: false,
+            handed: true,
+        });
+        let since = |s: &Option<ReportedState>| s.map_or(0, |s| s.since);
+        match (own, handed) {
+            (Some(own), Some(handed)) => Some(
+                if since(&self.reports.handed) > since(&self.reports.state) {
+                    handed
+                } else {
+                    own
+                },
+            ),
+            (own, handed) => own.or(handed),
+        }
     }
 
     /// The setting for the contact with this own mailbox.

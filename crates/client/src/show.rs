@@ -94,6 +94,17 @@ pub fn reported_state(t: Texts, reason: &str) -> String {
     tr!(t, "state-reason", reason = reason)
 }
 
+/// " (shared)" or " (from another device)" after a state, or nothing.
+pub fn state_origin(t: Texts, shared: bool, handed: bool) -> String {
+    if handed {
+        tr!(t, "state-origin-handed")
+    } else if shared {
+        tr!(t, "state-origin-shared")
+    } else {
+        String::new()
+    }
+}
+
 /// Shown next to every verification code of a pairing: someone who controls
 /// the channel of the invitation could pass the digits on as well.
 pub fn compare_hint(t: Texts) -> String {
@@ -245,6 +256,12 @@ pub enum Notice {
     /// Another own device ended this contact; it is gone here as well.
     OwnContactRemoved {
         name: String,
+        device: Option<String>,
+    },
+    /// Another own device handed on its state (`Some` reason) or ended
+    /// it (`None`).
+    OwnState {
+        reason: Option<String>,
         device: Option<String>,
     },
     /// Another own device announced itself, or changed its name.
@@ -408,6 +425,19 @@ impl Notice {
                     device = &on(t, device)
                 )
             }
+            Self::OwnState {
+                reason: Some(reason),
+                device,
+            } => tr!(
+                t,
+                "notice-own-state",
+                reason = reason,
+                device = &on(t, device)
+            ),
+            Self::OwnState {
+                reason: None,
+                device,
+            } => tr!(t, "notice-own-state-cleared", device = &on(t, device)),
             Self::DeviceAdded { name } => tr!(t, "notice-device-added", name = name),
             Self::DeviceRemoved { name } => match name {
                 Some(name) => tr!(t, "notice-device-removed", name = name),

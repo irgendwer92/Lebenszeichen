@@ -7,7 +7,11 @@
 //! |---|---|---|
 //! | `POST /state` | `{"reason":"asleep","minutes":480}` | 204; 400 with `{"error":…}` |
 //! | `DELETE /state` | – | 204 |
-//! | `GET /state` | – | `{"reason":…,"until":…}` or 404 |
+//! | `GET /state` | – | `{"reason":…,"until":…,"shared":…,"handed":…}` or 404 |
+//!
+//! `"share":true` in the body of `POST`, and `?share=true` on `DELETE`, hand
+//! the state on to the other own devices or end it there
+//! (`docs/m8c-share-state.md`).
 //!
 //! Only the state in the state file changes here. Sending reported answers
 //! is up to the caller. On Unix the interface listens on a socket that only
@@ -32,6 +36,7 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use lz_core::report::Invalid;
 use lz_core::store::{Device, JsonFile, Store};
 use lz_core::wire::{Reason, TOKEN_LEN, Token};
+use rand_core::OsRng;
 use serde::Deserialize;
 use serde_json::json;
 use subtle::ConstantTimeEq;
@@ -87,6 +92,22 @@ pub enum TokenSource {
 struct SetState {
     reason: String,
     minutes: u32,
+    #[serde(default)]
+    share: bool,
+}
+
+/// `share` from the query: absent or `false` is false, `true` is true,
+/// anything else is an error.
+fn share_query(query: Option<&str>) -> Result<bool, ()> {
+    let mut share = false;
+    for pair in query.unwrap_or("").split('&').filter(|p| !p.is_empty()) {
+        match pair.split_once('=') {
+            Some(("share", "true")) => share = true,
+            Some(("share", "false")) => share = false,
+            _ => return Err(()),
+        }
+    }
+    Ok(share)
 }
 
 /// Carries the error of the state file or of the state out of
@@ -225,15 +246,26 @@ pub fn bind(path: &Path) -> io::Result<LocalListener> {
 }
 
 /// Sends one request to the interface at `path` and returns the status code
-/// and the body. Used by `lz state`; scripts use curl.
+/// and the body. `query` goes after the path (`share=true`), if not empty.
+/// Used by `lz state`; scripts use curl.
 #[cfg(unix)]
-pub async fn request(path: &Path, method: &str, body: Option<&str>) -> io::Result<(u16, String)> {
+pub async fn request(
+    path: &Path,
+    method: &str,
+    query: &str,
+    body: Option<&str>,
+) -> io::Result<(u16, String)> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let mut stream = tokio::net::UnixStream::connect(path).await?;
     let body = body.unwrap_or("");
+    let query = if query.is_empty() {
+        String::new()
+    } else {
+        format!("?{query}")
+    };
     let head = format!(
-        "{method} {STATE_PATH} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\
+        "{method} {STATE_PATH}{query} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\
          Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
         body.len()
     );
@@ -384,15 +416,32 @@ async fn handle(request: Request<Incoming>, local: Arc<Local>) -> Answer {
         Method::GET => get_state(local).await,
         Method::POST => set_state(request, local).await,
         Method::DELETE => {
-            let result = blocking(local, |local| {
-                local.store.update(|device: &mut Device| {
-                    device.clear_state();
-                    Ok::<_, io::Error>(())
-                })
+            let Ok(share) = share_query(request.uri().query()) else {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid query, expected share=true",
+                );
+            };
+            let result = blocking(local, move |local| {
+                let now = local.clock.now();
+                Ok(local.store.update(|device: &mut Device| {
+                    if share {
+                        device
+                            .clear_shared_state(now, &mut OsRng)
+                            .map_err(Failed::Invalid)
+                    } else {
+                        device.clear_state();
+                        Ok(())
+                    }
+                }))
             })
             .await;
             match result {
-                Ok(()) => empty(StatusCode::NO_CONTENT),
+                Ok(Ok(())) => empty(StatusCode::NO_CONTENT),
+                Ok(Err(Failed::Invalid(invalid))) => {
+                    error(StatusCode::INTERNAL_SERVER_ERROR, &invalid.to_string())
+                }
+                Ok(Err(Failed::Io(e))) => state_file_error(&e),
                 Err(answer) => *answer,
             }
         }
@@ -411,13 +460,18 @@ async fn get_state(local: Arc<Local>) -> Answer {
     let result = blocking(local, |local| {
         let now = local.clock.now();
         let device = local.store.load()?;
-        Ok(device.current_state(now).copied())
+        Ok(device.current_state(now))
     })
     .await;
     match result {
         Ok(Some(state)) => json_answer(
             StatusCode::OK,
-            &json!({ "reason": state.reason.as_str(), "until": state.until }),
+            &json!({
+                "reason": state.reason.as_str(),
+                "until": state.until,
+                "shared": state.shared,
+                "handed": state.handed,
+            }),
         ),
         Ok(None) => error(StatusCode::NOT_FOUND, "no state"),
         Err(answer) => *answer,
@@ -445,9 +499,12 @@ async fn set_state(request: Request<Incoming>, local: Arc<Local>) -> Answer {
     let result = blocking(local, move |local| {
         let now = local.clock.now();
         Ok(local.store.update(|device: &mut Device| {
-            device
-                .set_state(reason, set.minutes, now)
-                .map_err(Failed::Invalid)
+            if set.share {
+                device.share_state(reason, set.minutes, now, &mut OsRng)
+            } else {
+                device.set_state(reason, set.minutes, now)
+            }
+            .map_err(Failed::Invalid)
         }))
     })
     .await;
@@ -677,6 +734,35 @@ mod tests {
             get(s).await,
             (404, serde_json::json!({"error": "no state"}))
         );
+    }
+
+    #[tokio::test]
+    async fn share_sets_and_clears_the_shared_state() {
+        let server = start(None);
+        let s = &server.socket;
+        let body = r#"{"reason": "Phone empty", "minutes": 1440, "share": true}"#;
+        assert_eq!(post(s, body).await.0, 204);
+        let (status, body) = get(s).await;
+        assert_eq!(status, 200);
+        assert_eq!(body["shared"], true);
+        assert_eq!(body["handed"], false);
+        assert!(server.store.load().unwrap().reports.state.unwrap().shared);
+
+        for query in ["/state?share=yes", "/state?other=true", "/state?share"] {
+            let (status, _, _) = call(s, "DELETE", query, "", "").await;
+            assert_eq!(status, 400, "{query}");
+        }
+        assert_eq!(get(s).await.0, 200);
+        let (status, _, _) = call(s, "DELETE", "/state?share=true", "", "").await;
+        assert_eq!(status, 204);
+        assert_eq!(get(s).await.0, 404);
+
+        // Without share the state is not marked as shared.
+        assert_eq!(
+            post(s, r#"{"reason": "asleep", "minutes": 5}"#).await.0,
+            204
+        );
+        assert_eq!(get(s).await.1["shared"], false);
     }
 
     #[tokio::test]

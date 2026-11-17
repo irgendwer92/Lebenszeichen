@@ -13,8 +13,10 @@ Technical details and decisions are in `m8-local-interface.md`.
 - **A state** is a short reason and a duration: "asleep" for 480 minutes.
   It ends by itself afterwards, or earlier when it is cleared. A new state
   replaces the old one.
-- **Only on the device that received it.** A state set on the laptop does
-  not travel to the phone. Report it to the device that should answer.
+- **Only on the device that received it, unless you share it.** A state
+  set on the laptop does not travel to the phone. Report it to the device
+  that should answer, or use the option `share` (see "Sharing a state with
+  your devices").
 - **Per contact, off by default.** Under ⚙ of a contact, section
   "Reported state", turn on "Answer … with my reported state from this
   device", and set after how many minutes without an answer (default 15).
@@ -35,10 +37,37 @@ All interfaces speak the same three calls:
 |---|---|---|
 | `POST /state` | `{"reason":"asleep","minutes":480}` | 204, or 400 with `{"error":…}` |
 | `DELETE /state` | – | 204 |
-| `GET /state` | – | `{"reason":…,"until":…}` (Unix seconds), or 404 |
+| `GET /state` | – | `{"reason":…,"until":…,"shared":…,"handed":…}` (`until` in Unix seconds), or 404 |
 
 Minutes: 1 to 10080 (one week). The reason must not be empty and is at
 most 64 bytes.
+
+## Sharing a state with your devices
+
+With `"share":true` in the body of `POST /state`, or `?share=true` on
+`DELETE /state`, the state goes to all your own devices, not only this one.
+Without it, everything works as described above.
+
+- **How it travels.** Through the encrypted sync mailbox of your devices.
+  Contacts and the relay see nothing new.
+- **Who answers.** Each device answers only for the contacts where
+  reported answers are allowed *on that device*, after its own waiting
+  time. A contact then sees the reason, marked as reported, from
+  whichever device answers.
+- **A newer shared state replaces the shared one** on all devices.
+- **Ending it.** `DELETE /state?share=true` (`lz state clear --share`)
+  ends a shared or handed state on all devices. A state that was never
+  shared stays: a bed sensor's "asleep" on the laptop survives a "Phone
+  empty" being cleared. Plain `DELETE /state` ends only the state set on
+  this device; a state handed over by another device stays. ✕ in the app
+  ends a shared or handed state everywhere (a state that was never shared:
+  only here).
+- **`GET /state`** says `"shared":true` for an own state that was shared,
+  and `"handed":true` for one received from another device. In the app
+  these show as "(shared)" and "(from another device)".
+- With one device only, `share` just sets the state here. Adding a device
+  does not take states along.
+- Any other query on `DELETE` is an error (400).
 
 ## Linux
 
@@ -53,6 +82,11 @@ curl --fail-with-body --unix-socket "$sock" \
      -d '{"reason":"asleep","minutes":480}' http://lz/state
 curl --fail-with-body --unix-socket "$sock" -X DELETE http://lz/state
 curl --unix-socket "$sock" http://lz/state
+
+# share with all your devices; clear everywhere
+curl --fail-with-body --unix-socket "$sock" \
+     -d '{"reason":"Phone empty","minutes":1440,"share":true}' http://lz/state
+curl --fail-with-body --unix-socket "$sock" -X DELETE 'http://lz/state?share=true'
 ```
 
 With the example script `examples/report-state.sh` (needs curl, uses jq
@@ -62,6 +96,8 @@ if present):
 examples/report-state.sh set 480 asleep
 examples/report-state.sh clear
 examples/report-state.sh show
+examples/report-state.sh set --share 1440 Phone empty
+examples/report-state.sh clear --share
 LZ_SOCKET=$XDG_RUNTIME_DIR/lebenszeichen/lz.sock examples/report-state.sh show
 ```
 
@@ -71,6 +107,8 @@ With `lz`, for the device of `lz listen`:
 lz state set 480 asleep
 lz state clear
 lz state
+lz state set --share 1440 Phone empty
+lz state clear --share
 ```
 
 ### Recipe: asleep every night from 23:00
@@ -109,6 +147,8 @@ With the example script `examples/report-state.ps1`:
 .\report-state.ps1 set 480 asleep
 .\report-state.ps1 clear
 .\report-state.ps1 show
+.\report-state.ps1 set -Share 1440 Phone empty
+.\report-state.ps1 clear -Share
 ```
 
 The script sends nothing if the pipe does not belong to you (another user
@@ -142,9 +182,12 @@ The broadcast:
 |---|---|
 | Package | `io.github.irgendwer92.lebenszeichen` |
 | Action | `io.github.irgendwer92.lebenszeichen.SET_STATE` or `….CLEAR_STATE` |
-| Extras | `token` (both), `reason` and `minutes` (only `SET_STATE`) |
+| Extras | `token` (both), `reason` and `minutes` (only `SET_STATE`), `share` (optional, both) |
 
-Every extra may be text; `minutes` may also be a number. A broadcast with
+Every extra may be text; `minutes` may also be a number, `share` may be
+the text `true` or a Boolean (anything else counts as false). With `share`,
+the state goes to all your devices (`SET_STATE`) or ends on all of them
+(`CLEAR_STATE`). A broadcast with
 a wrong token, or while the switch is off, is dropped without a trace.
 
 ### Tasker
@@ -195,6 +238,8 @@ data:
     intent_extras: "token:<your token>:String,reason:asleep:String,minutes:480"
 ```
 
+To hand the state to all your devices, add `share:true:String`.
+
 Extras are `name:value` pairs separated by commas; `:String` keeps a value
 as text. A reason with `,`, `:` or `;` must be URL-encoded and marked
 `:String.urlencoded`. Clearing: `intent_action: ….CLEAR_STATE` and only
@@ -222,9 +267,54 @@ automation:
 with `lz_extras_asleep: "token:<your token>:String,reason:asleep:String,minutes:600"`
 in `secrets.yaml`.
 
-This only works while the phone is reachable for Home Assistant. A
-container and an add-on for Home Assistant that answer without the phone
-follow with M8b.
+This only works while the phone is reachable for Home Assistant. The
+add-on below answers without the phone.
+
+## Recipe: "Phone empty"
+
+When the battery of your phone is nearly empty, it can hand over the state
+"Phone empty" to your other devices, so that your contacts see
+**“Phone empty” (reported)** from another device while the phone is off.
+Once the phone is charged, the state ends on all devices. Allow reported
+answers for the contacts in question on the devices that should answer.
+
+**a) The Android setting.** In the app, Settings: **"Hand over a state when
+the battery is low"** (off by default). At 2% or less the phone sets and
+shares "Phone empty" for 24 hours. At 5% or more, or as soon as it charges,
+it ends the state on all devices. It does this once per crossing: after
+sharing it waits for 5% or charging, so a ✕ on another device is not undone
+by the next check. The level is checked about every 10 minutes and at every
+fetch; under Doze or battery saver this may be late.
+
+**b) Home Assistant.** Either way, trigger on the battery level of the phone
+(the Companion app's battery level sensor, `sensor.<phone>_battery_level`),
+for example below 3 and above 5 for the way back.
+
+- A broadcast to the phone, as above, with `share:true:String` and the
+  reason `Phone empty` and `minutes:1440`:
+
+  ```yaml
+  intent_extras: "token:<your token>:String,reason:Phone empty:String,minutes:1440,share:true:String"
+  ```
+
+  The space in the reason is fine; `,`, `:` and `;` still need the
+  URL-encoding described above. To end it: `CLEAR_STATE` with the token and
+  `share:true:String`. This needs the phone to be reachable, so it can be
+  late when the battery is almost gone.
+- Without the phone: `shell_command` with `curl` on the socket of the
+  add-on (see the section below), which hands the state over to all
+  devices from the server:
+
+  ```yaml
+  # secrets.yaml
+  lz_phone_empty: >-
+    curl -sS --fail-with-body --unix-socket /share/lebenszeichen/lz.sock
+    -H "Authorization: Bearer <token>" -H "Content-Type: application/json"
+    -d '{"reason":"Phone empty","minutes":1440,"share":true}' http://lz/state
+  lz_phone_charged: >-
+    curl -sS --fail-with-body --unix-socket /share/lebenszeichen/lz.sock
+    -H "Authorization: Bearer <token>" -X DELETE 'http://lz/state?share=true'
+  ```
 
 ## Docker and Home Assistant
 

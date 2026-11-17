@@ -90,6 +90,8 @@ Own devices share a sync mailbox and a symmetric group key. Decided on 2026-11-1
 | `rules_set` | contact, own rules | Rules changed on one device |
 | `contact_part` | contact, part of its data | A contact paired on one device |
 | `contact_removed` | contact | A contact ended on one device |
+| `state_shared` | reason, end of the state | A reported state handed to the other devices (M8c) |
+| `state_cleared` | – | The shared state ended (M8c) |
 
 The earlier plan had `counted` to keep counters equal. It is not needed: every device reads all mailboxes and counts the same requests.
 
@@ -123,7 +125,7 @@ Evaluation of responses on the requester's side:
 - A new device is set up by QR code: the new device shows a code with a public key, the existing device seals the contact list, rules and group key to it and hands them over through the relay.
 - Every device is its own reader; the relay holds messages until all readers have acknowledged.
 - If the person reacts on one device, it sends `responded` to the others.
-- A status report applies only to the device that received it. That device sends the `reported` response after the waiting time.
+- A status report applies only to the device that received it. That device sends the `reported` response after the waiting time. Since M8c a report can be shared: the other devices then answer with it too, each where reported answers are allowed on it (`m8c-share-state.md`).
 - A device is removed by another device unregistering it as a reader. If a device is lost, the contacts must be paired again, because it knows all contact keys.
 
 Disadvantage: if one device is compromised, all contact keys are affected.
