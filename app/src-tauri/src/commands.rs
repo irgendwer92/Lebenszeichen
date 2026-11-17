@@ -843,7 +843,10 @@ pub async fn device_rename(
     state: tauri::State<'_, AppState>,
     name: String,
 ) -> Result<Reply<()>, String> {
-    run(path(&state), async move |ctx| ctx.rename_device(&name).await).await
+    run(path(&state), async move |ctx| {
+        ctx.rename_device(&name).await
+    })
+    .await
 }
 
 /// Removes another device of this person.
