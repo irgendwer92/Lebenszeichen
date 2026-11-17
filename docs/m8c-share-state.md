@@ -87,14 +87,24 @@ for an own shared state.
   line) and desktop window, add-on page and example scripts.
 - Docs: `wire-format.md`, `protocol.md`, `local-interface.md`, roadmap.
 
-## Test record
+## Test record (2026-11-17)
 
-- [ ] Linux: `report-state.sh set --share …` shows the handed state on the
-      phone and the add-on; `clear --share` clears it there.
-- [ ] ✕ on a handed state clears it on all devices.
-- [ ] A handed clear leaves an unshared own state alone.
-- [ ] Phone: battery level faked over adb (`dumpsys battery set level 2`)
-      hands over "Phone empty"; `level 6` / `set ac 1` clears it.
+Linux desktop app and the Home Assistant app (0.2.0) from the branch, the
+phone (Fairphone 4) with the signed release APK from the branch.
+
+- [x] Linux: `report-state.sh set --share 30 test` showed the handed state
+      on the phone and the add-on; `clear --share` cleared it there.
+- [x] ✕ on the phone on a handed state cleared it on all devices.
+- [x] A handed clear left an unshared own state alone: "asleep" set on the
+      add-on's socket stayed only there, was covered by a later shared
+      "test" and showed again after `clear --share`.
+- [x] Phone: battery faked over adb (`dumpsys battery unplug`, `set level
+      2`, `set status 3`): "Phone empty" was handed to Linux and the
+      add-on; `set ac 1`, `set status 2` cleared it everywhere. Found on
+      the way: `BatteryManager.getIntProperty` and `isCharging` read the
+      hardware and ignore the faked values (and the phone charged over the
+      adb cable), so nothing happened; the app now reads the sticky
+      `ACTION_BATTERY_CHANGED` broadcast first, as the status bar does.
 - [ ] Done test: real battery at 2%, phone switched off, the test contact
       asks and receives "“Phone empty” (reported)" from another device;
       after charging the state is cleared everywhere.
