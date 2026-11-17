@@ -2,8 +2,9 @@
 //!
 //! Scenario `reminder`: the toast stays on screen until the person acts, and
 //! it needs a button, which sends the sign of life. `Activated` (click or
-//! button) and `Dismissed` with `UserCanceled` answer; `TimedOut` and
-//! `ApplicationHidden` (withdrawn by the app) do not.
+//! button) and `Dismissed` with `UserCanceled` answer; `ApplicationHidden`
+//! (withdrawn by the app) does not. `TimedOut` answers nothing either, but
+//! the toast stays in the notification center and counts as shown.
 //!
 //! Windows shows toasts only for a known AppUserModelID. The Start menu
 //! shortcut of the installer carries the app identifier; for a build that
@@ -106,7 +107,9 @@ impl Service {
             >::new(
                 move |_, args: Ref<ToastDismissedEventArgs>| {
                     let reason = args.ok()?.Reason()?;
-                    dismissed.send(Event::Gone(dismissal(reason)));
+                    if let Some(how) = dismissal(reason) {
+                        dismissed.send(Event::Gone(how));
+                    }
                     Ok(())
                 },
             ))?;
@@ -183,12 +186,15 @@ impl Report {
     }
 }
 
-/// Only closing by the person counts as an answer.
-fn dismissal(reason: ToastDismissalReason) -> Gone {
-    if reason == ToastDismissalReason::UserCanceled {
-        Gone::Dismissed
-    } else {
-        Gone::Vanished
+/// What a dismissal means. Only closing by the person answers. `TimedOut`:
+/// Windows moved the toast into the notification center, also at once
+/// under Focus Assist; it is still there and can still be clicked, so it
+/// is not gone, and an answer elsewhere still has to withdraw it.
+fn dismissal(reason: ToastDismissalReason) -> Option<Gone> {
+    match reason {
+        ToastDismissalReason::UserCanceled => Some(Gone::Dismissed),
+        ToastDismissalReason::TimedOut => None,
+        _ => Some(Gone::Vanished),
     }
 }
 
@@ -261,9 +267,14 @@ mod tests {
 
     #[test]
     fn only_the_person_dismisses() {
-        assert!(dismissal(ToastDismissalReason::UserCanceled).answers());
-        assert!(!dismissal(ToastDismissalReason::ApplicationHidden).answers());
-        assert!(!dismissal(ToastDismissalReason::TimedOut).answers());
+        let answers = |reason| dismissal(reason).map(|how| how.answers());
+        assert_eq!(answers(ToastDismissalReason::UserCanceled), Some(true));
+        assert_eq!(
+            answers(ToastDismissalReason::ApplicationHidden),
+            Some(false)
+        );
+        // Still in the notification center: neither an answer nor gone.
+        assert_eq!(answers(ToastDismissalReason::TimedOut), None);
     }
 
     #[test]
