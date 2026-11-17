@@ -46,10 +46,13 @@ pub fn load(path: &Path) -> Settings {
 
 /// Changes the settings with `change` and stores them. Writes a temporary
 /// file and renames it over the old one, so a crash leaves either the old
-/// or the new file.
+/// or the new file. Creates the folder if no device is set up yet.
 pub fn update(path: &Path, change: impl FnOnce(&mut Settings)) -> io::Result<()> {
     let mut settings = load(path);
     change(&mut settings);
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
@@ -74,6 +77,14 @@ mod tests {
         let settings = load(&file);
         assert!(!settings.autostart_offered);
         assert_eq!(settings.language, Choice::De);
+    }
+
+    #[test]
+    fn saves_before_the_folder_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("not-yet").join(SETTINGS_FILE);
+        update(&file, |s| s.language = Choice::De).unwrap();
+        assert_eq!(load(&file).language, Choice::De);
     }
 
     #[test]
