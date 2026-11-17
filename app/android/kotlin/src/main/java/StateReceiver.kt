@@ -23,10 +23,12 @@ class StateReceiver : BroadcastReceiver() {
                 action.endsWith(".CLEAR_STATE") -> "clear"
                 else -> return
             }
-        val token = intent.getStringExtra(EXTRA_TOKEN)
-        val reason = intent.getStringExtra(EXTRA_REASON)
-        // Tasker and Home Assistant send text, other apps a number.
-        val minutes = intent.extras?.get(EXTRA_MINUTES)?.toString()
+        // Automation apps guess types (Home Assistant turns "480" into an
+        // Int and "true" into a Boolean), so every extra is read as text.
+        val extras = intent.extras
+        val token = extras?.get(EXTRA_TOKEN)?.toString()
+        val reason = extras?.get(EXTRA_REASON)?.toString()
+        val minutes = extras?.get(EXTRA_MINUTES)?.toString()
         val app = context.applicationContext
         val pending = goAsync()
         Thread {

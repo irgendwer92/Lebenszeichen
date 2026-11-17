@@ -74,8 +74,8 @@ Done when: a script reports "asleep" and the requester sees
     job (`report-due`) for the moment the next reported answer is due; if
     one is due already, it fetches at once. A fetch sends due reports, as
     on the desktop. Under Doze the job may run late.
-  - Home Assistant (Companion app, `command_broadcast_intent`; check field
-    names against the Companion docs, they have changed between versions):
+  - Home Assistant (Companion app, `command_broadcast_intent`; field
+    names checked against the Companion docs on 2026-11-17):
 
     ```yaml
     action: notify.mobile_app_<phone>
@@ -84,11 +84,16 @@ Done when: a script reports "asleep" and the requester sees
       data:
         intent_package_name: io.github.irgendwer92.lebenszeichen
         intent_action: io.github.irgendwer92.lebenszeichen.SET_STATE
-        intent_extras: "token:<token>,reason:asleep,minutes:480"
+        intent_extras: "token:<token>:String,reason:asleep:String,minutes:480"
     ```
 
-    The extras are comma separated `key:value` pairs, so `reason` cannot
-    contain a comma. For `CLEAR_STATE` send only `token`.
+    The extras are comma separated `name:value` pairs with an optional
+    type after a further colon. Without one, the Companion app guesses
+    (numbers become Int, `true`/`false` Boolean); the receiver reads every
+    extra as text, so that does no harm, but `:String` keeps it plain. A
+    reason with `,`, `:` or `;` has to be URL-encoded and marked
+    `:String.urlencoded` (template filter `urlencode`). For `CLEAR_STATE`
+    send only the token.
   - Tasker: action "Send Intent", Action `io.github.irgendwer92.lebenszeichen.SET_STATE`,
     Package `io.github.irgendwer92.lebenszeichen`, Target "Broadcast
     Receiver", Extras `token:<token>` , `reason:asleep`, `minutes:480`
