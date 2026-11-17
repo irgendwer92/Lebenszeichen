@@ -122,6 +122,20 @@ How to use it, with recipes: `local-interface.md`.
 - Android: a WorkManager job with the delay when a request arrives, and a
   check when a state is set; under Doze it may run late.
 
-## Test record
+## Test record (2026-11-17)
 
-(to be filled)
+Requests from Claude's `lz` test contact to the user's devices.
+
+- [x] Linux (KDE Plasma, desktop app built from the branch):
+      `examples/report-state.sh set 60 asleep` showed "Reported state:
+      “asleep” until …" at the top; request sent 19:15:50, not answered;
+      after the waiting time the test contact received "“asleep”
+      (reported)" (19:21:47); a tap on the still open request then sent
+      ✓ (19:22:15). Found on the way: the new commands of the window
+      (report setting, report token) were missing from `build.rs` and the
+      main capability, so the window could not call them; fixed.
+- [ ] Windows: same with `examples/report-state.ps1`, owner check of the
+      pipe.
+- [ ] Phone: Tasker or Home Assistant broadcast with token; wrong token
+      changes nothing; reported answer after the waiting time while the
+      app is in the background.
