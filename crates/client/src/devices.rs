@@ -726,6 +726,33 @@ impl<R: Relay> Ctx<R> {
         Ok(list)
     }
 
+    /// Renames this device; the other devices of the person learn the new
+    /// name.
+    pub async fn rename_device(&mut self, name: &str) -> Result<()> {
+        let t = self.texts();
+        let name = device_name(t, name)?;
+        let device = self.load()?;
+        if device.devices.iter().any(|d| d.name == name) {
+            return Err(fail!(t, "error-device-name-taken", name = &name));
+        }
+        if device.name.as_deref() != Some(name.as_str()) {
+            let grouped = device.group.is_some();
+            let now = self.now();
+            self.update(|device| {
+                device.name = Some(name.clone());
+                if grouped {
+                    device.announce_device(now, &mut OsRng).map_err(core)?;
+                }
+                Ok(())
+            })?;
+            if grouped {
+                self.flush_outbox().await?;
+            }
+        }
+        self.say(&tr!(t, "out-device-renamed", name = &name));
+        Ok(())
+    }
+
     /// Lists the devices of the person.
     pub fn list_devices(&mut self) -> Result<()> {
         let t = self.texts();

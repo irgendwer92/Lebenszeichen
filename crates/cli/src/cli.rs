@@ -160,6 +160,11 @@ enum DeviceCommand {
     },
     /// Lists the own devices
     List,
+    /// Renames this device
+    Rename {
+        /// New name of this device
+        name: String,
+    },
     /// Removes another own device
     Remove {
         /// Name of the device
@@ -311,6 +316,7 @@ pub async fn run() -> Result<()> {
             ctx.add_device(&code, &name, &mut Terminal(t)).await
         }
         Command::Device(DeviceCommand::List) => ctx.list_devices(),
+        Command::Device(DeviceCommand::Rename { name }) => ctx.rename_device(&name).await,
         Command::Device(DeviceCommand::Remove { name }) => ctx.remove_device(&name).await,
     }
 }

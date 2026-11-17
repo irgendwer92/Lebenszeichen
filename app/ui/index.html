@@ -157,7 +157,9 @@
               <input name="relay" type="url" required placeholder="https://relay.example.org" />
             </label>
             <label>
-              <span data-i18n="ui-device-name">Name of this device (visible only to you)</span>
+              <span data-i18n="ui-device-name-new">
+                Name of this new device, such as “Laptop” (only you see it)
+              </span>
               <input name="name" required maxlength="32" />
             </label>
             <button type="submit" class="primary" data-i18n="ui-next">Next</button>
@@ -315,8 +317,11 @@
                 placeholder="LZD1-…"
               ></textarea>
             </label>
-            <label>
-              <span data-i18n="ui-device-name">Name of this device (visible only to you)</span>
+            <!-- Only while this device has no name yet: the name renames it. -->
+            <label id="add-name-row">
+              <span data-i18n="ui-device-name-this">
+                Name of the device you are using now, such as “Phone” (only you see it)
+              </span>
               <input name="name" required maxlength="32" />
             </label>
             <button type="submit" class="primary" data-i18n="ui-add">Add</button>

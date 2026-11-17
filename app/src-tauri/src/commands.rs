@@ -836,6 +836,16 @@ pub async fn devices(state: tauri::State<'_, AppState>) -> Result<Reply<Vec<Devi
     run(path(&state), async |ctx| ctx.devices()).await
 }
 
+/// Renames this device; the other devices of the person learn the new
+/// name.
+#[tauri::command]
+pub async fn device_rename(
+    state: tauri::State<'_, AppState>,
+    name: String,
+) -> Result<Reply<()>, String> {
+    run(path(&state), async move |ctx| ctx.rename_device(&name).await).await
+}
+
 /// Removes another device of this person.
 #[tauri::command]
 pub async fn device_remove(
