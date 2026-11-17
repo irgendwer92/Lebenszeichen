@@ -136,6 +136,14 @@ Requests from Claude's `lz` test contact to the user's devices.
       main capability, so the window could not call them; fixed.
 - [ ] Windows: same with `examples/report-state.ps1`, owner check of the
       pipe.
-- [ ] Phone: Tasker or Home Assistant broadcast with token; wrong token
-      changes nothing; reported answer after the waiting time while the
-      app is in the background.
+- [x] Phone (Fairphone 4, signed release APK from the branch): switch on,
+      token shown. `adb shell am broadcast` with a wrong token and without
+      a token: dropped, no state. State "testa" set from Home Assistant
+      (`command_broadcast_intent` with token): shown at the top. Request
+      sent 20:37:20 with the app in the background and the phone locked;
+      the test contact received "“testa” (reported)" at 20:38:29.
+- [x] A manual ✓ after a reported answer arrives (20:37).
+- [x] The Linux state line's ✕ clears the state. A first phone attempt
+      was answered by the Linux app instead, whose state was still valid:
+      as designed, each device with a valid state and the permission
+      answers on its own.
