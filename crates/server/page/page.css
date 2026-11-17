@@ -1,1 +1,274 @@
-/* Placeholder; replaced by the page. */
+/* Page of lz-server. Only system fonts; light and dark follow the system. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f5;
+  --surface: #ffffff;
+  --text: #1d211f;
+  --muted: #5d655f;
+  --line: #d9ddd8;
+  --accent: #2f7d4f;
+  --accent-text: #ffffff;
+  --accent-soft: #e6f2ea;
+  --danger: #b3261e;
+  --danger-soft: #fbe9e7;
+  --warn-soft: #fff4d6;
+  --focus: #2f7d4f;
+  font-family: system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1d1c;
+    --surface: #252826;
+    --text: #e7eae7;
+    --muted: #a3aba5;
+    --line: #3a3f3c;
+    --accent: #5fbf86;
+    --accent-text: #0f2318;
+    --accent-soft: #1f3528;
+    --danger: #f2b8b5;
+    --danger-soft: #3b2322;
+    --warn-soft: #3a3120;
+    --focus: #5fbf86;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 1.2rem;
+  font-weight: 650;
+}
+
+h2 {
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+h3 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.top {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1rem;
+  display: grid;
+  gap: 1rem;
+}
+
+#view,
+.stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.stack {
+  gap: 0.75rem;
+}
+
+button {
+  font: inherit;
+  font-weight: 550;
+  min-height: 2.25rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+button.danger.armed {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+button.icon {
+  padding: 0.2rem 0.6rem;
+  background: transparent;
+  border-color: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+input[type="text"],
+input[type="url"],
+input[type="number"],
+textarea {
+  font: inherit;
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  color: var(--text);
+}
+
+input[type="number"] {
+  width: 6rem;
+}
+
+input[type="checkbox"] {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--accent);
+}
+
+textarea {
+  resize: vertical;
+}
+
+.mono,
+pre,
+textarea.mono {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+label {
+  display: grid;
+  gap: 0.25rem;
+  font-weight: 550;
+}
+
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 0.75rem;
+  background: var(--accent-soft);
+}
+
+.banner.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.banner.warn {
+  background: var(--warn-soft);
+}
+
+.digits {
+  font-family: ui-monospace, monospace;
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-align: center;
+}
+
+.qr svg {
+  display: block;
+  width: min(100%, 16rem);
+  height: auto;
+  margin: 0 auto;
+}
+
+pre {
+  margin: 0;
+  padding: 0.75rem;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  user-select: all;
+}
+
+.code {
+  user-select: all;
+  word-break: break-all;
+}
+
+.contact {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.contact:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+ul.progress {
+  margin: 0;
+  padding-left: 1.2rem;
+}
