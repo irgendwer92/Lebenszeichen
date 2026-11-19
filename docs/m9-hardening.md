@@ -142,6 +142,24 @@ interface, resending, `set_access_token`).
 - Review brief, Opus review, fixes.
 - Dry run of the guide, then the test record.
 
-## Test record
+## Test record (2026-11-19)
 
-(follows)
+Release APK and Windows installer from this branch, the Linux desktop app,
+the Home Assistant add-on, `lz` as a test contact.
+
+- [x] Guide dry run by a fresh session (local Docker, no proxy, no phone):
+      relay and ntfy started, two `lz` devices paired with a voucher,
+      request and answer both ways, a replaced token refused and set with
+      `lz access-token`. Its findings are fixed in the guide.
+- [x] Relay image `lebenszeichen-relay:edge` published for amd64 and arm64,
+      pullable without login.
+- [x] With the direction marker: request from the test contact answered on
+      the phone, request from the phone answered by the test contact.
+- [x] Phone clock 15 minutes ahead: the red banner appeared; its request
+      was refused by the test contact with the visible notice naming the
+      phone's person.
+- [x] Devices → Change access token on the phone: accepted.
+- [ ] Removing a device with a third device present (the remaining one
+      leaves the ended group and keeps its contacts) – covered by tests.
+- [ ] Done criterion: a person without prior knowledge sets up a relay and
+      pairs two devices with the guide.
