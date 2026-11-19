@@ -107,6 +107,31 @@ access token" set a new access token after the relay's was replaced; the
 relay must accept it (checked with a voucher). On a device without a relay
 account the app needs a setup code, `lz` the option `--relay`.
 
+## Security review (2026-11-19)
+
+Done by a separate AI session (Opus) on the code of this branch, read-only,
+with the brief in `review-brief.md`. Fixed the same day, all on this branch:
+
+| # | Finding | Fix |
+|---|---|---|
+| High | A relay could hand a message back to its sender, where it opened as the contact's (`crypto_box` has one key for both directions): fake requests, an own answer shown as the contact's sign of life | direction marker in the last plaintext byte of form A; a device refuses its own; `0` from older clients still accepted (`wire-format.md`) |
+| High | A removed device kept the group key and the sync mailbox tokens: it could register again, receive contacts paired later and send forged sync messages (e.g. `device_removed` for the phone) | removing ends the group: the sync mailbox is deleted; the other devices notice, keep their contacts and are added again; the removed one still deletes its state |
+| Low | The 10 minutes of an invitation rested on the sender's time: an unused code could be accepted with a backdated `hello` for a day | a `hello` is taken at most one hour after the expiry |
+| Low | One contact's unreachable relay held back resending to all contacts; permanent refusals were retried silently | per contact; permanent refusals dropped with a notice |
+| Low | `http://` relay addresses from invitations sent tokens unencrypted and could reach the local network | plain `http` only to this computer (loopback), for local tests |
+| Low | Invited people could fill all handover slots of the relay | quota per family (owner, each voucher family); guests together at most half; derived mailboxes at most 30 over their lifetime (schema version 2) |
+| Low | Wake signals to any public address and port | port 443 only; the guide recommends `LZ_PUSH_ALLOWED_HOSTS` |
+| Info | Messages of 1–512 bytes accepted | exactly one envelope (297 bytes) |
+| Info | `lz-server` wrote its token to the log | the log says where it is |
+| Info | The device code could be squatted if sent as text | the guide says to show it only |
+
+Not changed: WebSocket connections without subscriptions have no idle limit
+and the relay sets no connection cap of its own; the reverse proxy limits
+both (timeouts in the examples). Checked and found sound: see the review
+(envelopes and parsing, replay protection, pairing commitment, handover,
+relay tokens, push address checks including DNS rebinding, local
+interface, resending, `set_access_token`).
+
 ## Work
 
 - Relay image job in `container.yml`.
