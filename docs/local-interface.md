@@ -336,7 +336,9 @@ services:
 ```
 
 Set up once with `docker compose exec -it lebenszeichen lz device join
---relay https://RELAY --name Server`. The Home Assistant app (sidebar page,
+--relay https://RELAY --name Server`. The token of the socket is in the
+state file: `jq -r .reports.token data/device.json` on the host (it is no
+longer written to the log since M9). The Home Assistant app (sidebar page,
 socket `/share/lebenszeichen/lz.sock`, `shell_command` example) is described
 in `deploy/home-assistant/lebenszeichen/DOCS.md`. Technical details:
 `m8b-container.md`.
