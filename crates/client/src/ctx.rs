@@ -1143,9 +1143,11 @@ impl<R: Relay> Ctx<R> {
         })
     }
 
-    /// Sends the envelopes of [`Device::unsent`] again, in order, until one
-    /// fails. Envelopes a recipient would refuse as too old, and those to
-    /// contacts that are gone, are dropped.
+    /// Sends the envelopes of [`Device::unsent`] again, in order per
+    /// contact: a failure holds back the later ones to the same contact
+    /// only. Envelopes a recipient would refuse as too old, those to
+    /// contacts that are gone and those the relay refuses for good are
+    /// dropped (the last with a notice).
     pub(crate) async fn flush_unsent(&mut self) -> Result<()> {
         let now = self.now();
         let unsent = self.update(|device| {
@@ -1165,7 +1167,12 @@ impl<R: Relay> Ctx<R> {
             device.unsent.clone_from(&keep);
             Ok(keep)
         })?;
+        let t = self.texts();
+        let mut held: Vec<MailboxId> = Vec::new();
         for waiting in unsent {
+            if held.contains(&waiting.contact) {
+                continue;
+            }
             let device = self.load()?;
             let Some(contact) = device
                 .contacts
@@ -1188,7 +1195,16 @@ impl<R: Relay> Ctx<R> {
             match delivered {
                 Ok(()) => {}
                 Err(RelayError::UnknownMailbox) => self.gone(&name).await?,
-                Err(_) => return Ok(()),
+                Err(error) if is_temporary(&error) => {
+                    held.push(waiting.contact);
+                    continue;
+                }
+                Err(error) => self.say(&tr!(
+                    t,
+                    "warn-unsent-dropped",
+                    name = &name,
+                    error = &error.text(t)
+                )),
             }
             self.update(|device| {
                 device.unsent.retain(|u| u != &waiting);
@@ -1225,6 +1241,15 @@ impl<R: Relay> Ctx<R> {
         if let Err(error) = self.relay.delete_mailbox(relay, mailbox, token).await {
             self.warn_unless_gone(&error);
         }
+    }
+}
+
+/// Whether sending again later may succeed: the relay was not reached, or
+/// refused for now (full mailbox, rate limit, its own trouble).
+fn is_temporary(error: &RelayError) -> bool {
+    match error {
+        RelayError::Refused { status, .. } => *status == 429 || *status >= 500,
+        _ => error.is_transport(),
     }
 }
 

@@ -781,3 +781,45 @@ async fn other_devices_leave_the_ended_group_and_keep_their_contacts() {
         }]
     );
 }
+
+/// A contact whose relay is down holds back only the messages to it.
+#[tokio::test]
+async fn unsent_messages_wait_per_contact() {
+    let world = World::new();
+    let (mut anna, mut bert) = paired(&world).await;
+    const RELAY_C: &str = "https://relay-c.example";
+    const TOKEN_C: lz_core::wire::Token = [0xC3; 32];
+    world.relay.add(RELAY_C, TOKEN_C);
+    let mut carl = world.person(Some((RELAY_C, Some(TOKEN_C))));
+    let code = anna.ctx.invite("Carl", false).await.unwrap();
+    carl.ctx.accept("Anna", &code).await.unwrap();
+    anna.sync().await;
+    carl.sync().await;
+    anna.ctx.confirm("Carl").await.unwrap();
+    carl.sync().await;
+
+    world.relay.lose_answers(RELAY_B, 1);
+    anna.ctx.request("Bert").await.unwrap();
+    // Bert's relay goes down: his message waits, and Carl's, whose answer
+    // is lost, joins it instead of waiting behind it.
+    world.relay.set_down(RELAY_B, true);
+    world.relay.lose_answers(RELAY_C, 1);
+    anna.ctx.request("Carl").await.unwrap();
+    assert_eq!(anna.ctx.load().unwrap().unsent.len(), 2);
+    anna.sync().await;
+    let unsent = anna.ctx.load().unwrap().unsent;
+    assert_eq!(unsent.len(), 1);
+    assert_eq!(
+        unsent[0].contact,
+        anna.contact("Bert").state.contact.own_mailbox
+    );
+    world.relay.set_down(RELAY_B, false);
+    anna.sync().await;
+    assert!(anna.ctx.load().unwrap().unsent.is_empty());
+    assert_eq!(
+        bert.sync().await,
+        vec![Notice::Request {
+            name: "Anna".into()
+        }]
+    );
+}

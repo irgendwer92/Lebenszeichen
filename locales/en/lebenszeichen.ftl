@@ -144,6 +144,7 @@ error-contact-gone = { $name } has ended the connection (the mailbox no longer e
 error-not-delivered = Not delivered, nothing changed: { $error }
 warn-partly-delivered = Warning: not everything delivered: { $error }
 warn-delivery-unconfirmed = The relay did not confirm the delivery{ $error }; it is sent again with the next fetch.
+warn-unsent-dropped = A message to { $name } was given up: { $error }
 problem-out-of-time = A message from { $name } was dropped: it is dated more than 10 minutes ahead of this device's clock, or over 24 hours ago. Check that the clock on both sides is set automatically.
 error-no-data-dir = No data directory found (APPDATA on Windows, otherwise XDG_DATA_HOME or HOME); please give --state.
 notice-compare-hint = Compare the check code in person or by phone, not in the same chat the invitation came through.

@@ -144,6 +144,7 @@ error-contact-gone = { $name } hat die Verbindung beendet (das Postfach gibt es 
 error-not-delivered = Nicht zugestellt, nichts geändert: { $error }
 warn-partly-delivered = Warnung: nicht alles zugestellt: { $error }
 warn-delivery-unconfirmed = Das Relay hat die Zustellung nicht bestätigt{ $error }; sie wird beim nächsten Abruf wiederholt.
+warn-unsent-dropped = Eine Nachricht an { $name } wurde aufgegeben: { $error }
 problem-out-of-time = Eine Nachricht von { $name } wurde verworfen: Sie ist mehr als 10 Minuten nach der Uhr dieses Geräts datiert oder über 24 Stunden alt. Prüfe, ob die Uhr auf beiden Seiten automatisch gestellt wird.
 error-no-data-dir = Kein Datenverzeichnis gefunden (APPDATA unter Windows, sonst XDG_DATA_HOME oder HOME); bitte --state angeben.
 notice-compare-hint = Vergleiche den Prüfcode persönlich oder am Telefon, nicht im selben Chat, über den die Einladung kam.
