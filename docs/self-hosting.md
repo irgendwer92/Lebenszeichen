@@ -71,9 +71,14 @@ The same `sed` line replaces the token later (section 11).
 Keep it like a password. You need it once more in step 7; after that, the
 app can show it to your own further devices as a setup code.
 
-Optional: `LZ_PUSH_ALLOWED_HOSTS=ntfy.example.org` in `relay.env` makes the
-relay send wake signals only to your own ntfy. Without it, any public https
-address is allowed, so that phones using another ntfy server work too.
+Recommended: `LZ_PUSH_ALLOWED_HOSTS=ntfy.example.org` in `relay.env` makes
+the relay send wake signals only to your own ntfy. Without it, any public
+https address on port 443 is allowed, so that phones using another ntfy
+server work too, but then anyone with a mailbox on your relay (everyone you
+invited with a voucher) can make it send many requests to an address of
+their choice. Set it unless people on your relay use other ntfy servers;
+several hosts are separated by commas. `relay.env.example` sets it already:
+replace the name, or remove the line.
 
 ## 4. Start relay and ntfy
 
@@ -191,7 +196,8 @@ lz init --relay https://relay.example.org --access-token <token>
 **More devices of your own** (a laptop next to the phone): on the new device
 choose **Set up as another device**; it shows a device code. On the existing
 device: Devices → **Add device**, scan or enter the code, and compare the two
-check codes on both screens. A device with the access token can also show a
+check codes on both screens. Show the device code only, never send it: until
+the check codes are confirmed, whoever has it can get in the way. A device with the access token can also show a
 **setup code** (Devices → Show setup code) for a second account of yours on
 this relay; show it only in person, never send it.
 
