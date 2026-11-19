@@ -133,7 +133,7 @@ Base32 in uppercase fits the alphanumeric mode of QR codes and remains typable a
 
 `n` is 32 random bytes that the inviter creates with the invitation and keeps secret until it has received the `hello`. Invitations of version 1 (`LZ1-`, without commitment) are refused with a hint to ask for a new invitation (decided on 2026-11-16); contacts paired with them stay as they are. An invitation with prefix `LZ2-` but another version byte is refused as well. After the update, open invitations of version 1 are deleted together with their mailbox. All prefixes in this document are ASCII bytes without a terminator.
 
-The inviter accepts exactly one `hello` per invitation, and only if it was sent before the expiry time (default: 10 minutes after creation). What counts is the sending time in the `hello`, not the time of retrieval; the inviter can retrieve it as long as the replay protection window allows, that is, until a little over 24 hours after the expiry time. Only after that does it delete the invitation and mailbox.
+The inviter accepts exactly one `hello` per invitation, and only if it was sent before the expiry time (default: 10 minutes after creation). What counts is the sending time in the `hello`, not the time of retrieval; the inviter can retrieve it up to one hour after the expiry time, then it deletes the invitation and mailbox. (Until M9 the limit was the replay protection window, a little over 24 hours; the security review of M9 noted that the sending time is the sender's word, so someone who got hold of an unused code could backdate a `hello` for that long.)
 
 ### Verification code
 
