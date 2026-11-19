@@ -1,0 +1,16 @@
+# ntfy only for the wake signals of Lebenszeichen (UnifiedPush).
+# Set base-url to your public ntfy address.
+base-url: "https://ntfy.example.org"
+listen-http: ":80"
+behind-proxy: true
+cache-file: "/var/lib/ntfy/cache.db"
+cache-duration: "12h"
+auth-file: "/var/lib/ntfy/user.db"
+# Nobody may do anything except what is granted with "ntfy access"
+# (docs/self-hosting.md): everyone may write to up* (the relay sends wake
+# signals there), only the phones' account may read.
+auth-default-access: "deny-all"
+enable-signup: false
+enable-login: true
+web-root: disable
+log-level: info

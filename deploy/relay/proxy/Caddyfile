@@ -1,0 +1,11 @@
+# Caddy on the host, in front of compose.yaml. Gets certificates by itself.
+# Replace the two names. Caddy writes no access log unless a "log" directive
+# is set; keep it that way.
+
+relay.example.org {
+	reverse_proxy 127.0.0.1:8080
+}
+
+ntfy.example.org {
+	reverse_proxy 127.0.0.1:8081
+}

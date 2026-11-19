@@ -1,0 +1,39 @@
+# For an existing Traefik (v3) in Docker. Use it together with compose.yaml:
+#
+#   docker compose -f compose.yaml -f proxy/compose.traefik.yaml up -d
+#
+# Adapt: the two names, the network your Traefik is in ("traefik" below),
+# the entry point ("websecure") and the certificate resolver ("letsencrypt").
+# The services then need no port on the host.
+#
+# Access logs: each router turns them off for itself. If Traefik has no
+# access log configured at all, nothing is logged anyway.
+
+services:
+  relay:
+    ports: !reset []
+    networks: [traefik]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik
+      - traefik.http.routers.lz-relay.rule=Host(`relay.example.org`)
+      - traefik.http.routers.lz-relay.entrypoints=websecure
+      - traefik.http.routers.lz-relay.tls.certresolver=letsencrypt
+      - traefik.http.routers.lz-relay.observability.accesslogs=false
+      - traefik.http.services.lz-relay.loadbalancer.server.port=8080
+
+  ntfy:
+    ports: !reset []
+    networks: [traefik]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik
+      - traefik.http.routers.lz-ntfy.rule=Host(`ntfy.example.org`)
+      - traefik.http.routers.lz-ntfy.entrypoints=websecure
+      - traefik.http.routers.lz-ntfy.tls.certresolver=letsencrypt
+      - traefik.http.routers.lz-ntfy.observability.accesslogs=false
+      - traefik.http.services.lz-ntfy.loadbalancer.server.port=80
+
+networks:
+  traefik:
+    external: true
