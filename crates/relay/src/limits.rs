@@ -14,8 +14,13 @@ pub const MAILBOX_IDLE_DAYS: i64 = 90;
 /// At most this many messages wait in a mailbox.
 pub const MAX_WAITING_MESSAGES: usize = 32;
 
-/// A mailbox created with a voucher may derive at most this many mailboxes.
+/// A mailbox created with a voucher may have at most this many derived
+/// mailboxes at the same time.
 pub const MAX_DERIVED_MAILBOXES: usize = 10;
+
+/// A mailbox created with a voucher may derive at most this many mailboxes in
+/// its lifetime; deleting a derived mailbox does not give this back.
+pub const MAX_DERIVED_MAILBOXES_EVER: usize = 30;
 
 /// A handover slot (and a reveal reservation) is deleted at the latest this
 /// long after the `PUT` that created it.
@@ -33,6 +38,16 @@ pub const MAX_HANDOVERS: usize = 64;
 
 /// At most this many waiting handover slots authorized with the same token.
 pub const MAX_HANDOVERS_PER_TOKEN: usize = 2;
+
+/// At most this many waiting handover slots authorized with the read tokens of
+/// one voucher family: a voucher mailbox and the mailboxes derived from it.
+/// Reserved reveal slots do not count here.
+pub const MAX_HANDOVERS_PER_FAMILY: usize = 2;
+
+/// At most this many handover slots, reserved reveal slots included, for all
+/// voucher families together, so that the holder of the access token always
+/// has the rest of [`MAX_HANDOVERS`] for adding devices.
+pub const MAX_GUEST_HANDOVERS: usize = MAX_HANDOVERS / 2;
 
 /// At most this many messages are accepted per mailbox within
 /// [`RATE_WINDOW_SECS`].

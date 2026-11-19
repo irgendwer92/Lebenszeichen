@@ -12,8 +12,8 @@ use crate::hub::Event;
 use crate::ids::{self, HandoverId, Hash, MailboxId, ReaderId, Token};
 use crate::limits::{MAX_HANDOVER_BYTES, MAX_JSON_BODY, REVEAL_BYTES, VOUCHER_TTL_SECS};
 use crate::store::{
-    CreateMailbox as Created, Grant, MailboxAuth, NewHandover, PostMessage, PutHandover, PutReader,
-    PutReveal, TakeHandover,
+    CreateMailbox as Created, Family, Grant, MailboxAuth, NewHandover, PostMessage, PutHandover,
+    PutReader, PutReveal, TakeHandover,
 };
 
 /// Header with the hash of the fetch token of a handover slot.
@@ -160,8 +160,8 @@ pub async fn delete_reader(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /v1/mailboxes/{mailbox}/messages`, with the send token. The body is
-/// stored as it is.
+/// `POST /v1/mailboxes/{mailbox}/messages`, with the send token. The body must
+/// be exactly one envelope long and is stored as it is.
 pub async fn post_message(
     State(state): State<AppState>,
     Path(mailbox): Path<String>,
@@ -170,10 +170,12 @@ pub async fn post_message(
 ) -> Result<StatusCode, ApiError> {
     let mailbox = parse_mailbox(&mailbox)?;
     authorize(&state, &headers, &mailbox, |a| a.send_token_hash).await?;
-    let data = axum::body::to_bytes(body, lz_wire::MAX_MESSAGE_BYTES)
+    // Anything but an envelope is refused, so that the relay cannot carry
+    // other data; a longer body is not read beyond one byte too many.
+    let data = axum::body::to_bytes(body, lz_wire::ENVELOPE_LEN)
         .await
-        .map_err(|_| ApiError::TooLarge)?;
-    if data.is_empty() {
+        .map_err(|_| ApiError::BadRequest)?;
+    if data.len() != lz_wire::ENVELOPE_LEN {
         return Err(ApiError::BadRequest);
     }
 
@@ -203,7 +205,8 @@ pub async fn post_message(
 
 /// `PUT /v1/handovers/{handover}`: a handover slot with the access token or
 /// any read token of this relay, or, without `Lz-Fetch-Hash`, a reserved
-/// reveal slot with the reply token.
+/// reveal slot with the reply token. Read tokens of a voucher family share
+/// one small quota, so that guests cannot keep the owner from adding devices.
 pub async fn put_handover(
     State(state): State<AppState>,
     Path(handover): Path<String>,
@@ -235,9 +238,14 @@ pub async fn put_handover(
     };
 
     let auth_hash = ids::sha256(&token);
-    if !is_access_token(&state, &token) && !state.db(move |s| s.is_read_token(&auth_hash)).await? {
-        return Err(ApiError::Unauthorized);
-    }
+    let family = if is_access_token(&state, &token) {
+        Family::Owner
+    } else {
+        state
+            .db(move |s| s.read_token_family(&auth_hash))
+            .await?
+            .ok_or(ApiError::Unauthorized)?
+    };
     let data = axum::body::to_bytes(body, MAX_HANDOVER_BYTES)
         .await
         .map_err(|_| ApiError::TooLarge)?;
@@ -251,6 +259,7 @@ pub async fn put_handover(
                 fetch_hash,
                 auth_hash,
                 reply_hash,
+                family,
             };
             s.put_handover(&id, &slot, now)
         })

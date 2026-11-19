@@ -138,7 +138,7 @@ Disadvantage: if one device is compromised, all contact keys are affected.
 |---|---|---|
 | Create mailbox | Access token of the relay, voucher, or read token of a voucher mailbox (M5) | Returns mailbox identifier; the client passes the hashes of read token and send token. A voucher mailbox may derive up to 10 further mailboxes. |
 | Create voucher | Access token | Valid once, for exactly one mailbox |
-| Deliver message | Send token | At most 512 bytes; clearly reports if the mailbox no longer exists |
+| Deliver message | Send token | Exactly one envelope (297 bytes); clearly reports if the mailbox no longer exists |
 | Register, change or unregister reader | Read token | Reader identifier and push address |
 | Retrieve messages (WebSocket) | Read token, multiple mailboxes per connection | Delivery; the reader acknowledges each message |
 | Delete mailbox | Read token | Immediately, including contents |
@@ -155,8 +155,8 @@ When a new message arrives, the relay sends a contentless wake signal (UnifiedPu
 | Messages: ciphertext and arrival time | until all readers have acknowledged, at most 24 hours |
 | Open vouchers (hash) | until redeemed, at most 10 minutes |
 | Day of last use per mailbox | for the cleanup rule |
-| How a mailbox was created and, for a derived one, its voucher mailbox (M5) | until the mailbox is deleted |
-| Handover slots: content, hash of fetch or reply token, hash of the authorizing token | until fetched, at most 10 minutes |
+| How a mailbox was created and, for a derived one, its voucher mailbox (M5); for a voucher mailbox, how many mailboxes it has derived (M9) | until the mailbox is deleted |
+| Handover slots: content, hash of fetch or reply token, hash of the authorizing token, for a read token of a voucher family its voucher mailbox (M9) | until fetched, at most 10 minutes |
 
 ### What the relay does not store
 
@@ -183,8 +183,10 @@ The push service (ntfy) only sees when a device is woken.
 
 ### Protection against abuse
 
-- Mailboxes only with access token, voucher, or derived from a voucher mailbox (at most 10 each, not chainable).
-- At most 64 handover slots on the relay and two per authorizing token.
+- Mailboxes only with access token, voucher, or derived from a voucher mailbox (at most 10 at a time and 30 in total each, not chainable).
+- At most 64 handover slots on the relay and two per authorizing token. A voucher mailbox and the mailboxes derived from it form a voucher family; its read tokens share two slots, and all voucher families together at most 32, so that the holder of the access token can always add devices (since M9).
+- Messages are exactly one envelope long, so the relay cannot carry other data (since M9).
+- Wake signals go only to `https` on port 443 (since M9).
 - At most 32 waiting messages and 60 deliveries per hour per mailbox (60 since 2026-11-17, because the own devices of a person share their sync mailbox and setting them up hit 20; 32 since 2026-11-16 for the sync mailbox of several devices; before that 8, decided on 2026-11-14; before that 6, which could block the `end` during normal use through pairing, rule changes and responses). The limit counts all messages because the relay does not know the types; it is not a substitute for the rules for requests.
 - Mailboxes without retrieval for 90 days are deleted.
 

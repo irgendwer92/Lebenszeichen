@@ -1,6 +1,7 @@
 //! SQLite storage of the relay.
 //!
-//! Stored are mailboxes with token hashes, how they were created, readers
+//! Stored are mailboxes with token hashes, how they were created, how many
+//! mailboxes a voucher mailbox has derived, readers
 //! with push URL and last acknowledgement, waiting messages with their
 //! arrival time, open vouchers (hash only) and handover slots. Nothing else:
 //! no history, no addresses, no names.
@@ -12,9 +13,9 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 
 use crate::ids::{self, HandoverId, Hash, MailboxId, ReaderId, Token};
 use crate::limits::{
-    HANDOVER_TTL_SECS, MAILBOX_IDLE_DAYS, MAX_DERIVED_MAILBOXES, MAX_HANDOVERS,
-    MAX_HANDOVERS_PER_TOKEN, MAX_READERS_PER_MAILBOX, MAX_WAITING_MESSAGES, MESSAGE_TTL_SECS,
-    REVEAL_BYTES,
+    HANDOVER_TTL_SECS, MAILBOX_IDLE_DAYS, MAX_DERIVED_MAILBOXES, MAX_DERIVED_MAILBOXES_EVER,
+    MAX_GUEST_HANDOVERS, MAX_HANDOVERS, MAX_HANDOVERS_PER_FAMILY, MAX_HANDOVERS_PER_TOKEN,
+    MAX_READERS_PER_MAILBOX, MAX_WAITING_MESSAGES, MESSAGE_TTL_SECS, REVEAL_BYTES,
 };
 
 /// Schema version 0, as created before `user_version` was used. A database
@@ -75,8 +76,28 @@ CREATE TABLE handovers (
 ) WITHOUT ROWID;
 ";
 
+/// Version 1 to 2 (M9): voucher families.
+///
+/// `derived_total` counts the mailboxes a voucher mailbox has derived in its
+/// lifetime, so that deleting and creating them again cannot go on forever;
+/// it starts at the number of derived mailboxes that exist.
+///
+/// `family` of a handover slot is the voucher mailbox of the voucher family
+/// whose read token authorized it, and NULL for the access token and read
+/// tokens of mailboxes created with it. A reveal slot carries the family of
+/// the slot that reserved it. Slots from before the migration expire within
+/// 10 minutes and count as the access token's.
+const MIGRATION_V2: &str = "
+ALTER TABLE mailboxes ADD COLUMN derived_total INTEGER NOT NULL DEFAULT 0;
+UPDATE mailboxes SET derived_total =
+    (SELECT COUNT(*) FROM mailboxes AS child WHERE child.parent = mailboxes.id)
+    WHERE origin = 1;
+ALTER TABLE handovers ADD COLUMN family BLOB;
+CREATE INDEX handovers_family ON handovers(family);
+";
+
 /// The schema version this code works with.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// Day number used for "day of last use": whole days since the Unix epoch.
 pub fn day_of(now: i64) -> i64 {
@@ -103,6 +124,16 @@ pub enum Origin {
     Derived = 2,
 }
 
+/// Who a token that authorizes a handover slot belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Family {
+    /// The access token, or the read token of a mailbox created with it.
+    Owner,
+    /// The read token of a voucher mailbox or of a mailbox derived from it;
+    /// the identifier of the voucher mailbox.
+    Voucher(MailboxId),
+}
+
 /// What authorizes the creation of a mailbox.
 #[derive(Debug, Clone, Copy)]
 pub enum Grant {
@@ -120,7 +151,8 @@ pub enum CreateMailbox {
     Created(Origin),
     /// Neither a valid voucher nor the read token of a voucher mailbox.
     Unauthorized,
-    /// The voucher mailbox has derived the maximum number of mailboxes.
+    /// The voucher mailbox has the maximum number of derived mailboxes, or
+    /// has derived the maximum in its lifetime.
     Quota,
 }
 
@@ -135,6 +167,8 @@ pub struct NewHandover<'a> {
     pub auth_hash: Hash,
     /// `SHA-256` of the reply token; reserves the reveal slot.
     pub reply_hash: Option<Hash>,
+    /// The family of the token that authorized the `PUT`.
+    pub family: Family,
 }
 
 /// Result of storing a handover slot.
@@ -144,9 +178,11 @@ pub enum PutHandover {
     Stored,
     /// The identifier, or its reveal identifier, is taken or reserved.
     Exists,
-    /// The authorizing token already has the maximum of waiting slots.
+    /// The authorizing token or its voucher family already has the maximum
+    /// of waiting slots.
     Quota,
-    /// The relay already has the maximum of slots.
+    /// The relay, or all voucher families together, already have the maximum
+    /// of slots.
     Full,
 }
 
@@ -304,14 +340,22 @@ impl Store {
                         else {
                             return Ok(CreateMailbox::Unauthorized);
                         };
-                        let derived: i64 = tx.query_row(
-                            "SELECT COUNT(*) FROM mailboxes WHERE parent = ?1",
+                        let (derived, total): (i64, i64) = tx.query_row(
+                            "SELECT (SELECT COUNT(*) FROM mailboxes WHERE parent = ?1),
+                                    derived_total
+                             FROM mailboxes WHERE id = ?1",
                             params![&parent],
-                            |row| row.get(0),
+                            |row| Ok((row.get(0)?, row.get(1)?)),
                         )?;
-                        if derived >= MAX_DERIVED_MAILBOXES as i64 {
+                        if derived >= MAX_DERIVED_MAILBOXES as i64
+                            || total >= MAX_DERIVED_MAILBOXES_EVER as i64
+                        {
                             return Ok(CreateMailbox::Quota);
                         }
+                        tx.execute(
+                            "UPDATE mailboxes SET derived_total = derived_total + 1 WHERE id = ?1",
+                            params![&parent],
+                        )?;
                         (Origin::Derived, Some(parent))
                     }
                 }
@@ -334,14 +378,34 @@ impl Store {
         })
     }
 
-    /// Whether `hash` is the read token hash of any mailbox.
-    pub fn is_read_token(&self, hash: &Hash) -> rusqlite::Result<bool> {
+    /// The family of the read token with this hash, or `None` if it is the
+    /// read token of no mailbox. If several mailboxes share the read token, a
+    /// voucher family wins over the access token's, so that the stricter
+    /// limits apply.
+    pub fn read_token_family(&self, hash: &Hash) -> rusqlite::Result<Option<Family>> {
         self.with(|c| {
-            c.query_row(
-                "SELECT EXISTS (SELECT 1 FROM mailboxes WHERE read_token_hash = ?1)",
-                params![&hash[..]],
-                |row| row.get(0),
-            )
+            let row = c
+                .query_row(
+                    "SELECT CASE origin WHEN ?2 THEN NULL WHEN ?3 THEN id
+                            ELSE COALESCE(parent, id) END
+                     FROM mailboxes WHERE read_token_hash = ?1
+                     ORDER BY origin = ?2, id LIMIT 1",
+                    params![
+                        &hash[..],
+                        Origin::AccessToken as i64,
+                        Origin::Voucher as i64
+                    ],
+                    |row| row.get::<_, Option<Vec<u8>>>(0),
+                )
+                .optional()?;
+            Ok(row.map(|family| match family {
+                None => Family::Owner,
+                // Identifiers are written with their fixed length; anything
+                // else would be a voucher family that matches no other.
+                Some(id) => {
+                    Family::Voucher(id.try_into().unwrap_or([0xff; lz_wire::MAILBOX_ID_LEN]))
+                }
+            }))
         })
     }
 
@@ -374,29 +438,54 @@ impl Store {
             if per_token >= MAX_HANDOVERS_PER_TOKEN as i64 {
                 return Ok(PutHandover::Quota);
             }
+            let needed = 1 + i64::from(reveal.is_some());
+            let family = match &slot.family {
+                Family::Owner => None,
+                Family::Voucher(id) => Some(&id[..]),
+            };
+            if let Some(family) = family {
+                let per_family: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM handovers WHERE family = ?1 AND reveal = 0",
+                    params![family],
+                    |row| row.get(0),
+                )?;
+                if per_family >= MAX_HANDOVERS_PER_FAMILY as i64 {
+                    return Ok(PutHandover::Quota);
+                }
+                let guests: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM handovers WHERE family IS NOT NULL",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if guests + needed > MAX_GUEST_HANDOVERS as i64 {
+                    return Ok(PutHandover::Full);
+                }
+            }
             let total: i64 =
                 tx.query_row("SELECT COUNT(*) FROM handovers", [], |row| row.get(0))?;
-            let needed = 1 + i64::from(reveal.is_some());
             if total + needed > MAX_HANDOVERS as i64 {
                 return Ok(PutHandover::Full);
             }
             let expires_at = now + HANDOVER_TTL_SECS;
             tx.execute(
-                "INSERT INTO handovers (id, data, fetch_hash, auth_hash, expires_at, reveal)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+                "INSERT INTO handovers
+                   (id, data, fetch_hash, auth_hash, expires_at, reveal, family)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
                 params![
                     &id[..],
                     slot.data,
                     &slot.fetch_hash[..],
                     &slot.auth_hash[..],
-                    expires_at
+                    expires_at,
+                    family
                 ],
             )?;
             if let Some((reveal_id, reply_hash)) = reveal {
                 tx.execute(
-                    "INSERT INTO handovers (id, data, fetch_hash, auth_hash, expires_at, reveal)
-                     VALUES (?1, NULL, ?2, NULL, ?3, 1)",
-                    params![&reveal_id[..], &reply_hash[..], expires_at],
+                    "INSERT INTO handovers
+                       (id, data, fetch_hash, auth_hash, expires_at, reveal, family)
+                     VALUES (?1, NULL, ?2, NULL, ?3, 1, ?4)",
+                    params![&reveal_id[..], &reply_hash[..], expires_at, family],
                 )?;
             }
             tx.commit()?;
@@ -771,13 +860,16 @@ fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
         return Err(rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISMATCH),
             Some(format!(
-                "Schemaversion {version} ist neuer als {SCHEMA_VERSION}"
+                "schema version {version} is newer than {SCHEMA_VERSION}"
             )),
         ));
     }
     if version < 1 {
         tx.execute_batch(SCHEMA_V0)?;
         tx.execute_batch(MIGRATION_V1)?;
+    }
+    if version < 2 {
+        tx.execute_batch(MIGRATION_V2)?;
     }
     if version < SCHEMA_VERSION {
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;

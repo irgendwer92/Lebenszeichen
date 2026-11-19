@@ -40,9 +40,10 @@ impl PushPolicy {
         Self::new(list.split(',').map(str::to_owned))
     }
 
-    /// Checks a push URL without any network access: `https` only, no user
-    /// info, a length limit, no non-public IP literals, no `localhost`, and the
-    /// host allowlist if one is set. Returns the parsed URL.
+    /// Checks a push URL without any network access: `https` only, port 443
+    /// only, no user info, a length limit, no non-public IP literals, no
+    /// `localhost`, and the host allowlist if one is set. Returns the parsed
+    /// URL.
     pub fn validate(&self, url: &str) -> Result<Url, InvalidPushUrl> {
         if url.len() > MAX_PUSH_URL_LEN {
             return Err(InvalidPushUrl);
@@ -51,6 +52,9 @@ impl PushPolicy {
         if parsed.scheme() != "https"
             || !parsed.username().is_empty()
             || parsed.password().is_some()
+            // The parser drops an explicit default port, so any port left is
+            // not 443; other ports would let clients probe public services.
+            || parsed.port().is_some()
         {
             return Err(InvalidPushUrl);
         }
@@ -304,6 +308,16 @@ mod tests {
         let any = PushPolicy::default();
         assert!(any.validate("https://ntfy.example.org/upAbC?up=1").is_ok());
         assert!(any.validate("https://[2606:4700:4700::1111]/x").is_ok());
+        assert!(any.validate("https://ntfy.example.org:443/up").is_ok());
+        assert!(any.validate("https://[2606:4700:4700::1111]:443/x").is_ok());
+        assert!(any.validate("https://ntfy.example.org:8443/up").is_err());
+        assert!(any.validate("https://ntfy.example.org:80/up").is_err());
+        assert!(any.validate("https://ntfy.example.org:22/up").is_err());
+        assert!(any.validate("https://1.1.1.1:6379/up").is_err());
+        assert!(
+            any.validate("https://[2606:4700:4700::1111]:8080/x")
+                .is_err()
+        );
         assert!(any.validate("http://ntfy.example.org/up").is_err());
         assert!(any.validate("ftp://ntfy.example.org/up").is_err());
         assert!(any.validate("not a url").is_err());
