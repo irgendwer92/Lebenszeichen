@@ -1,7 +1,10 @@
 //! The relay interface over HTTP(S) and WebSocket.
 //!
-//! Plain `http://` is allowed for local tests; in production the relay sits
-//! behind a reverse proxy with TLS.
+//! Plain `http://` is allowed only to the own computer (`localhost` and
+//! loopback addresses), for local tests: an address from someone else (an
+//! invitation, a `hello`) could otherwise make the client send its tokens
+//! unencrypted, or reach into the local network. In production the relay
+//! sits behind a reverse proxy with TLS.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -103,6 +106,21 @@ impl Http {
     }
 }
 
+/// `https`, or `http` to this computer only.
+fn allowed_url(url: &reqwest::Url) -> bool {
+    match url.scheme() {
+        "https" => true,
+        "http" => url.host_str().is_some_and(|host| {
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        }),
+        _ => false,
+    }
+}
+
 fn base(relay: &RelayUrl) -> &str {
     relay.as_str().trim_end_matches('/')
 }
@@ -132,6 +150,13 @@ struct ErrorBody {
 /// Sends the request and turns every status other than `expected` into an
 /// error.
 async fn send(request: RequestBuilder, expected: StatusCode) -> Result<Response, RelayError> {
+    let allowed = request
+        .try_clone()
+        .and_then(|r| r.build().ok())
+        .is_some_and(|r| allowed_url(r.url()));
+    if !allowed {
+        return Err(RelayError::BadAddress);
+    }
     let response = request.send().await.map_err(|e| {
         let error = with_causes(&e);
         match error {
@@ -350,6 +375,9 @@ impl Relay for Http {
         deliveries: mpsc::UnboundedSender<Delivery>,
     ) -> Result<Box<dyn Connection>, RelayError> {
         let base = base(relay);
+        if !reqwest::Url::parse(base).is_ok_and(|url| allowed_url(&url)) {
+            return Err(RelayError::BadAddress);
+        }
         let url = if let Some(rest) = base.strip_prefix("https://") {
             format!("wss://{rest}/v1/stream")
         } else if let Some(rest) = base.strip_prefix("http://") {
@@ -799,5 +827,32 @@ mod tests {
         let t = Language::En.texts();
         assert!(clock_warning_text(t, -900).contains("15 min ahead"));
         assert!(clock_warning_text(t, 301).contains("6 min behind"));
+    }
+
+    #[test]
+    fn plain_http_only_to_this_computer() {
+        let ok = |text: &str| super::allowed_url(&reqwest::Url::parse(text).unwrap());
+        assert!(ok("https://relay.example.org/v1/x"));
+        assert!(ok("http://127.0.0.1:8080/v1/x"));
+        assert!(ok("http://localhost:8080/v1/x"));
+        assert!(ok("http://[::1]:8080/v1/x"));
+        assert!(!ok("http://relay.example.org/v1/x"));
+        assert!(!ok("http://192.168.1.2/v1/x"));
+        assert!(!ok("ftp://relay.example.org/"));
+    }
+
+    #[tokio::test]
+    async fn plain_http_elsewhere_is_refused_before_sending() {
+        let http = Http::new().unwrap();
+        let relay = RelayUrl::new("http://relay.example.org").unwrap();
+        assert_eq!(
+            http.create_voucher(&relay, &[0; 32]).await,
+            Err(RelayError::BadAddress)
+        );
+        let (tx, _rx) = mpsc::unbounded_channel();
+        assert!(matches!(
+            http.connect(&relay, tx).await,
+            Err(RelayError::BadAddress)
+        ));
     }
 }
