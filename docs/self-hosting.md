@@ -267,14 +267,21 @@ The relay migrates its database at start. Take a backup first.
 ## 11. A lost or stolen device
 
 Every device of a person holds the keys of all their contacts. Removing it
-(Devices → the device → Remove) stops the relay from waking it and tells
-your other devices, but a device that is in someone else's hands could still
-read and send on the existing mailboxes. So:
+(Devices → the device → Remove) stops the relay from waking it and unlinks
+your devices, so that it cannot follow along, but a device that is in
+someone else's hands could still read and send on the existing contact
+mailboxes. So:
 
-1. Remove the lost device on one of your other devices.
+1. Remove the lost device on one of your other devices. Your other devices
+   are then no longer linked; they keep working, each on its own.
 2. End each contact and pair again (section 8), or ask your contacts to do so.
    New mailboxes are unknown to the lost device.
-3. If the lost device had the access token, it can still create mailboxes
+3. Link your other devices again: on each, remove the app's data (Android:
+   Settings → Apps → Lebenszeichen → Storage → Clear storage; desktop:
+   delete its `device.json`, shown under ⚙) and set it up again as another
+   device (Devices → Add device on the one you keep). Its contacts come
+   back with the handover.
+4. If the lost device had the access token, it can still create mailboxes
    on your relay. Replace the token in `relay.env` (the `sed` line of section 3), then
    `docker compose up -d`; existing mailboxes keep working. Give the new
    token to your remaining devices: Devices → **Change access token** in the

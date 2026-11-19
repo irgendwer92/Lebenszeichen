@@ -186,6 +186,26 @@ pub(super) async fn family(world: &World) -> (Person, Person, Person) {
     (phone, laptop, bert)
 }
 
+/// Adds a third device through the phone (named "Laptop 2", as the join
+/// helper always asks for "Laptop").
+pub(super) async fn add_tablet(world: &World, phone: &mut Person) -> Person {
+    let mut tablet = world.blank();
+    let log = Shared::default();
+    let (added, joined) = join_and_add(
+        phone,
+        &mut tablet,
+        RELAY_A,
+        world.dialog(Role::Existing, &log),
+        world.dialog(Role::New, &log),
+    )
+    .await;
+    added.unwrap();
+    joined.unwrap();
+    phone.out.take();
+    tablet.out.take();
+    tablet
+}
+
 fn bert_mailbox(phone: &Person) -> lz_core::wire::MailboxId {
     phone.contact("Bert").state.contact.own_mailbox
 }

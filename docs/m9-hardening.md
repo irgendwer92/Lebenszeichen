@@ -96,9 +96,11 @@ Gaps found and fixed:
    visible notice naming the contact.
 4. **A removed device keeps the contact keys** (known, `protocol.md`). A copy
    of its state can still read and answer on the old mailboxes until the
-   contacts are paired again; new pairings are out of its reach. Decided on
-   2026-11-19 to leave this as documented; re-keying contacts when a device
-   is removed is a later protocol change.
+   contacts are paired again. Decided on 2026-11-19 to leave this as
+   documented; re-keying contacts when a device is removed is a later
+   protocol change. (The first version of this record said new pairings
+   were out of its reach; the security review showed they were not while
+   the group stayed, see below.)
 
 Also added (decided on 2026-11-19): `lz access-token` and Devices → "Change
 access token" set a new access token after the relay's was replaced; the

@@ -521,14 +521,13 @@ async fn clock_15_minutes_behind_sends_fine_but_refuses_and_reports_what_it_rece
 }
 
 /// The laptop of Anna's family is lost, and the phone removes it. Returns
-/// the state of the laptop as a thief could still hold it, without the
-/// sync mailbox (whose reader entry is gone, which would make a thief's
-/// app delete itself on the next fetch; a thief patches that out).
+/// the state of the laptop as a thief could still hold it, group key and
+/// sync mailbox tokens included (a thief's app would delete itself on the
+/// next fetch; a thief patches that out).
 async fn lost_laptop() -> (World, Person, Person, Person) {
     let world = World::new();
     let (mut phone, thief, bert) = family(&world).await;
-    let mut stolen = thief.device();
-    stolen.group = None;
+    let stolen = thief.device();
     phone.ctx.remove_device("Laptop").await.unwrap();
     thief
         .ctx
@@ -649,7 +648,11 @@ async fn removed_device_cannot_use_the_mailboxes_of_a_new_pairing() {
             name: "Bert".into()
         }]
     );
-    assert!(thief.sync().await.is_empty());
+    let notices = thief.sync().await;
+    assert!(
+        !notices.iter().any(|n| matches!(n, Notice::Request { .. })),
+        "{notices:?}"
+    );
 }
 
 #[tokio::test]
@@ -709,4 +712,72 @@ async fn a_replaced_access_token_can_be_set_on_a_device() {
         .await
         .unwrap();
     assert_eq!(bert.device().relay.unwrap().url, url(RELAY_B));
+}
+
+/// Removing a device ends the group: its sync mailbox is gone, so the
+/// thief can neither register there again nor send forged sync messages,
+/// and contacts paired later never reach it.
+#[tokio::test]
+async fn removed_device_cannot_use_the_old_group() {
+    let (world, phone, thief, _bert) = lost_laptop().await;
+    let group = thief.device().group.unwrap();
+    assert!(phone.device().group.is_none());
+    assert!(!world.relay.has_mailbox(RELAY_A, &group.mailbox));
+    let put = world
+        .relay
+        .put_reader(
+            &url(RELAY_A),
+            &group.mailbox,
+            &group.read_token,
+            &thief.device().reader_id,
+            None,
+        )
+        .await;
+    assert_eq!(put, Err(RelayError::UnknownMailbox));
+    let sent = world
+        .relay
+        .deliver(
+            &url(RELAY_A),
+            &group.mailbox,
+            &group.send_token,
+            &[0; lz_core::wire::ENVELOPE_LEN],
+        )
+        .await;
+    assert_eq!(sent, Err(RelayError::UnknownMailbox));
+}
+
+/// A third device stays: it learns that the group ended, keeps its
+/// contacts and works on; the removed one deletes its state.
+#[tokio::test]
+async fn other_devices_leave_the_ended_group_and_keep_their_contacts() {
+    use super::devices::add_tablet;
+    let world = World::new();
+    let (mut phone, mut laptop, mut bert) = family(&world).await;
+    let mut tablet = add_tablet(&world, &mut phone).await;
+    laptop.sync().await;
+    phone.ctx.remove_device("Laptop").await.unwrap();
+    assert!(phone.out.take().contains("nicht mehr mit diesem verbunden"));
+
+    let notices = tablet.ctx.sync().await.unwrap();
+    assert!(
+        notices
+            .iter()
+            .any(|n| matches!(n, Notice::Problem(t) if t.contains("nicht mehr mit deinen anderen Geräten"))),
+        "{notices:?}"
+    );
+    let device = tablet.device();
+    assert!(device.group.is_none() && device.devices.is_empty());
+    assert_eq!(device.contacts.len(), 1);
+
+    let notices = laptop.ctx.sync().await.unwrap();
+    assert!(notices.contains(&Notice::Removed), "{notices:?}");
+
+    // The tablet still gets Bert's requests.
+    bert.ctx.request("Anna").await.unwrap();
+    assert_eq!(
+        tablet.sync().await,
+        vec![Notice::Request {
+            name: "Bert".into()
+        }]
+    );
 }

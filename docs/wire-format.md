@@ -329,9 +329,13 @@ Same plaintext header as for contacts, form C, only in the sync mailbox:
 
 ### Removing a device
 
-Another device of the person removes the reader identifier of the device from all mailboxes, including the sync mailbox, and sends `device_removed`. If the removed device is still running, the relay answers it with `unknown_reader`; it then shows that it was removed and deletes its state.
+Another device of the person (E) removes the reader identifier of the device from all mailboxes, then **ends the group**: it deletes the sync mailbox and forgets the group key and the list of devices (since M9).
 
-This only works with a device that cooperates. A removed device keeps all read and send tokens, the contact keys and the group key: it could register itself again as a reader and keep sending messages to the sync mailbox. Removing a device is therefore no protection against a lost or stolen device; in that case the contacts have to be paired again (`protocol.md`).
+- The removed device knows the group key and the tokens of the sync mailbox. With the group kept, it could register itself there again, receive the contacts paired from then on (`contact_part`) and send forged sync messages, such as `device_removed` for E. Without a channel it cannot read, a new group key cannot reach the other devices, so they are added again instead (security review of M9, 2026-11-19).
+- A device whose sync mailbox reports `unknown_mailbox` waits until all its subscriptions have answered. If one of its contact mailboxes reports `unknown_reader`, it was removed: it shows that and deletes its state. Otherwise another device was removed: it leaves the group, keeps its contacts and works on alone, with a notice that it has to be added again to be linked.
+- `device_removed` is still understood (older devices send it), but no longer sent.
+
+Removing still does not protect the existing contacts: the removed device keeps their keys and tokens and could register itself again on their mailboxes. After a lost or stolen device the contacts are paired again (`protocol.md`); the new pairings are out of its reach.
 
 ### Known gaps
 
@@ -459,7 +463,7 @@ Decided on 2026-11-16 (E1 to E6 and the relay rule), going beyond `protocol.md`:
 - **Last writer wins** for rules, by sending time and then message identifier; this also applies to `rules` from contacts with several devices.
 - **No `counted` message:** all devices read all mailboxes and count the same requests. Instead `requested`, so that other devices accept the response to a request of the person's own.
 - **Devices offline for more than 24 hours** may deviate; accepted for M5.
-- **Removing a device is not protection** against a lost device; the contacts are paired again.
+- **Removing a device is not protection** against a lost device; the contacts are paired again. Since M9 removing ends the group, so that contacts paired again do not reach the removed device.
 - **Invitations stay on the device** that created them.
 - **Derived mailboxes:** up to 10 per voucher mailbox, not chainable, so that several devices also work without an access token.
 - **Content of the handover as JSON** in the form of the state file, instead of a fixed binary format. Simple and extensible; the fixed binary format of the messages is meant for microcontrollers, which are not expected to add other devices.

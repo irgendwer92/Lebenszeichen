@@ -61,9 +61,10 @@ one (`crates/relay/tests/relay.rs`).
   active at the same time, and so can guess who is paired with whom. Meant
   for self-hosted relays.
 - **A lost device keeps the contact keys.** Removing it stops wake signals
-  and tells the other own devices, but a copy of its state can read and
-  answer on the old mailboxes until the contacts are paired again
-  (`wire-format.md`, "Removing a device"). Re-keying on removal is later.
+  and ends the group of own devices (so it cannot follow new pairings), but
+  a copy of its state can read and answer on the old contact mailboxes
+  until the contacts are paired again (`wire-format.md`, "Removing a
+  device"). Re-keying contacts on removal is later.
 - **Keys at rest** are protected only by file permissions and the operating
   system (Android app storage, no backup); no encryption of the state file
   yet (open point in `roadmap.md`).

@@ -824,9 +824,41 @@ impl<R: Relay> Ctx<R> {
                 error = &error.text(t)
             ));
         }
-        self.tell_devices(|device, now| device.sync_device_removed(&reader, now, &mut OsRng))
-            .await?;
+        // The removed device knows the group key and the tokens of the sync
+        // mailbox: it could register itself there again, read the contacts
+        // paired from now on and send forged sync messages. So the group
+        // ends: its mailbox is deleted, and the other devices, which notice
+        // that, have to be added again (wire-format.md, "Removing a
+        // device").
+        let device = self.load()?;
+        if let Some(group) = &device.group {
+            match self
+                .relay
+                .delete_mailbox(&group.relay, &group.mailbox, &group.read_token)
+                .await
+            {
+                Ok(()) | Err(RelayError::UnknownMailbox) => {}
+                Err(error) => {
+                    return Err(fail!(
+                        t,
+                        "error-device-not-removed-everywhere",
+                        name = name,
+                        error = &error.text(t)
+                    ));
+                }
+            }
+        }
+        let others = device.devices.iter().filter(|d| d.reader != reader).count();
+        self.update(|device| {
+            device.group = None;
+            device.devices.clear();
+            device.outbox.clear();
+            Ok(())
+        })?;
         self.say(&tr!(t, "out-device-removed", name = name));
+        if others > 0 {
+            self.say(&tr!(t, "out-devices-unlinked"));
+        }
         Ok(())
     }
 

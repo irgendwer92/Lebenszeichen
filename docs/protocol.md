@@ -126,7 +126,7 @@ Evaluation of responses on the requester's side:
 - Every device is its own reader; the relay holds messages until all readers have acknowledged.
 - If the person reacts on one device, it sends `responded` to the others.
 - A status report applies only to the device that received it. That device sends the `reported` response after the waiting time. Since M8c a report can be shared: the other devices then answer with it too, each where reported answers are allowed on it (`m8c-share-state.md`).
-- A device is removed by another device unregistering it as a reader. If a device is lost, the contacts must be paired again, because it knows all contact keys.
+- A device is removed by another device unregistering it as a reader and ending the group of own devices; the remaining devices are added again to be linked. If a device is lost, the contacts must be paired again, because it knows all contact keys.
 
 Disadvantage: if one device is compromised, all contact keys are affected.
 
