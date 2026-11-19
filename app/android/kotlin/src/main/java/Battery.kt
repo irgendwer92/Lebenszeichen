@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
@@ -54,6 +55,9 @@ object Battery {
         val answer = CoreBridge.checkBattery(app, percent, charging)
         if (answer.optBoolean("applied")) {
             EventLog.add(app, Requests.NO_REQUEST, "battery-state", if (charging) "charging" else "low")
+            // Shared at low battery: check again as soon as it charges,
+            // not only at the next 10-minute check.
+            if (!charging && percent <= LOW_PERCENT) ChargeWorker.arm(app)
             val wait = if (answer.has("report_wait")) answer.optLong("report_wait") else null
             when (wait) {
                 null -> ReportWorker.schedule(app, null)
@@ -64,6 +68,39 @@ object Battery {
         // The shared state waits in the outbox; a fetch sends it.
         if (answer.optBoolean("send")) FetchWorker.enqueue(app, "battery")
         return !answer.has("battery") || answer.optBoolean("battery")
+    }
+
+    /** The core's threshold for handing over (`BATTERY_LOW_PERCENT`). */
+    private const val LOW_PERCENT = 2
+}
+
+/**
+ * One battery check as soon as the device charges, armed when the state
+ * was handed over at low battery. A broadcast for plugging in reaches only
+ * a running app, a job with the charging constraint also a stopped one.
+ * Android counts as charging shortly after the cable is plugged in.
+ */
+class ChargeWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+    override fun doWork(): Result {
+        try {
+            Battery.check(applicationContext)
+        } catch (e: Exception) {
+            EventLog.add(applicationContext, Requests.NO_REQUEST, "error", "battery not checked")
+        }
+        return Result.success()
+    }
+
+    companion object {
+        private const val NAME = "battery-charge"
+
+        fun arm(context: Context) {
+            val request =
+                OneTimeWorkRequest.Builder(ChargeWorker::class.java)
+                    .setConstraints(Constraints.Builder().setRequiresCharging(true).build())
+                    .build()
+            WorkManager.getInstance(context.applicationContext)
+                .enqueueUniqueWork(NAME, ExistingWorkPolicy.KEEP, request)
+        }
     }
 }
 
