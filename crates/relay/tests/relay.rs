@@ -45,6 +45,21 @@ struct Relay {
     waker: Arc<RecordingWaker>,
     http: reqwest::Client,
     _dir: tempfile::TempDir,
+    /// Runs the server of a relay that can be stopped, see
+    /// [`Relay::start_stoppable`].
+    server: Option<ServerRuntime>,
+}
+
+/// A runtime that is shut down without waiting, also when dropped inside
+/// a test.
+struct ServerRuntime(Option<tokio::runtime::Runtime>);
+
+impl Drop for ServerRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
 }
 
 struct Mailbox {
@@ -79,6 +94,17 @@ impl Relay {
 
     /// Starts on the database `relay.sqlite` in `dir`, which may exist.
     async fn start_in(dir: tempfile::TempDir) -> Self {
+        Self::start_at(dir, "127.0.0.1:0", false).await
+    }
+
+    /// Starts a relay whose server runs on a runtime of its own, so that
+    /// [`Relay::stop`] ends it with all its connections, like a restart of
+    /// the process. `address` may be that of an earlier relay.
+    async fn start_stoppable(dir: tempfile::TempDir, address: &str) -> Self {
+        Self::start_at(dir, address, true).await
+    }
+
+    async fn start_at(dir: tempfile::TempDir, address: &str, own_runtime: bool) -> Self {
         let store = Store::open(&dir.path().join("relay.sqlite")).unwrap();
         let clock = Arc::new(ManualClock::new(START));
         let waker = Arc::new(RecordingWaker::default());
@@ -89,9 +115,30 @@ impl Relay {
             clock.clone(),
             waker.clone(),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(lz_relay::serve(listener, state.clone()));
+        let (addr, server) = if own_runtime {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            let (bound, listener) = {
+                let address = address.to_owned();
+                runtime
+                    .spawn(async move { tokio::net::TcpListener::bind(address).await })
+                    .await
+                    .unwrap()
+                    .map(|listener| (listener.local_addr().unwrap(), listener))
+                    .unwrap()
+            };
+            let addr = bound;
+            runtime.spawn(lz_relay::serve(listener, state.clone()));
+            (addr, Some(ServerRuntime(Some(runtime))))
+        } else {
+            let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(lz_relay::serve(listener, state.clone()));
+            (addr, None)
+        };
         Self {
             base: format!("http://{addr}/v1"),
             ws_url: format!("ws://{addr}/v1/stream"),
@@ -100,7 +147,20 @@ impl Relay {
             waker,
             http: reqwest::Client::new(),
             _dir: dir,
+            server,
         }
+    }
+
+    /// Stops the server and closes every connection. Returns the directory
+    /// of the database and the address, to start on again.
+    fn stop(mut self) -> (tempfile::TempDir, String) {
+        let address = self
+            .base
+            .trim_start_matches("http://")
+            .trim_end_matches("/v1");
+        let address = address.to_owned();
+        drop(self.server.take().expect("started with start_stoppable"));
+        (self._dir, address)
     }
 
     async fn request(
@@ -1748,4 +1808,125 @@ async fn newer_schema_is_refused() {
         .pragma_update(None, "user_version", 2)
         .unwrap();
     assert!(Store::open(&path).is_err());
+}
+
+#[tokio::test]
+async fn waiting_messages_survive_a_restart_and_a_listener_reconnects() {
+    let relay = Relay::start_stoppable(tempfile::tempdir().unwrap(), "127.0.0.1:0").await;
+    let mailbox = relay.mailbox().await;
+    let voucher = relay.voucher_mailbox().await;
+    let reader = reader_id(1);
+    let idle = reader_id(2);
+    relay.put_reader(&mailbox, &reader, None).await;
+    // A second reader that never connects keeps messages waiting.
+    relay.put_reader(&mailbox, &idle, None).await;
+    for n in 1..=2 {
+        assert_eq!(
+            relay.post(&mailbox, envelope(n)).await.0,
+            StatusCode::ACCEPTED
+        );
+    }
+
+    // The listener has message 1 acknowledged, message 2 received but not.
+    let mut listener = relay.connect().await;
+    assert_eq!(
+        listener.subscribe(&mailbox, &reader).await,
+        subscribed(&mailbox)
+    );
+    listener.expect_message(&mailbox, 1, &envelope(1)).await;
+    listener.expect_message(&mailbox, 2, &envelope(2)).await;
+    listener.ack(&mailbox, 1).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The relay goes away. The connection ends and posting fails.
+    let url = relay.base.clone();
+    let (dir, address) = relay.stop();
+    let ended = tokio::time::timeout(Duration::from_secs(5), listener.0.next())
+        .await
+        .expect("the connection stayed open");
+    assert!(
+        !matches!(ended, Some(Ok(Message::Text(_)))),
+        "unexpected frame: {ended:?}"
+    );
+    let down = reqwest::Client::new()
+        .post(format!("{url}/mailboxes/{}/messages", mailbox.id))
+        .bearer_auth(&mailbox.send)
+        .body(envelope(3))
+        .send()
+        .await;
+    assert!(down.is_err(), "the stopped relay answered");
+
+    // Same database, same address.
+    let relay = Relay::start_stoppable(dir, &address).await;
+    assert_eq!(relay.base, url);
+    assert_eq!(relay.waiting(&mailbox), 2);
+    // The mailbox, its tokens and the readers are still there, and
+    // sequence numbers go on.
+    assert_eq!(
+        relay.post(&mailbox, envelope(3)).await.0,
+        StatusCode::ACCEPTED
+    );
+
+    // The listener reconnects without registering again, and gets what it
+    // had not acknowledged, including what arrived in between.
+    let mut listener = relay.connect().await;
+    assert_eq!(
+        listener.subscribe(&mailbox, &reader).await,
+        subscribed(&mailbox)
+    );
+    listener.expect_message(&mailbox, 2, &envelope(2)).await;
+    listener.expect_message(&mailbox, 3, &envelope(3)).await;
+    listener.expect_silence().await;
+    // Live delivery works again.
+    assert_eq!(
+        relay.post(&mailbox, envelope(4)).await.0,
+        StatusCode::ACCEPTED
+    );
+    listener.expect_message(&mailbox, 4, &envelope(4)).await;
+    // The idle reader still gets everything from the start.
+    let mut other = relay.connect().await;
+    assert_eq!(other.subscribe(&mailbox, &idle).await, subscribed(&mailbox));
+    for n in 1..=4 {
+        other.expect_message(&mailbox, n as u64, &envelope(n)).await;
+    }
+
+    // Acknowledgements after the restart count as before.
+    listener.ack(&mailbox, 4).await;
+    other.ack(&mailbox, 4).await;
+    other.expect_silence().await;
+    assert_eq!(relay.waiting(&mailbox), 0);
+
+    // A voucher mailbox still derives, and a wrong token is still refused.
+    let (status, ..) = relay.derive(&voucher).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let wrong = Mailbox {
+        id: mailbox.id.clone(),
+        read: mailbox.read.clone(),
+        send: mailbox.read.clone(),
+    };
+    assert_eq!(
+        relay.post(&wrong, envelope(5)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn messages_expire_by_their_arrival_time_across_a_restart() {
+    let relay = Relay::start_stoppable(tempfile::tempdir().unwrap(), "127.0.0.1:0").await;
+    let mailbox = relay.mailbox().await;
+    relay.put_reader(&mailbox, &reader_id(1), None).await;
+    relay.post(&mailbox, envelope(1)).await;
+    let (dir, address) = relay.stop();
+
+    // The new process starts at the same time as the old one, then the
+    // clock runs on: the 24 hours count from arrival, not from the start.
+    let relay = Relay::start_stoppable(dir, &address).await;
+    assert_eq!(relay.waiting(&mailbox), 1);
+    relay.clock.advance(23 * 3600);
+    let mut client = relay.connect().await;
+    assert_eq!(
+        client.subscribe(&mailbox, &reader_id(1)).await,
+        subscribed(&mailbox)
+    );
+    client.expect_message(&mailbox, 1, &envelope(1)).await;
 }

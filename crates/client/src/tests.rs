@@ -1,6 +1,7 @@
 //! The M2 scenario end to end: two devices with their own state files talk
 //! through fake relays.
 
+mod behaviour;
 mod devices;
 mod pairing;
 mod reports;

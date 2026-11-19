@@ -167,7 +167,7 @@ async fn join_and_add(
 }
 
 /// Anna's phone paired with Bert, then her laptop added.
-async fn family(world: &World) -> (Person, Person, Person) {
+pub(super) async fn family(world: &World) -> (Person, Person, Person) {
     let (mut phone, bert) = paired(world).await;
     let mut laptop = world.blank();
     let log = Shared::default();

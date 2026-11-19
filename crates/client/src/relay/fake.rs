@@ -44,6 +44,9 @@ pub struct FakeRelay {
 struct Server {
     /// Unreachable, as if the network were down.
     down: bool,
+    /// The next this many `deliver` calls store the message but answer
+    /// with a transport error, as if the answer got lost.
+    lose_answers: u32,
     access_token: Token,
     /// Hashes of open vouchers with their expiry.
     vouchers: HashMap<String, u64>,
@@ -136,6 +139,17 @@ impl FakeRelay {
     /// Makes the relay unreachable or reachable again.
     pub fn set_down(&self, url: &str, down: bool) {
         self.servers.lock().unwrap().get_mut(url).unwrap().down = down;
+    }
+
+    /// Makes the next `count` `deliver` calls on the relay store their
+    /// message, but fail towards the caller, as if the answer got lost.
+    pub fn lose_answers(&self, url: &str, count: u32) {
+        self.servers
+            .lock()
+            .unwrap()
+            .get_mut(url)
+            .unwrap()
+            .lose_answers = count;
     }
 
     /// Whether the mailbox exists.
@@ -551,6 +565,10 @@ impl Relay for FakeRelay {
                         data: envelope.to_vec(),
                     },
                 });
+            }
+            if server.lose_answers > 0 {
+                server.lose_answers -= 1;
+                return Err(RelayError::Transport("answer lost".into()));
             }
             Ok(())
         })
