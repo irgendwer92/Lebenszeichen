@@ -1277,9 +1277,9 @@ pub fn clock_warning(offset: Option<i64>) -> Option<i64> {
 }
 
 /// The warning about a clock that is `offset` seconds off the relay's
-/// (relay minus device), in whole minutes rounded up.
+/// (relay minus device), in whole minutes rounded down ("more than").
 pub fn clock_warning_text(t: Texts, offset: i64) -> String {
-    let minutes = offset.unsigned_abs().div_ceil(60).to_string();
+    let minutes = (offset.unsigned_abs() / 60).to_string();
     if offset > 0 {
         tr!(t, "warn-clock-behind", minutes = &minutes)
     } else {

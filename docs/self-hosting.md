@@ -302,6 +302,6 @@ mailboxes. So:
 | "The relay refuses the push address" | ntfy's `base-url` is not a public https address, or `LZ_PUSH_ALLOWED_HOSTS` does not list it |
 | ⚙ → This device: "no UnifiedPush app found" | install ntfy and open it once |
 | Requests arrive only when the app is opened | ntfy not exempt from battery optimization; ntfy not logged in for `https://ntfy.example.org` (step 6); ntfy not reachable from the mobile network (try from outside your Wi-Fi); NAT loopback (section 1) |
-| "Warning: the clock of this device is about … min ahead of / behind the relay's" | the device's clock is wrong; from 10 minutes of difference messages are refused. Turn on automatic time. |
+| "Warning: the clock of this device is more than … min ahead of / behind the relay's" | the device's clock is wrong; from 10 minutes of difference messages are refused. Turn on automatic time. |
 | `unknown_mailbox` | the other side ended the contact, or the relay's database was lost |
 | The live connection drops every minute | the proxy closes idle WebSockets; raise its read timeout (nginx: `proxy_read_timeout`) |

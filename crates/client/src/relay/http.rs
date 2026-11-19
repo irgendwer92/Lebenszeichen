@@ -46,14 +46,18 @@ const UNKNOWN: i64 = i64::MIN;
 
 /// Notes the `Date` header of an answer of a relay, if it has a readable one.
 fn observe_date(headers: &reqwest::header::HeaderMap) {
-    let Some(date) = headers
+    if let Some(offset) = date_offset(headers, SystemTime::now()) {
+        CLOCK_OFFSET.store(offset, Ordering::Relaxed);
+    }
+}
+
+/// The relay's clock minus `now`, from a `Date` header.
+fn date_offset(headers: &reqwest::header::HeaderMap, now: SystemTime) -> Option<i64> {
+    let date = headers
         .get(reqwest::header::DATE)
         .and_then(|value| value.to_str().ok())
-        .and_then(|text| httpdate::parse_http_date(text).ok())
-    else {
-        return;
-    };
-    CLOCK_OFFSET.store(offset(date, SystemTime::now()), Ordering::Relaxed);
+        .and_then(|text| httpdate::parse_http_date(text).ok())?;
+    Some(offset(date, now))
 }
 
 /// `relay - device` in whole seconds, negative if the device is ahead.
@@ -791,28 +795,21 @@ mod tests {
         assert_eq!(super::offset(device, device), 0);
     }
 
-    /// A relay whose `Date` header is 15 minutes ahead of this device makes
-    /// the offset known.
-    #[tokio::test]
-    async fn date_header_sets_the_clock_offset() {
+    /// A `Date` header 15 minutes ahead gives the offset; none or an
+    /// unreadable one gives nothing. (Through [`super::observe_date`] the
+    /// offset is shared by the whole process, so tests check this part.)
+    #[test]
+    fn date_header_gives_the_clock_offset() {
+        use reqwest::header::{DATE, HeaderMap, HeaderValue};
         use std::time::{Duration, SystemTime};
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let date = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(900));
-        tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buf = [0; 4096];
-            let _ = socket.read(&mut buf).await.unwrap();
-            let answer = format!(
-                "HTTP/1.1 201 Created\r\nDate: {date}\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{{\"voucher\":\"AA\"}}"
-            );
-            socket.write_all(answer.as_bytes()).await.unwrap();
-        });
-        let relay = RelayUrl::new(&format!("http://{address}")).unwrap();
-        let http = Http::new().unwrap();
-        let _ = http.create_voucher(&relay, &[0; 32]).await;
-        let offset = http.clock_offset().unwrap();
-        assert!((899..=901).contains(&offset), "offset {offset}");
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        let mut headers = HeaderMap::new();
+        assert_eq!(super::date_offset(&headers, now), None);
+        let date = httpdate::fmt_http_date(now + Duration::from_secs(900));
+        headers.insert(DATE, HeaderValue::from_str(&date).unwrap());
+        assert_eq!(super::date_offset(&headers, now), Some(900));
+        headers.insert(DATE, HeaderValue::from_static("yesterday"));
+        assert_eq!(super::date_offset(&headers, now), None);
     }
 
     #[test]
@@ -825,8 +822,8 @@ mod tests {
         assert_eq!(clock_warning(Some(301)), Some(301));
         assert_eq!(clock_warning(Some(-900)), Some(-900));
         let t = Language::En.texts();
-        assert!(clock_warning_text(t, -900).contains("15 min ahead"));
-        assert!(clock_warning_text(t, 301).contains("6 min behind"));
+        assert!(clock_warning_text(t, -940).contains("more than 15 min ahead"));
+        assert!(clock_warning_text(t, 301).contains("more than 5 min behind"));
     }
 
     #[test]
