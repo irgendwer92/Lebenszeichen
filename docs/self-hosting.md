@@ -37,9 +37,13 @@ example to `~/lebenszeichen`:
 
 ```sh
 git clone https://github.com/irgendwer92/lebenszeichen.git
-cp -r lebenszeichen/deploy/relay ~/lebenszeichen
-cd ~/lebenszeichen
+cp -r lebenszeichen/deploy/relay ~/lebenszeichen-relay
+cd ~/lebenszeichen-relay
 ```
+
+All commands below run in this directory. The compose project is named
+`lebenszeichen`, so its volumes are `lebenszeichen_relay-data` and
+`lebenszeichen_ntfy-data`.
 
 It contains:
 
@@ -59,8 +63,10 @@ do not need it. Create it and put it into `relay.env`:
 ```sh
 cp relay.env.example relay.env
 chmod 600 relay.env
-echo "LZ_ACCESS_TOKEN=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')" >> relay.env
+sed -i "s/^LZ_ACCESS_TOKEN=.*/LZ_ACCESS_TOKEN=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')/" relay.env
 ```
+
+The same `sed` line replaces the token later (section 11).
 
 Keep it like a password. You need it once more in step 7; after that, the
 app can show it to your own further devices as a setup code.
@@ -70,6 +76,11 @@ relay send wake signals only to your own ntfy. Without it, any public https
 address is allowed, so that phones using another ntfy server work too.
 
 ## 4. Start relay and ntfy
+
+The image `ghcr.io/irgendwer92/lebenszeichen-relay` exists for amd64 and
+arm64. Until the first release there is no `:latest`; set `:edge` in
+`compose.yaml`, or build the image yourself in the cloned repository:
+`docker build -f crates/relay/Dockerfile -t ghcr.io/irgendwer92/lebenszeichen-relay:latest lebenszeichen`.
 
 Set your ntfy address in `ntfy/server.yml` (`base-url`), then:
 
@@ -91,6 +102,12 @@ docker compose exec ntfy ntfy access everyone 'up*' write-only
 docker compose exec ntfy ntfy access phone 'up*' read-only
 docker compose exec ntfy ntfy access                # shows the rules
 ```
+
+`ntfy user add` asks for the password on the terminal; without one (a
+script, `ssh` without `-t`) pass it as
+`docker compose exec -e NTFY_PASSWORD=… ntfy ntfy user add phone`. The last
+command should list `phone` with read-only access to `up*` and `everyone`
+with write-only access to `up*`.
 
 All phones of all people on this relay can share the account `phone`; the
 topics are random and only the relay learns them. Give the password only to
@@ -129,7 +146,7 @@ Check from another machine:
 
 ```sh
 curl -i https://relay.example.org/v1/health   # 200
-curl -i https://ntfy.example.org/v1/health    # {"healthy":true}
+curl -i https://ntfy.example.org/v1/health    # contains "healthy":true
 ```
 
 ## 6. Get the apps
@@ -141,7 +158,8 @@ curl -i https://ntfy.example.org/v1/health    # {"healthy":true}
 - **Command line, servers**: `lz` (see the README).
 
 No release is published yet. Until then, build them from source as the
-README describes.
+README describes; `lz` with `cargo build --release -p lz-cli` (then
+`target/release/lz`).
 
 On the phone, set up ntfy once before Lebenszeichen:
 
@@ -192,13 +210,25 @@ invitation carries a voucher for a mailbox on your relay.
    phone**, not over the channel you passed the invitation on. If it matches,
    confirm on your side (**Check code matches: confirm**); if not, reject.
 
-Command line: `lz invite --voucher Bert`, `lz accept Anna LZ2-…`, `lz sync`
-on both, `lz confirm Bert`.
+Command line, in this order:
+
+```sh
+lz invite --voucher Bert     # Anna; pass on the whole LZ2-… line
+lz init                      # Bert, once: no relay address or token needed
+lz accept Anna LZ2-…         # Bert
+lz sync                      # Anna: answers the acceptance, shows the code
+lz sync                      # Bert: shows the same code
+lz confirm Bert              # Anna, if the codes match
+lz sync                      # Bert: paired
+```
 
 ## 9. Check that it works
 
 - Request a sign of life from the other person and answer it; then the other
   way round.
+  Command line: `lz request Bert` (Anna); `lz sync` and `lz respond Anna`
+  (Bert); `lz sync` (Anna); `lz contacts` shows the answer. The default rules
+  allow one request per direction every 6 hours.
 - Close the app on the phone (swipe it away), lock the screen and send it a
   request. It should ring within a few seconds. If it does not, see
   section 12.
@@ -245,7 +275,7 @@ read and send on the existing mailboxes. So:
 2. End each contact and pair again (section 8), or ask your contacts to do so.
    New mailboxes are unknown to the lost device.
 3. If the lost device had the access token, it can still create mailboxes
-   on your relay. Replace the token in `relay.env` (section 3), then
+   on your relay. Replace the token in `relay.env` (the `sed` line of section 3), then
    `docker compose up -d`; existing mailboxes keep working. Give the new
    token to your remaining devices: Devices → **Change access token** in the
    app (the token, or a setup code with it), or

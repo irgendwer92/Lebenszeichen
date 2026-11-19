@@ -25,10 +25,9 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), String> {
     let config = Config::from_env()?;
-    let store =
-        Store::open(&config.db).map_err(|e| format!("Datenbank lässt sich nicht öffnen: {e}"))?;
+    let store = Store::open(&config.db).map_err(|e| format!("cannot open the database: {e}"))?;
     let waker = HttpWaker::new(config.push_policy.clone())
-        .map_err(|e| format!("HTTP-Client für Wecksignale lässt sich nicht bauen: {e}"))?;
+        .map_err(|e| format!("cannot build the HTTP client for wake signals: {e}"))?;
     let state = AppState::new(
         store,
         &config.access_token,
@@ -40,18 +39,18 @@ async fn run() -> Result<(), String> {
 
     let listener = tokio::net::TcpListener::bind(config.listen)
         .await
-        .map_err(|e| format!("{} lässt sich nicht öffnen: {e}", config.listen))?;
+        .map_err(|e| format!("cannot listen on {}: {e}", config.listen))?;
     eprintln!(
-        "lz-relay {} (Protokollversion {}) lauscht auf {}",
+        "lz-relay {} (protocol version {}) listening on {}",
         env!("CARGO_PKG_VERSION"),
         lz_wire::PROTOCOL_VERSION,
         config.listen
     );
 
     tokio::select! {
-        result = lz_relay::serve(listener, state) => result.map_err(|e| format!("Serverfehler: {e}")),
+        result = lz_relay::serve(listener, state) => result.map_err(|e| format!("server error: {e}")),
         () = shutdown_signal() => {
-            eprintln!("lz-relay: beendet");
+            eprintln!("lz-relay: stopped");
             Ok(())
         }
     }

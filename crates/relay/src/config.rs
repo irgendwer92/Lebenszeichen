@@ -33,16 +33,16 @@ impl Config {
     /// Reads the configuration through `lookup`, which returns the value of
     /// a variable or `None` if it is unset.
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
-        let token = lookup("LZ_ACCESS_TOKEN").ok_or("LZ_ACCESS_TOKEN fehlt")?;
+        let token = lookup("LZ_ACCESS_TOKEN").ok_or("LZ_ACCESS_TOKEN is missing")?;
         let access_token =
-            ids::decode(token.trim()).ok_or("LZ_ACCESS_TOKEN muss b64url von 32 Byte sein")?;
+            ids::decode(token.trim()).ok_or("LZ_ACCESS_TOKEN must be 32 bytes in b64url")?;
         let listen = lookup("LZ_LISTEN")
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| Self::DEFAULT_LISTEN.to_owned());
         let listen = listen
             .trim()
             .parse()
-            .map_err(|_| "LZ_LISTEN muss Adresse und Port sein, etwa 0.0.0.0:8080")?;
+            .map_err(|_| "LZ_LISTEN must be an address and port, such as 0.0.0.0:8080")?;
         let db = lookup("LZ_DB")
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| Self::DEFAULT_DB.to_owned())

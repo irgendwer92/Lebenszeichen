@@ -131,7 +131,7 @@ impl AppState {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(e)) => {
                 // SQLite errors carry no identifiers worth hiding, but keep it short.
-                eprintln!("lz-relay: Datenbankfehler: {e}");
+                eprintln!("lz-relay: database error: {e}");
                 Err(ApiError::Internal)
             }
             Err(_) => Err(ApiError::Internal),
