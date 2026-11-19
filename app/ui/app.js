@@ -1012,6 +1012,13 @@ $("setup-scan").addEventListener("click", async () => {
   if (code) $("setup-code-form").elements.code.value = code;
 });
 
+onSubmit("access-token-form", async (data, form) => {
+  await call("set_access_token", { input: data.get("input") });
+  form.reset();
+  $("access-token-details").open = false;
+  await showDevices();
+});
+
 onSubmit("setup-code-form", async (data) => {
   await call("init_from_setup_code", { code: data.get("code") });
 });

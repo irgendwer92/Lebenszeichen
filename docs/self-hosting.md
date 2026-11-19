@@ -245,10 +245,11 @@ read and send on the existing mailboxes. So:
 2. End each contact and pair again (section 8), or ask your contacts to do so.
    New mailboxes are unknown to the lost device.
 3. If the lost device had the access token, it can still create mailboxes
-   on your relay. A new token (section 3, then `docker compose up -d`) stops
-   that; existing mailboxes keep working. Devices cannot take a new token
-   yet, though, so your remaining devices can then no longer invite with a
-   voucher (open point of M9).
+   on your relay. Replace the token in `relay.env` (section 3), then
+   `docker compose up -d`; existing mailboxes keep working. Give the new
+   token to your remaining devices: Devices → **Change access token** in the
+   app (the token, or a setup code with it), or
+   `lz access-token <new token>`.
 
 ## 12. Troubleshooting
 

@@ -507,6 +507,37 @@ fn read_setup_code(input: &str) -> Result<(String, String), String> {
     Ok((code.relay.to_string(), b64(&code.access_token)))
 }
 
+/// Sets a new access token for the own relay, from the token itself or
+/// from a setup code (which also carries the relay address, needed on a
+/// device without a relay account).
+#[tauri::command]
+pub async fn set_access_token(
+    state: tauri::State<'_, AppState>,
+    input: String,
+) -> Result<Reply<()>, String> {
+    let input = input.trim().to_owned();
+    let (relay, token) = match CodeKind::of(&input) {
+        Some(_) => {
+            let (relay, token) = read_setup_code(&input)?;
+            (Some(relay), token)
+        }
+        None => (None, input),
+    };
+    let path = path(&state);
+    if relay.is_none() {
+        let device = JsonFile::new(path.clone())
+            .load()
+            .map_err(|error| error.to_string())?;
+        if device.relay.is_none() {
+            return Err(text("app-error-token-needs-setup-code"));
+        }
+    }
+    run(path, async move |ctx| {
+        ctx.set_access_token(relay.as_deref(), &token).await
+    })
+    .await
+}
+
 /// Creates the device with the relay account of a setup code.
 #[tauri::command]
 pub async fn init_from_setup_code(

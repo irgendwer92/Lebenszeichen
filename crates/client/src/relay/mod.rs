@@ -40,6 +40,9 @@ pub enum RelayError {
     HandoverExists,
     /// The relay answered with an error code.
     Refused { status: u16, code: String },
+    /// No connection to the relay: nothing was sent. `detail` as for
+    /// [`Self::Transport`].
+    Unreachable(String),
     /// The relay could not be reached or answered something unreadable.
     /// `detail` comes from the network libraries and is not translated.
     Transport(String),
@@ -72,14 +75,27 @@ impl RelayError {
     pub fn is_transport(&self) -> bool {
         matches!(
             self,
-            Self::Transport(_) | Self::BadAddress | Self::Timeout | Self::Disconnected
+            Self::Transport(_)
+                | Self::Unreachable(_)
+                | Self::BadAddress
+                | Self::Timeout
+                | Self::Disconnected
+        )
+    }
+
+    /// Whether the relay may have stored what was sent although the call
+    /// failed: the connection broke or timed out after the request went out.
+    pub fn maybe_stored(&self) -> bool {
+        matches!(
+            self,
+            Self::Transport(_) | Self::Timeout | Self::Disconnected
         )
     }
 
     /// Why the relay could not be reached; for the other errors, their text.
     pub fn detail(&self, t: Texts) -> String {
         match self {
-            Self::Transport(detail) => detail.clone(),
+            Self::Transport(detail) | Self::Unreachable(detail) => detail.clone(),
             Self::BadAddress => tr!(t, "error-relay-bad-address"),
             Self::Timeout => tr!(t, "error-relay-timeout"),
             Self::Disconnected => tr!(t, "error-relay-disconnected"),

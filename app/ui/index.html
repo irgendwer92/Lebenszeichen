@@ -366,6 +366,25 @@
             <div id="setup-code-qr" class="qr"></div>
             <textarea id="setup-code-text" class="code" readonly rows="4"></textarea>
           </details>
+
+          <details id="access-token-details" class="history">
+            <summary data-i18n="ui-access-token-change">Change access token</summary>
+            <p class="note" data-i18n="ui-access-token-change-note">
+              If the relay's access token was replaced, for example after a device was lost,
+              enter the new one or a setup code with it.
+            </p>
+            <form id="access-token-form" class="row">
+              <input
+                name="input"
+                required
+                autocomplete="off"
+                spellcheck="false"
+                data-i18n-aria-label="ui-access-token-new"
+                data-i18n-placeholder="ui-access-token-new"
+              />
+              <button type="submit" data-i18n="ui-save">Save</button>
+            </form>
+          </details>
         </section>
 
         <section id="panel-device" class="card panel" hidden>

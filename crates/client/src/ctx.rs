@@ -17,12 +17,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use lz_core::contact::ContactState;
 use lz_core::pairing::{Address, PairingState, PendingInvitation, accept};
 use lz_core::store::{
-    Device, JsonFile, RelayAccount, ReportSetting, Store, StoredContact, StoredInvitation,
+    Device, JsonFile, RelayAccount, ReportSetting, Store, StoredContact, StoredInvitation, Unsent,
 };
 use lz_core::wire::invitation::MAX_TEXT_LEN;
 use lz_core::wire::{
-    ENVELOPE_LEN, Error as WireError, Invitation, MailboxId, Reason, RelayUrl, ResponseKind, Rules,
-    Token,
+    ENVELOPE_LEN, Error as WireError, Invitation, MAX_MESSAGE_AGE_SECS, MailboxId, Reason,
+    RelayUrl, ResponseKind, Rules, Token,
 };
 use rand_core::{OsRng, RngCore};
 use serde::Serialize;
@@ -480,12 +480,25 @@ impl<R: Relay> Ctx<R> {
                     &hello,
                 )
                 .await
-                .map_err(|error| match error {
-                    RelayError::UnknownMailbox => fail!(t, "error-invitation-void"),
-                    other => Fail(other.text(t)),
+                .map(|()| None)
+                .or_else(|error| match error {
+                    RelayError::UnknownMailbox => Err(fail!(t, "error-invitation-void")),
+                    // The relay may hold `hello` already; the inviter would
+                    // then use up the invitation for it. Keep the contact:
+                    // the next fetch repeats the same `hello`, which gets
+                    // the same `reveal`.
+                    other if other.maybe_stored() => Ok(Some(other)),
+                    other => Err(Fail(other.text(t))),
                 })
         }
         .await;
+        if let Ok(Some(error)) = &result {
+            self.say(&tr!(
+                t,
+                "warn-delivery-unconfirmed",
+                error = &format!(" ({})", error.text(t))
+            ));
+        }
         if let Err(error) = result {
             if stored {
                 self.update(|device| {
@@ -514,6 +527,47 @@ impl<R: Relay> Ctx<R> {
             &[Hint::Reject(name)],
         );
         self.say(&text);
+        Ok(())
+    }
+
+    /// Sets a new access token for the own relay, for example after the
+    /// relay's token was replaced because a device was lost. `relay` is
+    /// needed only on a device that has no relay account yet (set up with
+    /// an invitation). The relay must accept the token: it is tried by
+    /// creating a voucher, which expires unused.
+    pub async fn set_access_token(&mut self, relay: Option<&str>, token: &str) -> Result<()> {
+        let t = self.texts();
+        let token =
+            from_b64::<32>(token.trim()).ok_or_else(|| fail!(t, "error-access-token-format"))?;
+        let given = relay.map(|url| relay_url(t, url)).transpose()?;
+        let device = self.load()?;
+        let url = match (&device.relay, given) {
+            (Some(account), Some(url)) if account.url != url => {
+                return Err(fail!(
+                    t,
+                    "error-access-token-other-relay",
+                    relay = account.url.as_str()
+                ));
+            }
+            (Some(account), _) => account.url,
+            (None, Some(url)) => url,
+            (None, None) => return Err(fail!(t, "error-access-token-needs-relay")),
+        };
+        self.relay
+            .create_voucher(&url, &token)
+            .await
+            .map_err(|error| match error {
+                RelayError::Refused { status: 401, .. } => fail!(t, "error-access-token-refused"),
+                other => Fail(other.text(t)),
+            })?;
+        self.update(|device| {
+            device.relay = Some(RelayAccount {
+                url,
+                access_token: Some(token),
+            });
+            Ok(())
+        })?;
+        self.say(&tr!(t, "out-access-token-set"));
         Ok(())
     }
 
@@ -1007,21 +1061,36 @@ impl<R: Relay> Ctx<R> {
     /// Changes the state of a contact, stores it and delivers the resulting
     /// envelopes in order.
     ///
-    /// If the first delivery fails, the change is rolled back unless
-    /// something else changed the contact in between.
+    /// If the first delivery fails before the relay could have stored it,
+    /// the change is rolled back unless something else changed the contact
+    /// in between. If the relay may have stored it (the connection broke
+    /// after sending), the change stays and the envelopes wait in
+    /// [`Device::unsent`] for the next fetch, which sends the same ones
+    /// again; so does everything to the contact while some wait.
     pub(crate) async fn change_and_send<T>(
         &mut self,
         name: &str,
         change: impl FnOnce(&mut ContactState, u64) -> Result<(T, Vec<[u8; ENVELOPE_LEN]>)>,
     ) -> Result<T> {
         let t = self.texts();
+        self.flush_unsent().await?;
         let now = self.now();
-        let (value, envelopes, before, after) = self.update(|device| {
+        let (value, envelopes, before, after, waiting) = self.update(|device| {
             let contact = contact_mut(t, device, name)?;
             let before = contact.state.clone();
             let (value, envelopes) = change(&mut contact.state, now)?;
-            Ok((value, envelopes, before, contact.state.clone()))
+            let after = contact.state.clone();
+            let own = after.contact.own_mailbox;
+            let waiting = device.unsent.iter().any(|u| u.contact == own);
+            Ok((value, envelopes, before, after, waiting))
         })?;
+        let own = after.contact.own_mailbox;
+        if waiting {
+            // Behind those still waiting, to keep the order.
+            self.park(own, &envelopes, now)?;
+            self.say(&tr!(t, "warn-delivery-unconfirmed", error = ""));
+            return Ok(value);
+        }
         let peer = after.contact.peer.clone();
         for (i, envelope) in envelopes.iter().enumerate() {
             match self
@@ -1033,6 +1102,15 @@ impl<R: Relay> Ctx<R> {
                 Err(RelayError::UnknownMailbox) => {
                     self.gone(name).await?;
                     return Err(fail!(t, "error-contact-gone", name = name));
+                }
+                Err(error) if error.maybe_stored() => {
+                    self.park(own, &envelopes[i..], now)?;
+                    self.say(&tr!(
+                        t,
+                        "warn-delivery-unconfirmed",
+                        error = &format!(" ({})", error.text(t))
+                    ));
+                    return Ok(value);
                 }
                 Err(error) if i == 0 => {
                     self.update(|device| {
@@ -1048,6 +1126,76 @@ impl<R: Relay> Ctx<R> {
             }
         }
         Ok(value)
+    }
+
+    /// Puts envelopes to the contact with the own mailbox `own` into
+    /// [`Device::unsent`].
+    fn park(&mut self, own: MailboxId, envelopes: &[[u8; ENVELOPE_LEN]], now: u64) -> Result<()> {
+        self.update(|device| {
+            device
+                .unsent
+                .extend(envelopes.iter().map(|&envelope| Unsent {
+                    contact: own,
+                    envelope,
+                    created_at: now,
+                }));
+            Ok(())
+        })
+    }
+
+    /// Sends the envelopes of [`Device::unsent`] again, in order, until one
+    /// fails. Envelopes a recipient would refuse as too old, and those to
+    /// contacts that are gone, are dropped.
+    pub(crate) async fn flush_unsent(&mut self) -> Result<()> {
+        let now = self.now();
+        let unsent = self.update(|device| {
+            let known = |own: &MailboxId| {
+                device
+                    .contacts
+                    .iter()
+                    .any(|c| c.state.contact.own_mailbox == *own && !c.state.ended)
+            };
+            let keep: Vec<Unsent> = device
+                .unsent
+                .iter()
+                .filter(|u| now < u.created_at.saturating_add(MAX_MESSAGE_AGE_SECS))
+                .filter(|u| known(&u.contact))
+                .cloned()
+                .collect();
+            device.unsent.clone_from(&keep);
+            Ok(keep)
+        })?;
+        for waiting in unsent {
+            let device = self.load()?;
+            let Some(contact) = device
+                .contacts
+                .iter()
+                .find(|c| c.state.contact.own_mailbox == waiting.contact)
+            else {
+                continue;
+            };
+            let peer = contact.state.contact.peer.clone();
+            let name = contact.name.clone();
+            let delivered = self
+                .relay
+                .deliver(
+                    &peer.relay,
+                    &peer.mailbox,
+                    &peer.send_token,
+                    &waiting.envelope,
+                )
+                .await;
+            match delivered {
+                Ok(()) => {}
+                Err(RelayError::UnknownMailbox) => self.gone(&name).await?,
+                Err(_) => return Ok(()),
+            }
+            self.update(|device| {
+                device.unsent.retain(|u| u != &waiting);
+                Ok(())
+            })?;
+        }
+        Ok(())
     }
 
     /// The mailbox of the contact is gone: the contact removed this side.

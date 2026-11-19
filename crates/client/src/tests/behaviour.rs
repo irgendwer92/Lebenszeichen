@@ -318,47 +318,33 @@ async fn answer_lost_after_the_relay_stored_the_request() {
     let (mut anna, mut bert) = paired(&world).await;
     let mailbox = bert.contact("Anna").state.contact.own_mailbox;
 
-    // The relay stores the request, but Anna never hears of it.
+    // The relay stores the request, but Anna never hears of it. The request
+    // stays open and its envelope waits to be sent again.
     world.relay.lose_answers(RELAY_B, 1);
-    expect_err(anna.ctx.request("Bert").await, "Nicht zugestellt");
-    assert_eq!(world.relay.waiting(RELAY_B, &mailbox), 1);
-    assert!(anna.contact("Bert").state.outgoing.entries.is_empty());
-
-    // Anna tries again, as the message says she may.
-    world.advance(MINUTE);
     anna.ctx.request("Bert").await.unwrap();
-    // Bert sees the request once; the second one is refused by his rules.
+    assert_eq!(world.relay.waiting(RELAY_B, &mailbox), 1);
+    assert!(!anna.contact("Bert").state.outgoing.entries.is_empty());
+    assert_eq!(anna.ctx.load().unwrap().unsent.len(), 1);
+
+    // The next fetch sends the same envelope again; Bert drops the copy.
+    world.advance(MINUTE);
+    anna.sync().await;
+    assert!(anna.ctx.load().unwrap().unsent.is_empty());
     let notices = raw_sync(&mut bert).await;
     assert_eq!(
         count(&notices, |n| matches!(n, Notice::Request { .. })),
         1,
         "{notices:?}"
     );
-    assert_eq!(
-        count(&notices, |n| matches!(n, Notice::Dropped { .. })),
-        1,
-        "{notices:?}"
-    );
 
-    // GAP (current behaviour, see the M9 report): the request Bert holds is
-    // the one whose answer was lost, and Anna rolled it back. Bert's
-    // response names that request, so Anna drops it as unknown, and her
-    // second request stays open without ever being answered.
+    // Bert's response reaches Anna.
     bert.ctx.respond("Anna").await.unwrap();
     let notices = raw_sync(&mut anna).await;
     assert_eq!(
         count(&notices, |n| matches!(n, Notice::Response { .. })),
-        0,
-        "{notices:?}"
-    );
-    assert_eq!(
-        count(&notices, |n| matches!(n, Notice::Dropped { .. })),
         1,
         "{notices:?}"
     );
-    let overview = anna.ctx.overview().unwrap();
-    assert!(overview.contacts[0].outgoing_since.is_some());
-    assert!(overview.contacts[0].last_response.is_none());
 }
 
 #[tokio::test]
@@ -369,11 +355,37 @@ async fn answer_lost_after_the_relay_stored_the_response() {
     anna.sync().await;
 
     world.relay.lose_answers(RELAY_B, 1);
-    expect_err(anna.ctx.respond("Bert").await, "Nicht zugestellt");
     anna.ctx.respond("Bert").await.unwrap();
+    assert_eq!(anna.ctx.load().unwrap().unsent.len(), 1);
+    // A second tap goes behind the waiting one and is refused locally, as
+    // the request is answered already.
+    assert!(anna.ctx.respond("Bert").await.is_err());
+    anna.sync().await;
     let notices = bert.sync().await;
     assert_eq!(
         count(&notices, |n| matches!(n, Notice::Response { .. })),
+        1,
+        "{notices:?}"
+    );
+}
+
+#[tokio::test]
+async fn messages_to_a_contact_wait_behind_an_unconfirmed_one() {
+    let world = World::new();
+    let (mut anna, mut bert) = paired(&world).await;
+    world.relay.lose_answers(RELAY_B, 1);
+    anna.ctx.request("Bert").await.unwrap();
+    // Rules sent while the relay is down queue behind the request instead
+    // of overtaking it (or being rolled back).
+    world.relay.set_down(RELAY_B, true);
+    anna.ctx.rules("Bert", Some(60), None, None).await.unwrap();
+    assert_eq!(anna.ctx.load().unwrap().unsent.len(), 2);
+    world.relay.set_down(RELAY_B, false);
+    anna.sync().await;
+    assert!(anna.ctx.load().unwrap().unsent.is_empty());
+    let notices = raw_sync(&mut bert).await;
+    assert_eq!(
+        count(&notices, |n| matches!(n, Notice::Request { .. })),
         1,
         "{notices:?}"
     );
@@ -386,31 +398,32 @@ async fn answer_lost_after_the_relay_stored_hello() {
     let mut bert = world.person(Some((RELAY_B, Some(TOKEN_B))));
     let code = anna.ctx.invite("Bert", false).await.unwrap();
 
+    // The relay stores `hello`, but Bert never hears of it. He keeps the
+    // contact and its mailbox; accepting again is refused.
     world.relay.lose_answers(RELAY_A, 1);
-    expect_err(bert.ctx.accept("Anna", &code).await, "nicht erreichbar");
-    assert!(bert.device().contacts.is_empty());
     bert.ctx.accept("Anna", &code).await.unwrap();
+    assert_eq!(bert.device().contacts.len(), 1);
+    assert!(bert.ctx.accept("Anna 2", &code).await.is_err());
 
-    // GAP (current behaviour, see the M9 report): Anna accepts the lost
-    // `hello`, whose sender forgot its mailbox, so her `reveal` finds no
-    // mailbox and she is told that Bert ended the connection. Bert's retry
-    // is dropped, because the invitation is used up. Bert waits for a
-    // `reveal` that never comes, with no hint that he has to start over.
+    // Anna answers the `hello` she got; Bert gets the check code and the
+    // pairing completes.
     let notices = raw_sync(&mut anna).await;
     assert_eq!(
         count(&notices, |n| matches!(n, Notice::Accepted { .. })),
         1,
         "{notices:?}"
     );
+    bert.sync().await;
+    assert!(matches!(
+        bert.ctx.overview().unwrap().contacts[0].status,
+        crate::ctx::Status::AwaitingHelloOk { .. }
+    ));
+    anna.ctx.confirm("Bert").await.unwrap();
+    let notices = bert.sync().await;
     assert_eq!(
-        count(&notices, |n| matches!(n, Notice::Ended { .. })),
+        count(&notices, |n| matches!(n, Notice::Paired { .. })),
         1,
         "{notices:?}"
-    );
-    assert!(bert.sync().await.is_empty());
-    assert_eq!(
-        bert.ctx.overview().unwrap().contacts[0].status,
-        crate::ctx::Status::AwaitingReveal
     );
 }
 
@@ -436,7 +449,7 @@ async fn clock_9_minutes_ahead_is_tolerated() {
 }
 
 #[tokio::test]
-async fn clock_15_minutes_ahead_is_refused_without_the_sender_noticing() {
+async fn clock_15_minutes_ahead_is_refused_and_the_recipient_told() {
     let world = World::new();
     let (mut anna, mut bert) = paired(&world).await;
     skew(&world, &mut anna, 15 * 60);
@@ -450,11 +463,10 @@ async fn clock_15_minutes_ahead_is_refused_without_the_sender_noticing() {
             .outgoing_since
             .is_some()
     );
-    // Bert's side drops it as expired; he is only told in verbose mode,
-    // and `lz sync` reports no news.
+    // Bert's side drops it as out of time and tells him so.
     let notices = raw_sync(&mut bert).await;
     assert!(
-        matches!(notices.as_slice(), [Notice::Dropped { why, .. }] if why.contains("time window")),
+        matches!(notices.as_slice(), [Notice::Problem(text)] if text.contains("Anna")),
         "{notices:?}"
     );
     assert!(bert.contact("Anna").state.incoming.entries.is_empty());
@@ -468,7 +480,7 @@ async fn clock_15_minutes_ahead_is_refused_without_the_sender_noticing() {
     assert!(anna.out.take().contains("Lebenszeichen an"));
     let notices = raw_sync(&mut bert).await;
     assert!(
-        matches!(notices.as_slice(), [Notice::Dropped { .. }]),
+        matches!(notices.as_slice(), [Notice::Problem(_)]),
         "{notices:?}"
     );
     assert!(
@@ -479,7 +491,7 @@ async fn clock_15_minutes_ahead_is_refused_without_the_sender_noticing() {
 }
 
 #[tokio::test]
-async fn clock_15_minutes_behind_sends_fine_but_refuses_everything_received() {
+async fn clock_15_minutes_behind_sends_fine_but_refuses_and_reports_what_it_receives() {
     let world = World::new();
     let (mut anna, mut bert) = paired(&world).await;
     skew(&world, &mut anna, -15 * 60);
@@ -496,7 +508,7 @@ async fn clock_15_minutes_behind_sends_fine_but_refuses_everything_received() {
     bert.ctx.respond("Anna").await.unwrap();
     let notices = raw_sync(&mut anna).await;
     assert!(
-        matches!(notices.as_slice(), [Notice::Dropped { why, .. }] if why.contains("time window")),
+        matches!(notices.as_slice(), [Notice::Problem(text)] if text.contains("Bert")),
         "{notices:?}"
     );
     assert!(
@@ -659,4 +671,42 @@ async fn answer_lost_after_the_relay_stored_a_sync_message() {
         1,
         "{notices:?}"
     );
+}
+
+#[tokio::test]
+async fn a_replaced_access_token_can_be_set_on_a_device() {
+    use crate::relay::b64;
+    let world = World::new();
+    let mut anna = world.person(Some((RELAY_A, Some(TOKEN_A))));
+    let new = [0x5E; 32];
+
+    // The operator replaces the token: inviting with a voucher fails.
+    world.relay.set_access_token(RELAY_A, new);
+    assert!(anna.ctx.invite("Bert", true).await.is_err());
+
+    // A wrong token is refused and not stored; the right one works.
+    expect_err(
+        anna.ctx.set_access_token(None, &b64(&[0x77; 32])).await,
+        "Zugangstoken",
+    );
+    assert_eq!(anna.device().relay.unwrap().access_token, Some(TOKEN_A));
+    expect_err(
+        anna.ctx.set_access_token(Some(RELAY_B), &b64(&new)).await,
+        RELAY_A,
+    );
+    anna.ctx.set_access_token(None, &b64(&new)).await.unwrap();
+    assert_eq!(anna.device().relay.unwrap().access_token, Some(new));
+    anna.ctx.invite("Bert", true).await.unwrap();
+
+    // A device set up with an invitation needs the relay address too.
+    let mut bert = world.person(None);
+    expect_err(
+        bert.ctx.set_access_token(None, &b64(&TOKEN_B)).await,
+        "--relay",
+    );
+    bert.ctx
+        .set_access_token(Some(RELAY_B), &b64(&TOKEN_B))
+        .await
+        .unwrap();
+    assert_eq!(bert.device().relay.unwrap().url, url(RELAY_B));
 }

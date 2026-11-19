@@ -142,6 +142,7 @@ impl<R: Relay> Ctx<R> {
         let mut notices = Vec::new();
         self.retry_push_url().await?;
         self.flush_outbox().await?;
+        self.flush_unsent().await?;
         self.check_pairings(&mut notices).await?;
         self.reconcile(&mut live, &deliveries, &mut notices).await?;
         let mut failed_reports = Failed::new();
@@ -783,6 +784,15 @@ fn receive_for_contact(
     let name = contact.name.clone();
     let event = match contact.state.receive(data, now) {
         Ok(event) => event,
+        // Most likely a clock that is off on one side; the person should
+        // learn of it, as the sender believes it delivered.
+        Err(lz_core::Error::Expired) => {
+            return (
+                vec![Notice::Problem(tr!(t, "problem-out-of-time", name = &name))],
+                vec![],
+                false,
+            );
+        }
         Err(error) => {
             return (
                 vec![Notice::Dropped {

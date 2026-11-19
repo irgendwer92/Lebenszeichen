@@ -132,7 +132,14 @@ struct ErrorBody {
 /// Sends the request and turns every status other than `expected` into an
 /// error.
 async fn send(request: RequestBuilder, expected: StatusCode) -> Result<Response, RelayError> {
-    let response = request.send().await.map_err(|e| with_causes(&e))?;
+    let response = request.send().await.map_err(|e| {
+        let error = with_causes(&e);
+        match error {
+            // No connection: the request never left.
+            RelayError::Transport(detail) if e.is_connect() => RelayError::Unreachable(detail),
+            other => other,
+        }
+    })?;
     observe_date(response.headers());
     let status = response.status();
     if status == expected {

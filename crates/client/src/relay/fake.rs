@@ -141,6 +141,16 @@ impl FakeRelay {
         self.servers.lock().unwrap().get_mut(url).unwrap().down = down;
     }
 
+    /// Replaces the access token of the relay, as its operator would.
+    pub fn set_access_token(&self, url: &str, token: Token) {
+        self.servers
+            .lock()
+            .unwrap()
+            .get_mut(url)
+            .unwrap()
+            .access_token = token;
+    }
+
     /// Makes the next `count` `deliver` calls on the relay store their
     /// message, but fail towards the caller, as if the answer got lost.
     pub fn lose_answers(&self, url: &str, count: u32) {
@@ -228,7 +238,7 @@ impl FakeRelay {
         let server = servers
             .get_mut(relay.as_str())
             .filter(|server| !server.down)
-            .ok_or_else(|| RelayError::Transport(format!("{relay} is down")))?;
+            .ok_or_else(|| RelayError::Unreachable(format!("{relay} is down")))?;
         server.purge_slots(now);
         for mailbox in server.mailboxes.values_mut() {
             mailbox.expire(now);

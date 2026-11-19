@@ -75,6 +75,7 @@ lz listen                   # stay connected and show messages immediately
 lz remove Bert              # remove contact; Bert sees this on the next poll
 lz push https://ntfy.example.org/upXYZ  # register the push address the relay uses to wake the device
 lz push --remove            # remove the push address
+lz access-token <b64url>    # take a new access token after the relay's was replaced
 ```
 
 `lz sync` picks up everything waiting and exits, `lz listen` stays connected.

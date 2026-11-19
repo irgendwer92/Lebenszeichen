@@ -140,6 +140,15 @@ enum Command {
         #[command(subcommand)]
         action: Option<StateCommand>,
     },
+    /// Sets a new access token for the own relay
+    AccessToken {
+        /// Access token
+        #[arg(value_name = "TOKEN")]
+        token: String,
+        /// Relay address, only on a device without a relay account
+        #[arg(long, value_name = "URL")]
+        relay: Option<String>,
+    },
     /// Sets the push address
     Push {
         /// Push address
@@ -356,6 +365,9 @@ pub async fn run() -> Result<()> {
         } => ctx.rules(&name, interval_min, expiry_min, weekly).await,
         Command::Remove { name } => ctx.remove(&name).await,
         Command::Push { url, .. } => ctx.set_push_url(url.as_deref()).await,
+        Command::AccessToken { token, relay } => {
+            ctx.set_access_token(relay.as_deref(), &token).await
+        }
         Command::State { socket, action } => match action {
             Some(StateCommand::Allow { name, wait }) => ctx.allow_reports(&name, true, wait),
             Some(StateCommand::Deny { name }) => ctx.allow_reports(&name, false, None),

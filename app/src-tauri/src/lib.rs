@@ -32,6 +32,7 @@ macro_rules! handler {
             commands::init_with_invitation_only,
             commands::init_from_setup_code,
             commands::setup_code,
+            commands::set_access_token,
             commands::code_kind,
             commands::devices,
             commands::device_rename,

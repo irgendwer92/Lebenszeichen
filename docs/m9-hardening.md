@@ -63,7 +63,47 @@ devices using the guide (roadmap).
 | Clock deviation | a device 15 minutes ahead or behind: its messages are refused as today, and the new warning appears on it | tests with a fake `Date`, by hand with a shifted clock in a container |
 | Lost device | after removal and pairing again, the removed device can neither read nor send to the new mailboxes | client tests |
 
-Gaps found are fixed in M9 and listed here.
+Tests: `crates/client/src/tests/behaviour.rs` and two in
+`crates/relay/tests/relay.rs` (2026-11-19). The fake relay can lose the
+answer to a delivery after storing it, and the relay tests can stop and
+restart a real relay on the same database.
+
+Behaves as expected: a request, response, confirm or sync message sent while
+the relay is down fails visibly, changes nothing (the weekly limit is not
+used up) and goes out once later; invite and accept leave nothing behind; a
+lost `reveal` is sent again for a repeated `hello`; waiting messages, readers
+and sequence numbers survive a relay restart, and a live connection gets
+what arrived meanwhile.
+
+Gaps found and fixed:
+
+1. **Lost answer to a request.** The relay stored it, the device rolled it
+   back, and a retry made a new request that the contact refused; the
+   contact's answer then named the first one and was dropped. Now the
+   client tells a failure before sending (no connection:
+   `RelayError::Unreachable`, rolled back as before) from one after sending
+   (connection broke, timeout): then the change stays and the envelopes wait
+   in `Device::unsent`, sent again unchanged by the next fetch (the
+   recipient drops a copy by its identifier). Later messages to the same
+   contact queue behind them. Dropped once older than a recipient accepts.
+2. **Lost answer to `hello`.** The inviter used up the invitation for it,
+   while the accepting side rolled back and waited for nothing. Now accept
+   keeps the contact and its mailbox on such a failure; the existing
+   repetition of `hello` gets the same `reveal`.
+3. **Clock off by 15 minutes was silent.** The sender saw "sent", the
+   recipient dropped the message, visible only with `--verbose`. Now the
+   device with the wrong clock warns (decision 3), and the recipient gets a
+   visible notice naming the contact.
+4. **A removed device keeps the contact keys** (known, `protocol.md`). A copy
+   of its state can still read and answer on the old mailboxes until the
+   contacts are paired again; new pairings are out of its reach. Decided on
+   2026-11-19 to leave this as documented; re-keying contacts when a device
+   is removed is a later protocol change.
+
+Also added (decided on 2026-11-19): `lz access-token` and Devices → "Change
+access token" set a new access token after the relay's was replaced; the
+relay must accept it (checked with a voucher). On a device without a relay
+account the app needs a setup code, `lz` the option `--relay`.
 
 ## Work
 

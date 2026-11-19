@@ -9,6 +9,7 @@ const COMMANDS: &[&str] = &[
     "init_with_invitation_only",
     "init_from_setup_code",
     "setup_code",
+    "set_access_token",
     "code_kind",
     "devices",
     "device_rename",
