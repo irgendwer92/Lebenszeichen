@@ -77,7 +77,18 @@ The plaintext always begins with the same header and is padded with zero bytes t
 | 27 | `n` | Body, depending on the type |
 | 27+`n` | rest | Zero bytes |
 
-In form A the body may be at most 229 bytes long, in form B at most 221.
+In form A the body may be at most 228 bytes long, in form B at most 221.
+
+**Direction marker (form A, since M9).** The last byte of the plaintext of
+form A (offset 255) is `1` if the sender's public contact key is the lower
+of the two (compared bytewise), `2` if it is the higher one. A recipient
+discards a message that carries its own marker. `crypto_box` gives both
+directions the same key; without the marker a relay could hand a message
+back to its sender, where it would open as if the contact had sent it (a
+request shown as the contact's, an own answer shown as theirs). Older
+clients write `0` there (padding); `0` is accepted until all clients send the
+marker, so the protection holds for messages of updated senders. Found in
+the security review of M9 (2026-11-19).
 
 ### Message types
 
