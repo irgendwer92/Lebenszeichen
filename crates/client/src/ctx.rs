@@ -876,6 +876,7 @@ impl<R: Relay> Ctx<R> {
             contacts,
             invitations,
             state,
+            clock_offset: clock_warning(self.relay.clock_offset()),
         })
     }
 
@@ -1087,6 +1088,30 @@ pub struct Overview {
     pub invitations: Vec<InvitationView>,
     /// The reported state of this device, while it applies.
     pub state: Option<StateView>,
+    /// The relay's clock minus this device's in seconds, only when the
+    /// difference is large enough to warn about; see [`clock_warning`].
+    pub clock_offset: Option<i64>,
+}
+
+/// From how many seconds of difference to the relay's clock the device
+/// warns: half of the 10 minutes a message may be ahead of the recipient's
+/// clock, so that the warning comes before messages are refused.
+pub const CLOCK_WARN_SECS: i64 = 5 * 60;
+
+/// The offset to the relay's clock if it is worth a warning.
+pub fn clock_warning(offset: Option<i64>) -> Option<i64> {
+    offset.filter(|o| o.unsigned_abs() > CLOCK_WARN_SECS.unsigned_abs())
+}
+
+/// The warning about a clock that is `offset` seconds off the relay's
+/// (relay minus device), in whole minutes rounded up.
+pub fn clock_warning_text(t: Texts, offset: i64) -> String {
+    let minutes = offset.unsigned_abs().div_ceil(60).to_string();
+    if offset > 0 {
+        tr!(t, "warn-clock-behind", minutes = &minutes)
+    } else {
+        tr!(t, "warn-clock-ahead", minutes = &minutes)
+    }
 }
 
 /// A reported state as shown to the person.

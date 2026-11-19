@@ -239,6 +239,12 @@ pub trait Relay {
         relay: &RelayUrl,
         deliveries: mpsc::UnboundedSender<Delivery>,
     ) -> Result<Box<dyn Connection>, RelayError>;
+
+    /// The relay's clock minus this device's, in seconds, as last seen in an
+    /// answer of a relay; `None` before the first.
+    fn clock_offset(&self) -> Option<i64> {
+        None
+    }
 }
 
 /// Encodes bytes as `b64url` without padding.

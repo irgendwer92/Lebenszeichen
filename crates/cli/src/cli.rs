@@ -8,7 +8,7 @@ use lz_core::store::JsonFile;
 
 use lz_client::ctx::{self, Clock, Ctx, Result};
 use lz_client::i18n::{Language, Texts};
-use lz_client::relay::Http;
+use lz_client::relay::{Http, Relay};
 
 /// How long `lz sync` waits for further messages before it ends.
 const SYNC_IDLE: Duration = Duration::from_millis(1500);
@@ -332,7 +332,7 @@ pub async fn run() -> Result<()> {
         lang,
         on_notice: None,
     };
-    match args.command {
+    let result = match args.command {
         Command::Init { .. } => unreachable!("handled above"),
         Command::Invite { name, voucher, qr } => ctx.invite(&name, voucher).await.map(|code| {
             if qr {
@@ -370,7 +370,11 @@ pub async fn run() -> Result<()> {
         Command::Device(DeviceCommand::List) => ctx.list_devices(),
         Command::Device(DeviceCommand::Rename { name }) => ctx.rename_device(&name).await,
         Command::Device(DeviceCommand::Remove { name }) => ctx.remove_device(&name).await,
+    };
+    if let Some(offset) = ctx::clock_warning(ctx.relay.clock_offset()) {
+        eprintln!("{}", ctx::clock_warning_text(t, offset));
     }
+    result
 }
 
 /// The socket given, or the default one of `lz`.

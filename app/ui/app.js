@@ -835,6 +835,8 @@ async function refresh() {
     return;
   }
   refreshNotifications();
+  $("clock-banner").hidden = !cards.clock;
+  $("clock-banner").textContent = cards.clock ?? "";
   $("state-banner").hidden = !cards.state;
   $("state-text").textContent = cards.state ?? "";
   $("state-clear").setAttribute("aria-label", t("ui-clear-state"));

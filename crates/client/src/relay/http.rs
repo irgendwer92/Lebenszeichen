@@ -4,7 +4,8 @@
 //! behind a reverse proxy with TLS.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{Duration, SystemTime};
 
 use futures_util::{SinkExt, StreamExt};
 use lz_core::wire::{Hash, MailboxId, RelayUrl, Token};
@@ -32,6 +33,33 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 /// A ping keeps idle stream connections alive through proxies and reveals
 /// dead ones.
 const PING_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The relay's clock minus this device's, in seconds, from the `Date` header
+/// of the last answer of any relay; [`UNKNOWN`] before the first. Shared by
+/// the whole process, so that the window sees what the background fetch saw.
+static CLOCK_OFFSET: AtomicI64 = AtomicI64::new(UNKNOWN);
+
+const UNKNOWN: i64 = i64::MIN;
+
+/// Notes the `Date` header of an answer of a relay, if it has a readable one.
+fn observe_date(headers: &reqwest::header::HeaderMap) {
+    let Some(date) = headers
+        .get(reqwest::header::DATE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|text| httpdate::parse_http_date(text).ok())
+    else {
+        return;
+    };
+    CLOCK_OFFSET.store(offset(date, SystemTime::now()), Ordering::Relaxed);
+}
+
+/// `relay - device` in whole seconds, negative if the device is ahead.
+fn offset(relay: SystemTime, device: SystemTime) -> i64 {
+    match relay.duration_since(device) {
+        Ok(ahead) => i64::try_from(ahead.as_secs()).unwrap_or(i64::MAX),
+        Err(behind) => -i64::try_from(behind.duration().as_secs()).unwrap_or(i64::MAX),
+    }
+}
 
 /// Relays reached over the network.
 #[derive(Clone)]
@@ -105,6 +133,7 @@ struct ErrorBody {
 /// error.
 async fn send(request: RequestBuilder, expected: StatusCode) -> Result<Response, RelayError> {
     let response = request.send().await.map_err(|e| with_causes(&e))?;
+    observe_date(response.headers());
     let status = response.status();
     if status == expected {
         return Ok(response);
@@ -304,6 +333,10 @@ impl Relay for Http {
         send(request, StatusCode::ACCEPTED).await.map(drop)
     }
 
+    fn clock_offset(&self) -> Option<i64> {
+        Some(CLOCK_OFFSET.load(Ordering::Relaxed)).filter(|&o| o != UNKNOWN)
+    }
+
     async fn connect(
         &self,
         relay: &RelayUrl,
@@ -320,10 +353,11 @@ impl Relay for Http {
         let connector = Connector::Rustls(self.tls.clone());
         let connect =
             tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector));
-        let (socket, _) = tokio::time::timeout(TIMEOUT, connect)
+        let (socket, response) = tokio::time::timeout(TIMEOUT, connect)
             .await
             .map_err(|_| RelayError::Timeout)?
             .map_err(transport)?;
+        observe_date(response.headers());
         let (mut sink, mut stream) = socket.split();
 
         // Reads frames until the connection ends, then reports its end.
@@ -709,5 +743,54 @@ mod tests {
             })
         );
         assert_eq!(parse_frame(r#"{"op":"later"}"#), None);
+    }
+
+    #[test]
+    fn offset_is_relay_minus_device() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let device = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        let ahead = device + Duration::from_secs(900);
+        let behind = device - Duration::from_millis(900_500);
+        assert_eq!(super::offset(ahead, device), 900);
+        assert_eq!(super::offset(behind, device), -900);
+        assert_eq!(super::offset(device, device), 0);
+    }
+
+    /// A relay whose `Date` header is 15 minutes ahead of this device makes
+    /// the offset known.
+    #[tokio::test]
+    async fn date_header_sets_the_clock_offset() {
+        use std::time::{Duration, SystemTime};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let date = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(900));
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0; 4096];
+            let _ = socket.read(&mut buf).await.unwrap();
+            let answer = format!(
+                "HTTP/1.1 201 Created\r\nDate: {date}\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{{\"voucher\":\"AA\"}}"
+            );
+            socket.write_all(answer.as_bytes()).await.unwrap();
+        });
+        let relay = RelayUrl::new(&format!("http://{address}")).unwrap();
+        let http = Http::new().unwrap();
+        let _ = http.create_voucher(&relay, &[0; 32]).await;
+        let offset = http.clock_offset().unwrap();
+        assert!((899..=901).contains(&offset), "offset {offset}");
+    }
+
+    #[test]
+    fn clock_warning_from_five_minutes() {
+        use crate::ctx::{clock_warning, clock_warning_text};
+        use crate::i18n::Language;
+        assert_eq!(clock_warning(None), None);
+        assert_eq!(clock_warning(Some(300)), None);
+        assert_eq!(clock_warning(Some(-300)), None);
+        assert_eq!(clock_warning(Some(301)), Some(301));
+        assert_eq!(clock_warning(Some(-900)), Some(-900));
+        let t = Language::En.texts();
+        assert!(clock_warning_text(t, -900).contains("15 min ahead"));
+        assert!(clock_warning_text(t, 301).contains("6 min behind"));
     }
 }

@@ -726,6 +726,8 @@ pub struct Cards {
     invitations: Vec<InvitationCard>,
     /// The reported state of this device as text, while it applies.
     state: Option<String>,
+    /// The warning about this device's clock, while it is off.
+    clock: Option<String>,
 }
 
 fn card(view: ContactView, now: u64, t: Texts) -> Card {
@@ -785,6 +787,9 @@ fn card(view: ContactView, now: u64, t: Texts) -> Card {
 fn cards(overview: Overview, t: Texts) -> Cards {
     let now = overview.now;
     Cards {
+        clock: overview
+            .clock_offset
+            .map(|offset| ctx::clock_warning_text(t, offset)),
         state: overview.state.map(|state| {
             t.text(
                 "app-reported-state",
