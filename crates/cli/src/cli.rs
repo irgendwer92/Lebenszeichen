@@ -8,7 +8,7 @@ use lz_core::store::JsonFile;
 
 use lz_client::ctx::{self, Clock, Ctx, Result};
 use lz_client::i18n::{Language, Texts};
-use lz_client::relay::Http;
+use lz_client::relay::{Http, Relay};
 
 /// How long `lz sync` waits for further messages before it ends.
 const SYNC_IDLE: Duration = Duration::from_millis(1500);
@@ -139,6 +139,15 @@ enum Command {
         socket: Option<PathBuf>,
         #[command(subcommand)]
         action: Option<StateCommand>,
+    },
+    /// Sets a new access token for the own relay
+    AccessToken {
+        /// Access token
+        #[arg(value_name = "TOKEN")]
+        token: String,
+        /// Relay address, only on a device without a relay account
+        #[arg(long, value_name = "URL")]
+        relay: Option<String>,
     },
     /// Sets the push address
     Push {
@@ -332,7 +341,7 @@ pub async fn run() -> Result<()> {
         lang,
         on_notice: None,
     };
-    match args.command {
+    let result = match args.command {
         Command::Init { .. } => unreachable!("handled above"),
         Command::Invite { name, voucher, qr } => ctx.invite(&name, voucher).await.map(|code| {
             if qr {
@@ -356,6 +365,9 @@ pub async fn run() -> Result<()> {
         } => ctx.rules(&name, interval_min, expiry_min, weekly).await,
         Command::Remove { name } => ctx.remove(&name).await,
         Command::Push { url, .. } => ctx.set_push_url(url.as_deref()).await,
+        Command::AccessToken { token, relay } => {
+            ctx.set_access_token(relay.as_deref(), &token).await
+        }
         Command::State { socket, action } => match action {
             Some(StateCommand::Allow { name, wait }) => ctx.allow_reports(&name, true, wait),
             Some(StateCommand::Deny { name }) => ctx.allow_reports(&name, false, None),
@@ -370,7 +382,11 @@ pub async fn run() -> Result<()> {
         Command::Device(DeviceCommand::List) => ctx.list_devices(),
         Command::Device(DeviceCommand::Rename { name }) => ctx.rename_device(&name).await,
         Command::Device(DeviceCommand::Remove { name }) => ctx.remove_device(&name).await,
+    };
+    if let Some(offset) = ctx::clock_warning(ctx.relay.clock_offset()) {
+        eprintln!("{}", ctx::clock_warning_text(t, offset));
     }
+    result
 }
 
 /// The socket given, or the default one of `lz`.

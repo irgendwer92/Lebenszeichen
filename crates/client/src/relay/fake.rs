@@ -44,6 +44,9 @@ pub struct FakeRelay {
 struct Server {
     /// Unreachable, as if the network were down.
     down: bool,
+    /// The next this many `deliver` calls store the message but answer
+    /// with a transport error, as if the answer got lost.
+    lose_answers: u32,
     access_token: Token,
     /// Hashes of open vouchers with their expiry.
     vouchers: HashMap<String, u64>,
@@ -138,6 +141,27 @@ impl FakeRelay {
         self.servers.lock().unwrap().get_mut(url).unwrap().down = down;
     }
 
+    /// Replaces the access token of the relay, as its operator would.
+    pub fn set_access_token(&self, url: &str, token: Token) {
+        self.servers
+            .lock()
+            .unwrap()
+            .get_mut(url)
+            .unwrap()
+            .access_token = token;
+    }
+
+    /// Makes the next `count` `deliver` calls on the relay store their
+    /// message, but fail towards the caller, as if the answer got lost.
+    pub fn lose_answers(&self, url: &str, count: u32) {
+        self.servers
+            .lock()
+            .unwrap()
+            .get_mut(url)
+            .unwrap()
+            .lose_answers = count;
+    }
+
     /// Whether the mailbox exists.
     pub fn has_mailbox(&self, url: &str, mailbox: &MailboxId) -> bool {
         self.servers.lock().unwrap()[url]
@@ -214,7 +238,7 @@ impl FakeRelay {
         let server = servers
             .get_mut(relay.as_str())
             .filter(|server| !server.down)
-            .ok_or_else(|| RelayError::Transport(format!("{relay} is down")))?;
+            .ok_or_else(|| RelayError::Unreachable(format!("{relay} is down")))?;
         server.purge_slots(now);
         for mailbox in server.mailboxes.values_mut() {
             mailbox.expire(now);
@@ -551,6 +575,10 @@ impl Relay for FakeRelay {
                         data: envelope.to_vec(),
                     },
                 });
+            }
+            if server.lose_answers > 0 {
+                server.lose_answers -= 1;
+                return Err(RelayError::Transport("answer lost".into()));
             }
             Ok(())
         })

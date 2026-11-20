@@ -142,6 +142,7 @@ impl<R: Relay> Ctx<R> {
         let mut notices = Vec::new();
         self.retry_push_url().await?;
         self.flush_outbox().await?;
+        self.flush_unsent().await?;
         self.check_pairings(&mut notices).await?;
         self.reconcile(&mut live, &deliveries, &mut notices).await?;
         let mut failed_reports = Failed::new();
@@ -170,6 +171,12 @@ impl<R: Relay> Ctx<R> {
         }
         let mut tick = tokio::time::interval(LISTEN_TICK);
         tick.tick().await;
+        // The sync mailbox is gone (`group_gone`): either this device was
+        // removed (its own contact mailboxes then report `unknown_reader`
+        // too) or another device was removed and the group ended. Decided
+        // once every subscription has answered.
+        let mut group_gone = false;
+        let mut lost_reader = false;
 
         loop {
             let delivery = if listen {
@@ -201,6 +208,9 @@ impl<R: Relay> Ctx<R> {
                     if let Some(l) = live.get_mut(&relay) {
                         l.awaiting.remove(&mailbox);
                     }
+                    if group_gone && self.settle_group(&live, lost_reader, &mut notices)? {
+                        return Ok(notices);
+                    }
                 }
                 ServerFrame::Error { mailbox, code } => {
                     if let (Some(l), Some(mailbox)) = (live.get_mut(&relay), mailbox) {
@@ -214,6 +224,26 @@ impl<R: Relay> Ctx<R> {
                     if sync_mailbox && code == "unknown_reader" {
                         self.removed(&mut notices)?;
                         return Ok(notices);
+                    }
+                    let own_contact = mailbox.is_some_and(|m| {
+                        device.contacts.iter().any(|c| {
+                            !c.state.ended
+                                && c.own_relay == relay
+                                && c.state.contact.own_mailbox == m
+                        })
+                    });
+                    if sync_mailbox && code == "unknown_mailbox" {
+                        group_gone = true;
+                    } else if own_contact && code == "unknown_reader" {
+                        lost_reader = true;
+                    }
+                    if group_gone {
+                        if self.settle_group(&live, lost_reader, &mut notices)? {
+                            return Ok(notices);
+                        }
+                        if sync_mailbox || code == "unknown_reader" {
+                            continue;
+                        }
                     }
                     // Mailboxes of ended contacts and of withdrawn invitations
                     // are deleted on purpose, possibly by another command.
@@ -304,6 +334,36 @@ impl<R: Relay> Ctx<R> {
             self.say(&tr!(self.texts(), "out-no-new-messages"));
         }
         Ok(notices)
+    }
+
+    /// Called while the sync mailbox is gone. Once no subscription is
+    /// waiting for an answer: if an own contact mailbox no longer knows this
+    /// device, it was removed (deletes the state, `true`); otherwise the
+    /// group ended because another device was removed: this device leaves
+    /// it and keeps its contacts.
+    fn settle_group(
+        &mut self,
+        live: &HashMap<RelayUrl, Live>,
+        lost_reader: bool,
+        notices: &mut Vec<Notice>,
+    ) -> Result<bool> {
+        if live.values().any(|l| !l.awaiting.is_empty()) || self.load()?.group.is_none() {
+            return Ok(false);
+        }
+        if lost_reader {
+            self.removed(notices)?;
+            return Ok(true);
+        }
+        self.update(|device| {
+            device.group = None;
+            device.devices.clear();
+            device.outbox.clear();
+            Ok(())
+        })?;
+        let notice = Notice::Problem(tr!(self.texts(), "problem-group-ended"));
+        self.show(&notice);
+        notices.push(notice);
+        Ok(false)
     }
 
     /// This device was removed by another one: says so and deletes the
@@ -783,6 +843,15 @@ fn receive_for_contact(
     let name = contact.name.clone();
     let event = match contact.state.receive(data, now) {
         Ok(event) => event,
+        // Most likely a clock that is off on one side; the person should
+        // learn of it, as the sender believes it delivered.
+        Err(lz_core::Error::Expired) => {
+            return (
+                vec![Notice::Problem(tr!(t, "problem-out-of-time", name = &name))],
+                vec![],
+                false,
+            );
+        }
         Err(error) => {
             return (
                 vec![Notice::Dropped {

@@ -1,0 +1,37 @@
+# Relay and ntfy for Lebenszeichen. Guide: docs/self-hosting.md
+#
+# Copy this directory to your server, create relay.env from
+# relay.env.example, set your ntfy address in ntfy/server.yml, then
+#
+#   docker compose up -d
+#
+# Both services listen only on 127.0.0.1. A reverse proxy on the same host
+# terminates TLS in front of them (proxy/: nginx, Caddy or Traefik).
+name: lebenszeichen
+
+services:
+  relay:
+    # Pin a version (e.g. :0.2.0) once you are set up; update on purpose.
+    image: ghcr.io/irgendwer92/lebenszeichen-relay:latest
+    restart: unless-stopped
+    env_file: relay.env
+    volumes:
+      # Mailboxes, messages waiting for pickup and push addresses.
+      - relay-data:/data
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  ntfy:
+    image: binwiederhier/ntfy:v2.38.0
+    restart: unless-stopped
+    command: serve
+    volumes:
+      - ./ntfy/server.yml:/etc/ntfy/server.yml:ro
+      # Users, access rules and the short message cache.
+      - ntfy-data:/var/lib/ntfy
+    ports:
+      - "127.0.0.1:8081:80"
+
+volumes:
+  relay-data:
+  ntfy-data:

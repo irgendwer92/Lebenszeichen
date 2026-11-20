@@ -1118,6 +1118,7 @@ dependencies = [
  "fluent-syntax",
  "futures-util",
  "http-body-util",
+ "httpdate",
  "hyper",
  "hyper-util",
  "jiff",

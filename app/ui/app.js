@@ -835,6 +835,8 @@ async function refresh() {
     return;
   }
   refreshNotifications();
+  $("clock-banner").hidden = !cards.clock;
+  $("clock-banner").textContent = cards.clock ?? "";
   $("state-banner").hidden = !cards.state;
   $("state-text").textContent = cards.state ?? "";
   $("state-clear").setAttribute("aria-label", t("ui-clear-state"));
@@ -1008,6 +1010,13 @@ $("setup-invitation-go").addEventListener("click", async (event) => {
 $("setup-scan").addEventListener("click", async () => {
   const code = await scanCode("setup");
   if (code) $("setup-code-form").elements.code.value = code;
+});
+
+onSubmit("access-token-form", async (data, form) => {
+  await call("set_access_token", { input: data.get("input") });
+  form.reset();
+  $("access-token-details").open = false;
+  await showDevices();
 });
 
 onSubmit("setup-code-form", async (data) => {

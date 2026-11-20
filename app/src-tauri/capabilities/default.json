@@ -12,6 +12,7 @@
     "allow-init-with-invitation-only",
     "allow-init-from-setup-code",
     "allow-setup-code",
+    "allow-set-access-token",
     "allow-code-kind",
     "allow-devices",
     "allow-device-rename",

@@ -56,6 +56,11 @@ pub struct Device {
     /// Envelopes for the sync mailbox the relay has not accepted yet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outbox: Vec<Outgoing>,
+    /// Envelopes to contacts the relay may have stored without this device
+    /// learning so (its answer was lost). Sent again, unchanged, by the next
+    /// fetch: the recipient drops a repetition by its identifier.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsent: Vec<Unsent>,
     /// Contacts arriving from another own device, not complete yet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transfers: Vec<Transfer>,
@@ -118,6 +123,18 @@ pub struct KnownDevice {
     #[serde(with = "crate::hex")]
     pub reader: ReaderId,
     pub name: String,
+}
+
+/// An envelope to a contact whose delivery is not confirmed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Unsent {
+    /// The own mailbox of the contact, which identifies it.
+    #[serde(with = "crate::hex")]
+    pub contact: MailboxId,
+    #[serde(with = "crate::hex")]
+    pub envelope: [u8; ENVELOPE_LEN],
+    /// Dropped once a recipient would refuse it as too old.
+    pub created_at: u64,
 }
 
 /// An envelope waiting for delivery into the sync mailbox.
@@ -305,6 +322,7 @@ impl Device {
             group: None,
             devices: Vec::new(),
             outbox: Vec::new(),
+            unsent: Vec::new(),
             transfers: Vec::new(),
             parked: Vec::new(),
             reports: Reports::default(),

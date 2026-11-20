@@ -19,7 +19,7 @@ answers for you after a waiting time. They see **“asleep” (reported)**.
    device, and only then confirm.
 3. For each contact that may get reported answers, turn on "reported
    answers" and set the waiting time. This is done only on this page.
-4. Copy the **token** from the page (it is also in the app log). You can
+4. Copy the **token** from the page. You can
    renew it there; then update your automations.
 
 Put the token in `secrets.yaml`, not in an automation.

@@ -48,8 +48,9 @@ lz-server [--state PATH]            state file (env LZ_STATE), default /data/dev
           [--relay URL]             default relay for joining
 ```
 
-- The token is created at the first start if there is none, written to
-  the log once, and kept in the state file (`Reports.token`).
+- The token is created at the first start if there is none and kept in the
+  state file (`Reports.token`). Until M9 it was also written to the log
+  once; since the security review of M9 the log only says where it is.
 - Without a state file only the page runs (setup). After joining, the
   process listens like `lz listen` and sends due reported answers; its
   notices go to standard output (the app log in Home Assistant).

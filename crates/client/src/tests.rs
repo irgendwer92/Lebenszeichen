@@ -1,6 +1,7 @@
 //! The M2 scenario end to end: two devices with their own state files talk
 //! through fake relays.
 
+mod behaviour;
 mod devices;
 mod pairing;
 mod reports;
@@ -503,11 +504,27 @@ async fn acceptance_in_time_can_be_fetched_later() {
     let code = anna.ctx.invite("Bert", false).await.unwrap();
     world.advance(9 * MINUTE);
     bert.ctx.accept("Anna", &code).await.unwrap();
-    world.advance(5 * HOUR);
+    world.advance(50 * MINUTE);
     anna.sync().await;
     assert!(anna.device().invitations.is_empty());
     assert_eq!(anna.device().contacts.len(), 1);
     assert!(anna.out.take().contains("Prüfcode"));
+}
+
+/// Past the grace after the expiry, the invitation is dropped unread: a
+/// `hello` there may be backdated.
+#[tokio::test]
+async fn acceptance_fetched_after_the_grace_is_dropped() {
+    let world = World::new();
+    let mut anna = world.person(Some((RELAY_A, Some(TOKEN_A))));
+    let mut bert = world.person(Some((RELAY_B, Some(TOKEN_B))));
+    let code = anna.ctx.invite("Bert", false).await.unwrap();
+    world.advance(9 * MINUTE);
+    bert.ctx.accept("Anna", &code).await.unwrap();
+    world.advance(5 * HOUR);
+    anna.sync().await;
+    assert!(anna.device().invitations.is_empty());
+    assert!(anna.device().contacts.is_empty());
 }
 
 #[tokio::test]

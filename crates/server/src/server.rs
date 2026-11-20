@@ -81,15 +81,15 @@ impl Shared {
     }
 
     /// Creates the token of the local interface if the state file has
-    /// none, and writes it to the log once (decision 4).
+    /// none, and says where to find it. The token itself stays out of the
+    /// log, which `docker logs` and support requests pass on (security
+    /// review of M9).
     pub fn ensure_token(&self) -> Result<()> {
         let mut ctx = self.quiet_ctx();
         if ctx.report_token()?.is_none() {
-            let token = ctx.enable_report_token()?;
-            println!(
-                "{}",
-                self.text_with("server-token-created", "token", &token)
-            );
+            ctx.enable_report_token()?;
+            let path = self.state.display().to_string();
+            println!("{}", self.text_with("server-token-created", "path", &path));
         }
         Ok(())
     }

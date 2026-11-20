@@ -36,6 +36,10 @@ use crate::wire::{
 
 /// Shortest time between two sendings of the same `hello` while waiting for
 /// `reveal`. The time doubles with every repetition.
+/// How long after its expiry an invitation still takes a `hello` sent in
+/// time: for an inviting device that was offline when it arrived.
+pub const INVITATION_GRACE_SECS: u64 = 60 * 60;
+
 pub const HELLO_REPEAT_SECS: u64 = 5 * 60;
 
 /// A mailbox on a relay and the token to deliver into it.
@@ -178,10 +182,11 @@ impl PendingInvitation {
         self.secret.is_none()
     }
 
-    /// After this time no valid `hello` can arrive anymore; the invitation and
-    /// its mailbox can be dropped.
+    /// After this time no `hello` is accepted anymore; the invitation and
+    /// its mailbox can be dropped. [`INVITATION_GRACE_SECS`] after the
+    /// expiry, for an inviting device that fetches late.
     pub fn keep_until(&self) -> u64 {
-        self.expires_at.saturating_add(MAX_MESSAGE_AGE_SECS)
+        self.expires_at.saturating_add(INVITATION_GRACE_SECS)
     }
 
     /// Reads an envelope that arrived in the mailbox of this invitation.
@@ -193,10 +198,16 @@ impl PendingInvitation {
     /// else, including a `hello` sent after the expiry, fails, uses nothing
     /// up and should be dropped silently.
     ///
-    /// What counts is when `hello` was sent, not when it is read, so the
-    /// inviting side may fetch it until [`Self::keep_until`].
+    /// The sending time in `hello` must lie before the expiry, and the
+    /// inviting side must read it by [`Self::keep_until`]: the sending time
+    /// is the sender's word, and without the second limit someone who got
+    /// hold of an unused code could backdate a `hello` for a day after the
+    /// expiry (security review of M9).
     pub fn receive_hello(&self, envelope: &[u8], now: u64) -> Result<Contact, Error> {
         let secret = self.secret.ok_or(Error::Unexpected)?;
+        if now > self.keep_until() {
+            return Err(Error::Expired);
+        }
         let message = crypto::open_anonymous(envelope, &self.key)?;
         check_time(&message, now)?;
         if message.sent_at > self.expires_at {
@@ -467,7 +478,10 @@ pub(crate) fn check_time(message: &Message, now: u64) -> Result<(), Error> {
 pub(crate) mod tests {
     use rand_core::{CryptoRng, OsRng, RngCore};
 
-    use super::{Address, HELLO_REPEAT_SECS, PairingState, PendingInvitation, Revealed, accept};
+    use super::{
+        Address, HELLO_REPEAT_SECS, INVITATION_GRACE_SECS, PairingState, PendingInvitation,
+        Revealed, accept,
+    };
     use crate::Error;
     use crate::contact::{ContactState, Event};
     use crate::crypto;
@@ -710,8 +724,14 @@ pub(crate) mod tests {
             &mut OsRng,
         )
         .unwrap();
-        assert!(pending.receive_hello(&hello, NOW + 5 * 3600).is_ok());
-        assert_eq!(pending.keep_until(), sent + MAX_MESSAGE_AGE_SECS);
+        assert!(pending.receive_hello(&hello, sent + 50 * 60).is_ok());
+        assert_eq!(pending.keep_until(), sent + INVITATION_GRACE_SECS);
+        // A backdated `hello` from someone who found the unused code later
+        // is refused once the grace has passed.
+        assert_eq!(
+            pending.receive_hello(&hello, NOW + 5 * 3600).unwrap_err(),
+            Error::Expired
+        );
         assert_eq!(
             pending
                 .receive_hello(&hello, pending.keep_until() + 1)

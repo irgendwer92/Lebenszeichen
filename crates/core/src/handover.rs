@@ -408,6 +408,7 @@ impl Device {
                 .filter(|d| d.reader != reader_id)
                 .collect(),
             outbox: Vec::new(),
+            unsent: Vec::new(),
             transfers: Vec::new(),
             parked: Vec::new(),
             reports: Default::default(),

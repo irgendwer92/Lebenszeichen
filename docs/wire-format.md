@@ -77,7 +77,18 @@ The plaintext always begins with the same header and is padded with zero bytes t
 | 27 | `n` | Body, depending on the type |
 | 27+`n` | rest | Zero bytes |
 
-In form A the body may be at most 229 bytes long, in form B at most 221.
+In form A the body may be at most 228 bytes long, in form B at most 221.
+
+**Direction marker (form A, since M9).** The last byte of the plaintext of
+form A (offset 255) is `1` if the sender's public contact key is the lower
+of the two (compared bytewise), `2` if it is the higher one. A recipient
+discards a message that carries its own marker. `crypto_box` gives both
+directions the same key; without the marker a relay could hand a message
+back to its sender, where it would open as if the contact had sent it (a
+request shown as the contact's, an own answer shown as theirs). Older
+clients write `0` there (padding); `0` is accepted until all clients send the
+marker, so the protection holds for messages of updated senders. Found in
+the security review of M9 (2026-11-19).
 
 ### Message types
 
@@ -122,7 +133,7 @@ Base32 in uppercase fits the alphanumeric mode of QR codes and remains typable a
 
 `n` is 32 random bytes that the inviter creates with the invitation and keeps secret until it has received the `hello`. Invitations of version 1 (`LZ1-`, without commitment) are refused with a hint to ask for a new invitation (decided on 2026-11-16); contacts paired with them stay as they are. An invitation with prefix `LZ2-` but another version byte is refused as well. After the update, open invitations of version 1 are deleted together with their mailbox. All prefixes in this document are ASCII bytes without a terminator.
 
-The inviter accepts exactly one `hello` per invitation, and only if it was sent before the expiry time (default: 10 minutes after creation). What counts is the sending time in the `hello`, not the time of retrieval; the inviter can retrieve it as long as the replay protection window allows, that is, until a little over 24 hours after the expiry time. Only after that does it delete the invitation and mailbox.
+The inviter accepts exactly one `hello` per invitation, and only if it was sent before the expiry time (default: 10 minutes after creation). What counts is the sending time in the `hello`, not the time of retrieval; the inviter can retrieve it up to one hour after the expiry time, then it deletes the invitation and mailbox. (Until M9 the limit was the replay protection window, a little over 24 hours; the security review of M9 noted that the sending time is the sender's word, so someone who got hold of an unused code could backdate a `hello` for that long.)
 
 ### Verification code
 
@@ -318,9 +329,13 @@ Same plaintext header as for contacts, form C, only in the sync mailbox:
 
 ### Removing a device
 
-Another device of the person removes the reader identifier of the device from all mailboxes, including the sync mailbox, and sends `device_removed`. If the removed device is still running, the relay answers it with `unknown_reader`; it then shows that it was removed and deletes its state.
+Another device of the person (E) removes the reader identifier of the device from all mailboxes, then **ends the group**: it deletes the sync mailbox and forgets the group key and the list of devices (since M9).
 
-This only works with a device that cooperates. A removed device keeps all read and send tokens, the contact keys and the group key: it could register itself again as a reader and keep sending messages to the sync mailbox. Removing a device is therefore no protection against a lost or stolen device; in that case the contacts have to be paired again (`protocol.md`).
+- The removed device knows the group key and the tokens of the sync mailbox. With the group kept, it could register itself there again, receive the contacts paired from then on (`contact_part`) and send forged sync messages, such as `device_removed` for E. Without a channel it cannot read, a new group key cannot reach the other devices, so they are added again instead (security review of M9, 2026-11-19).
+- A device whose sync mailbox reports `unknown_mailbox` waits until all its subscriptions have answered. If one of its contact mailboxes reports `unknown_reader`, it was removed: it shows that and deletes its state. Otherwise another device was removed: it leaves the group, keeps its contacts and works on alone, with a notice that it has to be added again to be linked.
+- `device_removed` is still understood (older devices send it), but no longer sent.
+
+Removing still does not protect the existing contacts: the removed device keeps their keys and tokens and could register itself again on their mailboxes. After a lost or stolen device the contacts are paired again (`protocol.md`); the new pairings are out of its reach.
 
 ### Known gaps
 
@@ -339,37 +354,38 @@ HTTPS and WebSocket under the path `/v1`. Tokens are in the header `Authorizatio
 | `PUT /v1/mailboxes/{mailbox}/readers/{reader}` | Read token | `{"push_url":"https://…"}` or `{"push_url":null}` | `204` |
 | `DELETE /v1/mailboxes/{mailbox}/readers/{reader}` | Read token | – | `204` |
 | `POST /v1/mailboxes/{mailbox}/messages` | Send token | Body: the 297 bytes of the envelope, `application/octet-stream` | `202` |
-| `PUT /v1/handovers/{handover}` | Access token or read token of any mailbox on this relay; for a reveal slot the reply token (M5) | Header `Lz-Fetch-Hash: <hex>`, optionally `Lz-Reply-Hash: <hex>`; body: at most 64 KiB, `application/octet-stream` | `201` |
+| `PUT /v1/handovers/{handover}` | Access token or read token of any mailbox on this relay (limits per voucher family since M9); for a reveal slot the reply token (M5) | Header `Lz-Fetch-Hash: <hex>`, optionally `Lz-Reply-Hash: <hex>`; body: at most 64 KiB, `application/octet-stream` | `201` |
 | `GET /v1/handovers/{handover}` | Fetch token; for a reveal slot the reply token (M5) | – | `200` with the stored bytes as body; deleted afterwards |
 
 Error codes:
 
 | Status | `error` | Meaning |
 |---|---|---|
-| 400 | `bad_request` | Request not readable |
+| 400 | `bad_request` | Request not readable; for a message, a body that is not exactly 297 bytes |
 | 401 | `unauthorized` | Token missing or does not match |
 | 404 | `unknown_mailbox` | The mailbox does not exist or no longer exists. This is how a client recognizes that it was removed. |
 | 404 | `unknown_reader` | Reader not registered |
 | 404 | `unknown_handover` | No handover under this identifier, or already retrieved or expired |
 | 409 | `handover_exists` | A handover under this identifier exists already |
-| 429 | `mailbox_quota` | The voucher mailbox already has 10 derived mailboxes |
-| 429 | `handovers_quota` | Two handovers authorized with this token are waiting already |
-| 503 | `handovers_full` | 64 handovers are waiting on this relay |
-| 413 | `too_large` | Body longer than 512 bytes, for a handover longer than 64 KiB |
+| 429 | `mailbox_quota` | The voucher mailbox already has 10 derived mailboxes, or has derived 30 in its lifetime |
+| 429 | `handovers_quota` | Two handovers authorized with this token, or with read tokens of the same voucher family, are waiting already |
+| 503 | `handovers_full` | 64 handovers are waiting on this relay, or 32 authorized by voucher families |
+| 413 | `too_large` | Handover longer than 64 KiB |
 | 429 | `mailbox_full` | Already 32 waiting messages |
 | 429 | `rate_limited` | More than 60 deliveries in the last hour |
 
-A voucher is valid for 10 minutes and for exactly one mailbox. The relay accepts arbitrary bodies up to 512 bytes and does not check their content.
+A voucher is valid for 10 minutes and for exactly one mailbox. The relay accepts only message bodies of exactly 297 bytes, the length of an envelope, and does not check their content (since M9; before, any body up to 512 bytes).
 
-**Derived mailboxes (M5):** Whoever shows the read token of a mailbox that was created with a voucher may create up to 10 further mailboxes with it. They count as long as they exist; deleting one frees its place. Derived mailboxes cannot create further mailboxes, and neither can mailboxes created with the access token. The relay checks the count and creates the mailbox in one step, so that simultaneous requests cannot exceed 10. A derived mailbox stays when its voucher mailbox is deleted and then follows only the 90-day rule; it can no longer be used to create further ones, because the voucher mailbox is gone. This lets people without an access token create a sync mailbox for several devices, and later also invite contacts themselves, without letting strangers onto the relay: every derived mailbox goes back to a voucher issued by a holder of the access token. The holder of the access token cannot withdraw such mailboxes; that is the price of the relay not knowing who belongs to whom.
+**Derived mailboxes (M5):** Whoever shows the read token of a mailbox that was created with a voucher may create up to 10 further mailboxes with it. They count as long as they exist; deleting one frees its place, but a voucher mailbox can derive at most 30 mailboxes in its lifetime, so that deleting and creating again cannot go on forever (since M9). Derived mailboxes cannot create further mailboxes, and neither can mailboxes created with the access token. The relay checks the count and creates the mailbox in one step, so that simultaneous requests cannot exceed 10. A derived mailbox stays when its voucher mailbox is deleted and then follows only the 90-day rule; it can no longer be used to create further ones, because the voucher mailbox is gone. This lets people without an access token create a sync mailbox for several devices, and later also invite contacts themselves, without letting strangers onto the relay: every derived mailbox goes back to a voucher issued by a holder of the access token. The holder of the access token cannot withdraw such mailboxes; that is the price of the relay not knowing who belongs to whom.
 
 ### Handover
 
 Handover slots carry challenge, revealed value and handover when a device is added (see [Adding a device](#adding-a-device)). The identifier `{handover}` is the `b64url` of the SHA-256 values given there.
 
 - `PUT` needs a token of this relay, to keep strangers from storing data on it. The read token of any mailbox suffices, so that people without an access token can add devices as well. At most two slots authorized with the same token wait at the same time, at most 64 on the relay.
+- **Voucher families (M9):** A voucher mailbox and the mailboxes derived from it form a voucher family; a derived mailbox stays in it when the voucher mailbox is deleted. Slots authorized with read tokens of one voucher family share the limit of two, and all voucher families together hold at most 32 slots, reserved reveal slots included. The access token and the read tokens of mailboxes created with it are not limited this way, so guests cannot keep the holder of the access token from adding devices. If several mailboxes have the same read token hash and one of them belongs to a voucher family, that family's limits apply.
 - `PUT` names the hash of the fetch token in `Lz-Fetch-Hash`; `GET` needs the fetch token itself. Whoever only sees the device code can therefore neither read nor delete a slot.
-- **Reveal slot:** If a `PUT` also names `Lz-Reply-Hash`, the relay reserves the slot `SHA-256("lebenszeichen-v1-reveal" || slot)` in the same step, where `slot` are the 32 bytes of the identifier just stored. If that reveal identifier exists or is reserved already, the whole `PUT` fails with `409`. The reservation lasts 10 minutes from the reserving `PUT`, independent of when the reserving slot is fetched or deleted. The reveal slot accepts exactly one `PUT` of exactly 32 bytes, authorized with the reply token in `Authorization: Bearer` instead of a relay token and without `Lz-Fetch-Hash`; `GET` on it also needs the reply token, and a successful `GET` deletes it. A reserved or filled reveal slot counts towards the limit of 64 slots on the relay, not towards the two per token. This lets the new device answer without a token of the relay.
+- **Reveal slot:** If a `PUT` also names `Lz-Reply-Hash`, the relay reserves the slot `SHA-256("lebenszeichen-v1-reveal" || slot)` in the same step, where `slot` are the 32 bytes of the identifier just stored. If that reveal identifier exists or is reserved already, the whole `PUT` fails with `409`. The reservation lasts 10 minutes from the reserving `PUT`, independent of when the reserving slot is fetched or deleted. The reveal slot accepts exactly one `PUT` of exactly 32 bytes, authorized with the reply token in `Authorization: Bearer` instead of a relay token and without `Lz-Fetch-Hash`; `GET` on it also needs the reply token, and a successful `GET` deletes it. A reserved or filled reveal slot counts towards the limit of 64 slots on the relay and, if reserved by a voucher family, towards the 32 of all voucher families, not towards the two per token or per family. This lets the new device answer without a token of the relay.
 - The relay deletes a slot with the first successful `GET`, at the latest 10 minutes after the `PUT`. A second `PUT` to an existing or reserved identifier fails with `409`.
 - The relay does not look into the content: challenge and revealed value are not secret, only unpredictable in advance, and the handover is sealed for the new device.
 - Whoever holds read tokens on the relay can occupy slots up to the limits and thus delay the adding of devices by others; this is a possible disruption, not a leak.
@@ -403,7 +419,7 @@ From the relay:
 
 When the relay accepts a message, it sends a `POST` with the fixed body `wake` to the `push_url` of each reader that is not currently subscribed to this mailbox. The body carries no information; an empty body is not delivered by some distributors. Failures are not retried and not reported.
 
-Because a client can use this to make the relay call foreign addresses, the following applies: only `https`, no private or local target addresses, no redirects, short timeout. The operator can restrict the allowed host names to a list and should do so, for example to their own ntfy server.
+Because a client can use this to make the relay call foreign addresses, the following applies: only `https` on port 443, no private or local target addresses, no redirects, short timeout. The operator can restrict the allowed host names to a list and should do so, for example to their own ntfy server.
 
 ### Operation
 
@@ -448,7 +464,7 @@ Decided on 2026-11-16 (E1 to E6 and the relay rule), going beyond `protocol.md`:
 - **Last writer wins** for rules, by sending time and then message identifier; this also applies to `rules` from contacts with several devices.
 - **No `counted` message:** all devices read all mailboxes and count the same requests. Instead `requested`, so that other devices accept the response to a request of the person's own.
 - **Devices offline for more than 24 hours** may deviate; accepted for M5.
-- **Removing a device is not protection** against a lost device; the contacts are paired again.
+- **Removing a device is not protection** against a lost device; the contacts are paired again. Since M9 removing ends the group, so that contacts paired again do not reach the removed device.
 - **Invitations stay on the device** that created them.
 - **Derived mailboxes:** up to 10 per voucher mailbox, not chainable, so that several devices also work without an access token.
 - **Content of the handover as JSON** in the form of the state file, instead of a fixed binary format. Simple and extensible; the fixed binary format of the messages is meant for microcontrollers, which are not expected to add other devices.
@@ -480,16 +496,16 @@ Clarifications made during the implementation of the relay (`crates/relay`). The
 - **Order of checks:** If the token is missing or is not `b64url` of 32 bytes, the result is `401`. Then the mailbox is looked up; an unknown mailbox reports `404 unknown_mailbox` even if the token would not match, so that a removed client recognizes this reliably. Only then is the token compared (`401`).
 - **Unreadable identifiers** in paths (not `b64url` or wrong length) result in `400 bad_request`. Hashes in `POST /v1/mailboxes` must be 64 hex digits; uppercase letters are tolerated.
 - **Voucher:** It is passed like a token in the header `Authorization: Bearer …`. An unknown, redeemed or expired voucher results in `401`. It is valid for exactly 600 seconds.
-- **Empty body** in `POST …/messages` results in `400 bad_request`. The `Content-Type` is not checked.
+- **Message length:** A body in `POST …/messages` that is not exactly 297 bytes, empty or longer included, results in `400 bad_request`, after the token check; the relay reads no more than one byte beyond the envelope. The `Content-Type` is not checked. Refused bodies do not count towards the rate limit.
 - **Limits exceeded at the same time:** The rate limit is checked before the fill level, and `rate_limited` is returned. Rejected deliveries do not count. "Waiting" means: still stored, even if individual readers have already acknowledged it.
 - **Rate limit only in memory:** The relay keeps the arrival times for the limit of 60 per hour only in memory and only for one hour. After a restart, counting starts anew.
 - **Errors of the relay itself** report `500` with `{"error":"internal"}`.
 - **Readers:** At most 16 readers per mailbox, above that `400 bad_request`, because every reader can trigger a wake signal. A newly registered reader starts with acknowledgment 0 and receives all waiting messages; a repeated `PUT` only changes the push address. A body `{}` counts as `{"push_url":null}`. When a reader is unregistered, the relay immediately deletes the messages that all remaining readers have acknowledged.
-- **Push address:** at most 1024 bytes, only `https`, without user name and password, not `localhost`, and as an IP address only public ones. The relay resolves the host name itself when waking and connects only to the checked public addresses (IPv4 and IPv6), so that a second resolution cannot return anything different. No proxy, no redirects, timeout 5 seconds. `LZ_PUSH_ALLOWED_HOSTS` compares the host name exactly, case-insensitively and without subdomains. Invalid addresses result in `400 bad_request` on registration.
+- **Push address:** at most 1024 bytes, only `https`, no port other than 443 (an explicit `:443` is allowed), without user name and password, not `localhost`, and as an IP address only public ones. The relay resolves the host name itself when waking and connects only to the checked public addresses (IPv4 and IPv6), so that a second resolution cannot return anything different. No proxy, no redirects, timeout 5 seconds. `LZ_PUSH_ALLOWED_HOSTS` compares the host name exactly, case-insensitively and without subdomains. Invalid addresses result in `400 bad_request` on registration.
 - **Day of last use:** It is set by creating the mailbox, registering a reader, `subscribe` and `ack`, but not by delivery. A mailbox whose day is more than 90 days in the past is deleted. The relay cleans up every 5 minutes.
 - **Acknowledgments:** `seq` is never reused, not even after messages are deleted. An acknowledgment beyond the highest assigned `seq` is capped to it so that it does not cover future messages. The relay does not respond to `ack`, except with an error.
 - **WebSocket errors:** `code` is one of the error codes above (`bad_request`, `unauthorized`, `unknown_mailbox`, `unknown_reader`, `internal`). For an unreadable frame, the field `mailbox` is missing. `ack` for a mailbox that this connection has not subscribed to results in `bad_request`. If a subscribed mailbox is deleted or the reader is unregistered, the relay sends `unknown_mailbox` or `unknown_reader` respectively and ends the subscription. A repeated `subscribe` on the same connection to the same mailbox replaces the old subscription. At most 256 mailboxes per connection, frames at most 4 KiB.
-- **Derived mailboxes and handovers (M5):** The read token of a mailbox created with the access token or derived results in `401` on `POST /v1/mailboxes`, like an unknown token. Mailboxes that existed before the update count as created with a voucher. In `PUT /v1/handovers/{handover}`, a missing `Lz-Fetch-Hash` means a reveal slot; `Lz-Reply-Hash` then results in `400`. For a handover slot the relay token is checked first (`401`), then the body (`413`, an empty body `400`), then whether the identifier or its reveal identifier is taken or reserved (`409`), then the limit per token (`429`), then the limit of the relay (`503`), which a `PUT` with `Lz-Reply-Hash` needs two places of. For a reveal slot: not reserved `404 unknown_handover`, filled already or an ordinary slot `409`, wrong token `401`, not exactly 32 bytes `400`. A reserved reveal slot that is not filled yet reports `404` on `GET`; a filled one expires with its reservation, 10 minutes after the reserving `PUT`. Malformed hex in the headers results in `400`.
+- **Derived mailboxes and handovers (M5):** The read token of a mailbox created with the access token or derived results in `401` on `POST /v1/mailboxes`, like an unknown token. Mailboxes that existed before the update count as created with a voucher. In `PUT /v1/handovers/{handover}`, a missing `Lz-Fetch-Hash` means a reveal slot; `Lz-Reply-Hash` then results in `400`. For a handover slot the relay token is checked first (`401`), then the body (`413`, an empty body `400`), then whether the identifier or its reveal identifier is taken or reserved (`409`), then the limit per token and then the limit per voucher family (`429`), then the limit of all voucher families together and then that of the relay (`503`), both of which a `PUT` with `Lz-Reply-Hash` needs two places of. For a reveal slot: not reserved `404 unknown_handover`, filled already or an ordinary slot `409`, wrong token `401`, not exactly 32 bytes `400`. A reserved reveal slot that is not filled yet reports `404` on `GET`; a filled one expires with its reservation, 10 minutes after the reserving `PUT`. Malformed hex in the headers results in `400`.
 
 Clarifications made during the implementation of the client and core (M5). They are implementation details and were not confirmed one by one:
 

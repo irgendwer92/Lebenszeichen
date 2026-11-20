@@ -108,3 +108,8 @@ phone (Fairphone 4) with the signed release APK from the branch.
 - [ ] Done test: real battery at 2%, phone switched off, the test contact
       asks and receives "“Phone empty” (reported)" from another device;
       after charging the state is cleared everywhere.
+- [x] 2026-11-19, real battery: at 2% the phone handed "Phone empty" over;
+      the other device showed it as "(from another device)". Found: plugging
+      in cleared it only at the next 10-minute check (by then at 5%), as
+      nothing runs when the cable goes in. The app now also arms a one-time
+      job with the charging constraint when it hands the state over.

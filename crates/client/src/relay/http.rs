@@ -1,10 +1,14 @@
 //! The relay interface over HTTP(S) and WebSocket.
 //!
-//! Plain `http://` is allowed for local tests; in production the relay sits
-//! behind a reverse proxy with TLS.
+//! Plain `http://` is allowed only to the own computer (`localhost` and
+//! loopback addresses), for local tests: an address from someone else (an
+//! invitation, a `hello`) could otherwise make the client send its tokens
+//! unencrypted, or reach into the local network. In production the relay
+//! sits behind a reverse proxy with TLS.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{Duration, SystemTime};
 
 use futures_util::{SinkExt, StreamExt};
 use lz_core::wire::{Hash, MailboxId, RelayUrl, Token};
@@ -32,6 +36,37 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 /// A ping keeps idle stream connections alive through proxies and reveals
 /// dead ones.
 const PING_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The relay's clock minus this device's, in seconds, from the `Date` header
+/// of the last answer of any relay; [`UNKNOWN`] before the first. Shared by
+/// the whole process, so that the window sees what the background fetch saw.
+static CLOCK_OFFSET: AtomicI64 = AtomicI64::new(UNKNOWN);
+
+const UNKNOWN: i64 = i64::MIN;
+
+/// Notes the `Date` header of an answer of a relay, if it has a readable one.
+fn observe_date(headers: &reqwest::header::HeaderMap) {
+    if let Some(offset) = date_offset(headers, SystemTime::now()) {
+        CLOCK_OFFSET.store(offset, Ordering::Relaxed);
+    }
+}
+
+/// The relay's clock minus `now`, from a `Date` header.
+fn date_offset(headers: &reqwest::header::HeaderMap, now: SystemTime) -> Option<i64> {
+    let date = headers
+        .get(reqwest::header::DATE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|text| httpdate::parse_http_date(text).ok())?;
+    Some(offset(date, now))
+}
+
+/// `relay - device` in whole seconds, negative if the device is ahead.
+fn offset(relay: SystemTime, device: SystemTime) -> i64 {
+    match relay.duration_since(device) {
+        Ok(ahead) => i64::try_from(ahead.as_secs()).unwrap_or(i64::MAX),
+        Err(behind) => -i64::try_from(behind.duration().as_secs()).unwrap_or(i64::MAX),
+    }
+}
 
 /// Relays reached over the network.
 #[derive(Clone)]
@@ -75,6 +110,21 @@ impl Http {
     }
 }
 
+/// `https`, or `http` to this computer only.
+fn allowed_url(url: &reqwest::Url) -> bool {
+    match url.scheme() {
+        "https" => true,
+        "http" => url.host_str().is_some_and(|host| {
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        }),
+        _ => false,
+    }
+}
+
 fn base(relay: &RelayUrl) -> &str {
     relay.as_str().trim_end_matches('/')
 }
@@ -104,7 +154,22 @@ struct ErrorBody {
 /// Sends the request and turns every status other than `expected` into an
 /// error.
 async fn send(request: RequestBuilder, expected: StatusCode) -> Result<Response, RelayError> {
-    let response = request.send().await.map_err(|e| with_causes(&e))?;
+    let allowed = request
+        .try_clone()
+        .and_then(|r| r.build().ok())
+        .is_some_and(|r| allowed_url(r.url()));
+    if !allowed {
+        return Err(RelayError::BadAddress);
+    }
+    let response = request.send().await.map_err(|e| {
+        let error = with_causes(&e);
+        match error {
+            // No connection: the request never left.
+            RelayError::Transport(detail) if e.is_connect() => RelayError::Unreachable(detail),
+            other => other,
+        }
+    })?;
+    observe_date(response.headers());
     let status = response.status();
     if status == expected {
         return Ok(response);
@@ -304,12 +369,19 @@ impl Relay for Http {
         send(request, StatusCode::ACCEPTED).await.map(drop)
     }
 
+    fn clock_offset(&self) -> Option<i64> {
+        Some(CLOCK_OFFSET.load(Ordering::Relaxed)).filter(|&o| o != UNKNOWN)
+    }
+
     async fn connect(
         &self,
         relay: &RelayUrl,
         deliveries: mpsc::UnboundedSender<Delivery>,
     ) -> Result<Box<dyn Connection>, RelayError> {
         let base = base(relay);
+        if !reqwest::Url::parse(base).is_ok_and(|url| allowed_url(&url)) {
+            return Err(RelayError::BadAddress);
+        }
         let url = if let Some(rest) = base.strip_prefix("https://") {
             format!("wss://{rest}/v1/stream")
         } else if let Some(rest) = base.strip_prefix("http://") {
@@ -320,10 +392,11 @@ impl Relay for Http {
         let connector = Connector::Rustls(self.tls.clone());
         let connect =
             tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector));
-        let (socket, _) = tokio::time::timeout(TIMEOUT, connect)
+        let (socket, response) = tokio::time::timeout(TIMEOUT, connect)
             .await
             .map_err(|_| RelayError::Timeout)?
             .map_err(transport)?;
+        observe_date(response.headers());
         let (mut sink, mut stream) = socket.split();
 
         // Reads frames until the connection ends, then reports its end.
@@ -709,5 +782,74 @@ mod tests {
             })
         );
         assert_eq!(parse_frame(r#"{"op":"later"}"#), None);
+    }
+
+    #[test]
+    fn offset_is_relay_minus_device() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let device = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        let ahead = device + Duration::from_secs(900);
+        let behind = device - Duration::from_millis(900_500);
+        assert_eq!(super::offset(ahead, device), 900);
+        assert_eq!(super::offset(behind, device), -900);
+        assert_eq!(super::offset(device, device), 0);
+    }
+
+    /// A `Date` header 15 minutes ahead gives the offset; none or an
+    /// unreadable one gives nothing. (Through [`super::observe_date`] the
+    /// offset is shared by the whole process, so tests check this part.)
+    #[test]
+    fn date_header_gives_the_clock_offset() {
+        use reqwest::header::{DATE, HeaderMap, HeaderValue};
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        let mut headers = HeaderMap::new();
+        assert_eq!(super::date_offset(&headers, now), None);
+        let date = httpdate::fmt_http_date(now + Duration::from_secs(900));
+        headers.insert(DATE, HeaderValue::from_str(&date).unwrap());
+        assert_eq!(super::date_offset(&headers, now), Some(900));
+        headers.insert(DATE, HeaderValue::from_static("yesterday"));
+        assert_eq!(super::date_offset(&headers, now), None);
+    }
+
+    #[test]
+    fn clock_warning_from_five_minutes() {
+        use crate::ctx::{clock_warning, clock_warning_text};
+        use crate::i18n::Language;
+        assert_eq!(clock_warning(None), None);
+        assert_eq!(clock_warning(Some(300)), None);
+        assert_eq!(clock_warning(Some(-300)), None);
+        assert_eq!(clock_warning(Some(301)), Some(301));
+        assert_eq!(clock_warning(Some(-900)), Some(-900));
+        let t = Language::En.texts();
+        assert!(clock_warning_text(t, -940).contains("more than 15 min ahead"));
+        assert!(clock_warning_text(t, 301).contains("more than 5 min behind"));
+    }
+
+    #[test]
+    fn plain_http_only_to_this_computer() {
+        let ok = |text: &str| super::allowed_url(&reqwest::Url::parse(text).unwrap());
+        assert!(ok("https://relay.example.org/v1/x"));
+        assert!(ok("http://127.0.0.1:8080/v1/x"));
+        assert!(ok("http://localhost:8080/v1/x"));
+        assert!(ok("http://[::1]:8080/v1/x"));
+        assert!(!ok("http://relay.example.org/v1/x"));
+        assert!(!ok("http://192.168.1.2/v1/x"));
+        assert!(!ok("ftp://relay.example.org/"));
+    }
+
+    #[tokio::test]
+    async fn plain_http_elsewhere_is_refused_before_sending() {
+        let http = Http::new().unwrap();
+        let relay = RelayUrl::new("http://relay.example.org").unwrap();
+        assert_eq!(
+            http.create_voucher(&relay, &[0; 32]).await,
+            Err(RelayError::BadAddress)
+        );
+        let (tx, _rx) = mpsc::unbounded_channel();
+        assert!(matches!(
+            http.connect(&relay, tx).await,
+            Err(RelayError::BadAddress)
+        ));
     }
 }

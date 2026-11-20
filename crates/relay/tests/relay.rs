@@ -8,7 +8,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use lz_relay::ids::{self, MailboxId};
 use lz_relay::push::{PushPolicy, Waker};
-use lz_relay::store::Store;
+use lz_relay::store::{SCHEMA_VERSION, Store};
 use lz_relay::{AppState, ManualClock};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -45,6 +45,21 @@ struct Relay {
     waker: Arc<RecordingWaker>,
     http: reqwest::Client,
     _dir: tempfile::TempDir,
+    /// Runs the server of a relay that can be stopped, see
+    /// [`Relay::start_stoppable`].
+    server: Option<ServerRuntime>,
+}
+
+/// A runtime that is shut down without waiting, also when dropped inside
+/// a test.
+struct ServerRuntime(Option<tokio::runtime::Runtime>);
+
+impl Drop for ServerRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
 }
 
 struct Mailbox {
@@ -79,6 +94,17 @@ impl Relay {
 
     /// Starts on the database `relay.sqlite` in `dir`, which may exist.
     async fn start_in(dir: tempfile::TempDir) -> Self {
+        Self::start_at(dir, "127.0.0.1:0", false).await
+    }
+
+    /// Starts a relay whose server runs on a runtime of its own, so that
+    /// [`Relay::stop`] ends it with all its connections, like a restart of
+    /// the process. `address` may be that of an earlier relay.
+    async fn start_stoppable(dir: tempfile::TempDir, address: &str) -> Self {
+        Self::start_at(dir, address, true).await
+    }
+
+    async fn start_at(dir: tempfile::TempDir, address: &str, own_runtime: bool) -> Self {
         let store = Store::open(&dir.path().join("relay.sqlite")).unwrap();
         let clock = Arc::new(ManualClock::new(START));
         let waker = Arc::new(RecordingWaker::default());
@@ -89,9 +115,30 @@ impl Relay {
             clock.clone(),
             waker.clone(),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(lz_relay::serve(listener, state.clone()));
+        let (addr, server) = if own_runtime {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            let (bound, listener) = {
+                let address = address.to_owned();
+                runtime
+                    .spawn(async move { tokio::net::TcpListener::bind(address).await })
+                    .await
+                    .unwrap()
+                    .map(|listener| (listener.local_addr().unwrap(), listener))
+                    .unwrap()
+            };
+            let addr = bound;
+            runtime.spawn(lz_relay::serve(listener, state.clone()));
+            (addr, Some(ServerRuntime(Some(runtime))))
+        } else {
+            let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(lz_relay::serve(listener, state.clone()));
+            (addr, None)
+        };
         Self {
             base: format!("http://{addr}/v1"),
             ws_url: format!("ws://{addr}/v1/stream"),
@@ -100,7 +147,20 @@ impl Relay {
             waker,
             http: reqwest::Client::new(),
             _dir: dir,
+            server,
         }
+    }
+
+    /// Stops the server and closes every connection. Returns the directory
+    /// of the database and the address, to start on again.
+    fn stop(mut self) -> (tempfile::TempDir, String) {
+        let address = self
+            .base
+            .trim_start_matches("http://")
+            .trim_end_matches("/v1");
+        let address = address.to_owned();
+        drop(self.server.take().expect("started with start_stoppable"));
+        (self._dir, address)
     }
 
     async fn request(
@@ -441,37 +501,42 @@ async fn token_checks() {
 }
 
 #[tokio::test]
-async fn message_size_limit() {
+async fn messages_are_exactly_one_envelope() {
     let relay = Relay::start().await;
     let mailbox = relay.mailbox().await;
-    let (status, json) = relay
-        .post(&mailbox, vec![0; lz_wire::MAX_MESSAGE_BYTES + 1])
-        .await;
-    assert_eq!(
-        (status, json),
-        (StatusCode::PAYLOAD_TOO_LARGE, error("too_large"))
-    );
-    let (status, json) = relay.post(&mailbox, vec![0; 2048]).await;
-    assert_eq!(
-        (status, json),
-        (StatusCode::PAYLOAD_TOO_LARGE, error("too_large"))
-    );
-    assert_eq!(
-        relay
-            .post(&mailbox, vec![0; lz_wire::MAX_MESSAGE_BYTES])
-            .await
-            .0,
-        StatusCode::ACCEPTED
-    );
+    for len in [
+        0,
+        1,
+        lz_wire::ENVELOPE_LEN - 1,
+        lz_wire::ENVELOPE_LEN + 1,
+        lz_wire::MAX_MESSAGE_BYTES,
+        lz_wire::MAX_MESSAGE_BYTES + 1,
+        2048,
+    ] {
+        let (status, json) = relay.post(&mailbox, vec![0; len]).await;
+        assert_eq!(
+            (status, json),
+            (StatusCode::BAD_REQUEST, error("bad_request")),
+            "{len} bytes"
+        );
+    }
+    assert_eq!(relay.waiting(&mailbox), 0);
     assert_eq!(
         relay.post(&mailbox, ENVELOPE.to_vec()).await.0,
         StatusCode::ACCEPTED
     );
+    assert_eq!(relay.waiting(&mailbox), 1);
+    // Refused bodies do not count towards the rate limit.
+    for _ in 1..60 {
+        assert_eq!(
+            relay.post(&mailbox, vec![0; 1]).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
     assert_eq!(
-        relay.post(&mailbox, Vec::new()).await.0,
-        StatusCode::BAD_REQUEST
+        relay.post(&mailbox, ENVELOPE.to_vec()).await.0,
+        StatusCode::ACCEPTED
     );
-    assert_eq!(relay.waiting(&mailbox), 2);
 }
 
 #[tokio::test]
@@ -995,6 +1060,32 @@ async fn derived_mailboxes_up_to_ten() {
     assert_eq!(status, StatusCode::CREATED);
 }
 
+#[tokio::test]
+async fn derived_mailboxes_are_limited_over_their_lifetime() {
+    let relay = Relay::start().await;
+    let parent = relay.voucher_mailbox().await;
+    // Deleting a derived mailbox frees its place among the ten at a time,
+    // but not in the lifetime budget of the voucher mailbox.
+    for _ in 0..lz_relay::limits::MAX_DERIVED_MAILBOXES_EVER {
+        let (status, json, read, send) = relay.derive(&parent).await;
+        let child = mailbox_from(status, json, read, send);
+        assert_eq!(relay.delete(&child).await, StatusCode::NO_CONTENT);
+    }
+    assert_eq!(
+        relay.sql_count("SELECT COUNT(*) FROM mailboxes WHERE origin = 2"),
+        0
+    );
+    let (status, json, _, _) = relay.derive(&parent).await;
+    assert_eq!(
+        (status, json),
+        (StatusCode::TOO_MANY_REQUESTS, error("mailbox_quota"))
+    );
+    // Another voucher family has its own budget.
+    let other = relay.voucher_mailbox().await;
+    let (status, _, _, _) = relay.derive(&other).await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn derived_mailboxes_in_parallel_never_exceed_ten() {
     let relay = Relay::start().await;
@@ -1332,6 +1423,120 @@ async fn handover_limits() {
     relay.clock.advance(600);
     assert_eq!(put(last.read.clone(), None).await.1.0, StatusCode::CREATED);
     assert_eq!(relay.handovers(), 1);
+}
+
+impl Relay {
+    /// `PUT` of a new handover slot with one byte of content.
+    async fn put_slot(&self, bearer: &str, with_reveal: bool) -> (StatusCode, Value) {
+        let slot: [u8; 32] = ids::random();
+        let fetch_hash = ids::sha256(&token().0);
+        let reply_hash = with_reveal.then(|| ids::sha256(&token().0));
+        self.put_handover(
+            &slot,
+            bearer,
+            Some(&fetch_hash),
+            reply_hash.as_ref(),
+            vec![1],
+        )
+        .await
+    }
+
+    async fn derived(&self, parent: &Mailbox) -> Mailbox {
+        let (status, json, read, send) = self.derive(parent).await;
+        mailbox_from(status, json, read, send)
+    }
+}
+
+#[tokio::test]
+async fn voucher_family_shares_one_handover_quota() {
+    let relay = Relay::start().await;
+
+    // The voucher mailbox and its derived mailboxes share two slots; a
+    // reserved reveal slot does not count here.
+    let guest = relay.voucher_mailbox().await;
+    let first = relay.derived(&guest).await;
+    let second = relay.derived(&guest).await;
+    assert_eq!(
+        relay.put_slot(&guest.read, true).await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        relay.put_slot(&first.read, false).await.0,
+        StatusCode::CREATED
+    );
+    for bearer in [&guest.read, &first.read, &second.read] {
+        assert_eq!(
+            relay.put_slot(bearer, false).await,
+            (StatusCode::TOO_MANY_REQUESTS, error("handovers_quota"))
+        );
+    }
+    // A derived mailbox keeps its family when the voucher mailbox is gone.
+    assert_eq!(relay.delete(&guest).await, StatusCode::NO_CONTENT);
+    assert_eq!(
+        relay.put_slot(&second.read, false).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+
+    // Another voucher family and the owner have their own quotas.
+    let other = relay.voucher_mailbox().await;
+    assert_eq!(
+        relay.put_slot(&other.read, false).await.0,
+        StatusCode::CREATED
+    );
+    let own = relay.mailbox().await;
+    assert_eq!(
+        relay.put_slot(&own.read, false).await.0,
+        StatusCode::CREATED
+    );
+    let access = ids::encode(&ACCESS_TOKEN);
+    assert_eq!(relay.put_slot(&access, false).await.0, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn voucher_families_cannot_fill_the_relay() {
+    use lz_relay::limits::{MAX_GUEST_HANDOVERS, MAX_HANDOVERS};
+    let relay = Relay::start().await;
+
+    // Guests together hold at most their share of the relay's slots,
+    // reserved reveal slots included: here each family has two slots with a
+    // reservation each.
+    for _ in 0..MAX_GUEST_HANDOVERS / 4 {
+        let guest = relay.voucher_mailbox().await;
+        for _ in 0..2 {
+            assert_eq!(
+                relay.put_slot(&guest.read, true).await.0,
+                StatusCode::CREATED
+            );
+        }
+    }
+    assert_eq!(relay.handovers(), MAX_GUEST_HANDOVERS as i64);
+    let late = relay.voucher_mailbox().await;
+    assert_eq!(
+        relay.put_slot(&late.read, false).await,
+        (StatusCode::SERVICE_UNAVAILABLE, error("handovers_full"))
+    );
+
+    // The owner still has the rest, to add its own devices.
+    let access = ids::encode(&ACCESS_TOKEN);
+    assert_eq!(relay.put_slot(&access, true).await.0, StatusCode::CREATED);
+    assert_eq!(relay.put_slot(&access, false).await.0, StatusCode::CREATED);
+    let mut free = MAX_HANDOVERS - MAX_GUEST_HANDOVERS - 3;
+    while free > 0 {
+        let own = relay.mailbox().await;
+        for _ in 0..free.min(2) {
+            assert_eq!(
+                relay.put_slot(&own.read, false).await.0,
+                StatusCode::CREATED
+            );
+            free -= 1;
+        }
+    }
+    assert_eq!(relay.handovers(), MAX_HANDOVERS as i64);
+    let own = relay.mailbox().await;
+    assert_eq!(
+        relay.put_slot(&own.read, false).await,
+        (StatusCode::SERVICE_UNAVAILABLE, error("handovers_full"))
+    );
 }
 
 #[tokio::test]
@@ -1702,7 +1907,7 @@ async fn migration_from_version_0() {
 
     let relay = Relay::start_in(dir).await;
     let (version, migrated) = schema_of(&path);
-    assert_eq!(version, 1);
+    assert_eq!(version, SCHEMA_VERSION);
     assert_eq!(
         relay.sql_count("SELECT COUNT(*) FROM mailboxes WHERE origin = 1 AND parent IS NULL"),
         2
@@ -1727,7 +1932,7 @@ async fn migration_from_version_0() {
 
     // Opening again changes nothing.
     drop(Store::open(&path).unwrap());
-    assert_eq!(schema_of(&path), (1, migrated.clone()));
+    assert_eq!(schema_of(&path), (SCHEMA_VERSION, migrated.clone()));
     assert_eq!(relay.sql_count("SELECT COUNT(*) FROM mailboxes"), 3);
     assert_eq!(relay.sql_count("SELECT COUNT(*) FROM messages"), 2);
 
@@ -1735,7 +1940,113 @@ async fn migration_from_version_0() {
     let fresh = tempfile::tempdir().unwrap();
     let fresh_path = fresh.path().join("relay.sqlite");
     drop(Store::open(&fresh_path).unwrap());
-    assert_eq!(schema_of(&fresh_path), (1, migrated));
+    assert_eq!(schema_of(&fresh_path), (SCHEMA_VERSION, migrated));
+}
+
+/// Version 0 to 1 on top of [`SCHEMA_V0`], as in the relay from M5 to M8.
+const MIGRATION_V1: &str = "
+ALTER TABLE mailboxes ADD COLUMN origin INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE mailboxes ADD COLUMN parent BLOB;
+CREATE INDEX mailboxes_read_token_hash ON mailboxes(read_token_hash);
+CREATE INDEX mailboxes_parent ON mailboxes(parent);
+CREATE TABLE handovers (
+    id         BLOB PRIMARY KEY,
+    data       BLOB,
+    fetch_hash BLOB NOT NULL,
+    auth_hash  BLOB,
+    expires_at INTEGER NOT NULL,
+    reveal     INTEGER NOT NULL
+) WITHOUT ROWID;
+";
+
+#[tokio::test]
+async fn migration_from_version_1() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("relay.sqlite");
+    let (read_raw, read) = token();
+    let (send_raw, send) = token();
+    let (fetch_raw, fetch) = token();
+    let parent_id: [u8; 32] = ids::random();
+    let slot: [u8; 32] = ids::random();
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA_V0).unwrap();
+        conn.execute_batch(MIGRATION_V1).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        let day = START.div_euclid(86_400);
+        conn.execute(
+            "INSERT INTO mailboxes VALUES (?1, ?2, ?3, 1, ?4, 1, NULL)",
+            rusqlite::params![
+                &parent_id[..],
+                &ids::sha256(&read_raw)[..],
+                &ids::sha256(&send_raw)[..],
+                day
+            ],
+        )
+        .unwrap();
+        // Three derived mailboxes of the voucher mailbox, one of the owner.
+        for origin in [2, 2, 2, 0] {
+            let id: [u8; 32] = ids::random();
+            let parent = (origin == 2).then_some(&parent_id[..]);
+            conn.execute(
+                "INSERT INTO mailboxes VALUES (?1, ?2, ?2, 1, ?3, ?4, ?5)",
+                rusqlite::params![&id[..], &ids::sha256(&id)[..], day, origin, parent],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO handovers VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+            rusqlite::params![
+                &slot[..],
+                &[7u8; 10][..],
+                &ids::sha256(&fetch_raw)[..],
+                &ids::sha256(&read_raw)[..],
+                START + 600
+            ],
+        )
+        .unwrap();
+    }
+
+    let relay = Relay::start_in(dir).await;
+    let (version, migrated) = schema_of(&path);
+    assert_eq!(version, SCHEMA_VERSION);
+    assert_eq!(
+        relay.sql_count("SELECT derived_total FROM mailboxes WHERE origin = 1"),
+        3
+    );
+    assert_eq!(
+        relay.sql_count("SELECT SUM(derived_total) FROM mailboxes WHERE origin <> 1"),
+        0
+    );
+    // The waiting slot is intact and counts as the owner's.
+    assert_eq!(
+        relay.sql_count("SELECT COUNT(*) FROM handovers WHERE family IS NULL"),
+        1
+    );
+    assert_eq!(relay.get_handover(&slot, &fetch).await, Ok(vec![7; 10]));
+
+    // The voucher mailbox derives on, up to ten at a time.
+    let parent = Mailbox {
+        id: ids::encode(&parent_id),
+        read,
+        send,
+    };
+    for _ in 0..7 {
+        let (status, _, _, _) = relay.derive(&parent).await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let (status, _, _, _) = relay.derive(&parent).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        relay.sql_count("SELECT derived_total FROM mailboxes WHERE origin = 1"),
+        10
+    );
+
+    // A fresh database ends up identical.
+    let fresh = tempfile::tempdir().unwrap();
+    let fresh_path = fresh.path().join("relay.sqlite");
+    drop(Store::open(&fresh_path).unwrap());
+    assert_eq!(schema_of(&fresh_path), (SCHEMA_VERSION, migrated));
 }
 
 #[tokio::test]
@@ -1745,7 +2056,128 @@ async fn newer_schema_is_refused() {
     drop(Store::open(&path).unwrap());
     rusqlite::Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 2)
+        .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
         .unwrap();
     assert!(Store::open(&path).is_err());
+}
+
+#[tokio::test]
+async fn waiting_messages_survive_a_restart_and_a_listener_reconnects() {
+    let relay = Relay::start_stoppable(tempfile::tempdir().unwrap(), "127.0.0.1:0").await;
+    let mailbox = relay.mailbox().await;
+    let voucher = relay.voucher_mailbox().await;
+    let reader = reader_id(1);
+    let idle = reader_id(2);
+    relay.put_reader(&mailbox, &reader, None).await;
+    // A second reader that never connects keeps messages waiting.
+    relay.put_reader(&mailbox, &idle, None).await;
+    for n in 1..=2 {
+        assert_eq!(
+            relay.post(&mailbox, envelope(n)).await.0,
+            StatusCode::ACCEPTED
+        );
+    }
+
+    // The listener has message 1 acknowledged, message 2 received but not.
+    let mut listener = relay.connect().await;
+    assert_eq!(
+        listener.subscribe(&mailbox, &reader).await,
+        subscribed(&mailbox)
+    );
+    listener.expect_message(&mailbox, 1, &envelope(1)).await;
+    listener.expect_message(&mailbox, 2, &envelope(2)).await;
+    listener.ack(&mailbox, 1).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The relay goes away. The connection ends and posting fails.
+    let url = relay.base.clone();
+    let (dir, address) = relay.stop();
+    let ended = tokio::time::timeout(Duration::from_secs(5), listener.0.next())
+        .await
+        .expect("the connection stayed open");
+    assert!(
+        !matches!(ended, Some(Ok(Message::Text(_)))),
+        "unexpected frame: {ended:?}"
+    );
+    let down = reqwest::Client::new()
+        .post(format!("{url}/mailboxes/{}/messages", mailbox.id))
+        .bearer_auth(&mailbox.send)
+        .body(envelope(3))
+        .send()
+        .await;
+    assert!(down.is_err(), "the stopped relay answered");
+
+    // Same database, same address.
+    let relay = Relay::start_stoppable(dir, &address).await;
+    assert_eq!(relay.base, url);
+    assert_eq!(relay.waiting(&mailbox), 2);
+    // The mailbox, its tokens and the readers are still there, and
+    // sequence numbers go on.
+    assert_eq!(
+        relay.post(&mailbox, envelope(3)).await.0,
+        StatusCode::ACCEPTED
+    );
+
+    // The listener reconnects without registering again, and gets what it
+    // had not acknowledged, including what arrived in between.
+    let mut listener = relay.connect().await;
+    assert_eq!(
+        listener.subscribe(&mailbox, &reader).await,
+        subscribed(&mailbox)
+    );
+    listener.expect_message(&mailbox, 2, &envelope(2)).await;
+    listener.expect_message(&mailbox, 3, &envelope(3)).await;
+    listener.expect_silence().await;
+    // Live delivery works again.
+    assert_eq!(
+        relay.post(&mailbox, envelope(4)).await.0,
+        StatusCode::ACCEPTED
+    );
+    listener.expect_message(&mailbox, 4, &envelope(4)).await;
+    // The idle reader still gets everything from the start.
+    let mut other = relay.connect().await;
+    assert_eq!(other.subscribe(&mailbox, &idle).await, subscribed(&mailbox));
+    for n in 1..=4 {
+        other.expect_message(&mailbox, n as u64, &envelope(n)).await;
+    }
+
+    // Acknowledgements after the restart count as before.
+    listener.ack(&mailbox, 4).await;
+    other.ack(&mailbox, 4).await;
+    other.expect_silence().await;
+    assert_eq!(relay.waiting(&mailbox), 0);
+
+    // A voucher mailbox still derives, and a wrong token is still refused.
+    let (status, ..) = relay.derive(&voucher).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let wrong = Mailbox {
+        id: mailbox.id.clone(),
+        read: mailbox.read.clone(),
+        send: mailbox.read.clone(),
+    };
+    assert_eq!(
+        relay.post(&wrong, envelope(5)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn messages_expire_by_their_arrival_time_across_a_restart() {
+    let relay = Relay::start_stoppable(tempfile::tempdir().unwrap(), "127.0.0.1:0").await;
+    let mailbox = relay.mailbox().await;
+    relay.put_reader(&mailbox, &reader_id(1), None).await;
+    relay.post(&mailbox, envelope(1)).await;
+    let (dir, address) = relay.stop();
+
+    // The new process starts at the same time as the old one, then the
+    // clock runs on: the 24 hours count from arrival, not from the start.
+    let relay = Relay::start_stoppable(dir, &address).await;
+    assert_eq!(relay.waiting(&mailbox), 1);
+    relay.clock.advance(23 * 3600);
+    let mut client = relay.connect().await;
+    assert_eq!(
+        client.subscribe(&mailbox, &reader_id(1)).await,
+        subscribed(&mailbox)
+    );
+    client.expect_message(&mailbox, 1, &envelope(1)).await;
 }

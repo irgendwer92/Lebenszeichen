@@ -62,6 +62,25 @@ impl core::fmt::Debug for ContactKey {
     }
 }
 
+/// Position of the direction marker in the plaintext of the ordinary form:
+/// its last byte, which the padding of every message between contacts
+/// leaves free and older clients ignore.
+const DIRECTION: usize = PADDED_PLAINTEXT_LEN - 1;
+
+/// Older clients send no direction marker; accepted until all have one.
+const NO_DIRECTION: u8 = 0;
+
+/// The direction marker of messages from `sender` to `recipient`: 1 from
+/// the side with the lower public key, 2 from the higher one.
+///
+/// `crypto_box` gives both directions the same key, so without it a relay
+/// could hand a message back to its own sender, where it would decrypt as
+/// if it came from the other side ("reflection"): a request shown as the
+/// contact's, an own answer shown as theirs.
+fn direction(sender: &PublicKey, recipient: &PublicKey) -> u8 {
+    if sender < recipient { 1 } else { 2 }
+}
+
 const NONCE: core::ops::Range<usize> = 1..1 + NONCE_LEN;
 const TAG: core::ops::Range<usize> = NONCE.end..NONCE.end + TAG_LEN;
 const CIPHERTEXT: core::ops::RangeFrom<usize> = TAG.end..;
@@ -77,6 +96,13 @@ pub fn seal(
     envelope[0] = PROTOCOL_VERSION;
     rng.fill_bytes(&mut envelope[NONCE]);
     message.encode(&mut envelope[CIPHERTEXT])?;
+    let marker = &mut envelope[CIPHERTEXT.start + DIRECTION];
+    if *marker != 0 {
+        // The body reached into the marker's byte; no message between
+        // contacts is that long.
+        return Err(Error::Wire(crate::wire::Error::TooLong));
+    }
+    *marker = direction(&sender.public_key(), recipient);
 
     let (head, ciphertext) = envelope.split_at_mut(CIPHERTEXT.start);
     let tag = SalsaBox::new(&(*recipient).into(), &sender.0)
@@ -89,7 +115,9 @@ pub fn seal(
 /// Decrypts an envelope in the ordinary form.
 ///
 /// Fails with [`Error::Decrypt`] if it was not encrypted between exactly
-/// these two keys or was altered on the way.
+/// these two keys or was altered on the way, and also if it carries the
+/// direction marker of `recipient` itself: then it is an own message handed
+/// back (see [`direction`]).
 pub fn open(envelope: &[u8], recipient: &ContactKey, sender: &PublicKey) -> Result<Message, Error> {
     let envelope = check_envelope(envelope)?;
     let mut plaintext = [0; PADDED_PLAINTEXT_LEN];
@@ -102,6 +130,10 @@ pub fn open(envelope: &[u8], recipient: &ContactKey, sender: &PublicKey) -> Resu
             envelope[TAG].into(),
         )
         .map_err(|_| Error::Decrypt)?;
+    let marker = plaintext[DIRECTION];
+    if marker != NO_DIRECTION && marker != direction(sender, &recipient.public_key()) {
+        return Err(Error::Decrypt);
+    }
     Ok(Message::decode(&plaintext)?)
 }
 
@@ -340,6 +372,40 @@ mod tests {
         assert_eq!(open(&envelope, &b, &a.public_key()).unwrap(), request());
     }
 
+    /// A relay hands a message back to its sender: it decrypts with the same
+    /// key, but carries the sender's own direction marker and is refused.
+    #[test]
+    fn ordinary_form_refuses_a_reflected_message() {
+        let a = ContactKey::generate(&mut OsRng);
+        let b = ContactKey::generate(&mut OsRng);
+        let to_b = seal(&request(), &a, &b.public_key(), &mut OsRng).unwrap();
+        assert_eq!(open(&to_b, &a, &b.public_key()), Err(Error::Decrypt));
+        let to_a = seal(&request(), &b, &a.public_key(), &mut OsRng).unwrap();
+        assert_eq!(open(&to_a, &b, &a.public_key()), Err(Error::Decrypt));
+        assert_eq!(open(&to_a, &a, &b.public_key()).unwrap(), request());
+    }
+
+    /// Envelopes of older clients have no marker (zero) and still open.
+    #[test]
+    fn ordinary_form_accepts_envelopes_without_a_marker() {
+        use crypto_box::aead::AeadInPlace;
+        let a = ContactKey::generate(&mut OsRng);
+        let b = ContactKey::generate(&mut OsRng);
+        let mut envelope = [0; ENVELOPE_LEN];
+        envelope[0] = PROTOCOL_VERSION;
+        envelope[super::NONCE].fill(9);
+        request().encode(&mut envelope[super::CIPHERTEXT]).unwrap();
+        let (head, ciphertext) = envelope.split_at_mut(super::CIPHERTEXT.start);
+        let tag = crypto_box::SalsaBox::new(&b.public_key().into(), &a.0)
+            .encrypt_in_place_detached(head[super::NONCE].into(), b"", ciphertext)
+            .unwrap();
+        head[super::TAG].copy_from_slice(&tag);
+        assert_eq!(open(&envelope, &b, &a.public_key()).unwrap(), request());
+        // Without a marker a reflection still opens: the reason older
+        // clients' envelopes are accepted only for a transition.
+        assert_eq!(open(&envelope, &a, &b.public_key()).unwrap(), request());
+    }
+
     #[test]
     fn ordinary_form_rejects_wrong_keys_and_tampering() {
         let a = ContactKey::generate(&mut OsRng);
@@ -406,10 +472,12 @@ mod tests {
 
     // Envelopes made with libsodium through PyNaCl 1.6.2: contact keys
     // 32 × 0x0a (sender) and 32 × 0x0b (recipient), the plaintext of
-    // `request()`. The ordinary form uses the nonce 0, 1, …, 23.
+    // `request()`. The ordinary form uses the nonce 0, 1, …, 23, and its
+    // plaintext ends in the direction marker 2 (0x0a's public key is the
+    // higher one).
     const LIBSODIUM_ORDINARY: &[&str] = &[
-        "01000102030405060708090a0b0c0d0e0f1011121314151617e2e349be0493cc",
-        "40ed57db98bdb08a40d0a682be173c356c77f6a8b88321e17d69dcf2899727ae",
+        "01000102030405060708090a0b0c0d0e0f10111213141516179ad93792e495c5",
+        "3c1bdcb9cc96db8940d0a682be173c356c77f6a8b88321e17d69dcf2899727ae",
         "53efca9c4cd837ec475be9ad9be60ffc68f527e153eee45a7bdb2ccc67be5bda",
         "27da7a414f60ea6e44750d1c9dd2064cc2bdf37d1774d20627ebdff880bf50bb",
         "fa40ed7b5dd259c3263baae46e11ffd314f865e74f3ce6a4458ac3e8d59a2272",
@@ -417,7 +485,7 @@ mod tests {
         "bb244211241a5c42a77a6e4c04b4e11c990b50f85c9c38d8610e361ae4a4632e",
         "dbd214b48ed99382d62b54df6282bea96b3d26242a659d56324c121521c170c9",
         "99871e1bfcdb008d32268c83439997cdd50dd3706144d8457137e8ef561733d8",
-        "f6721a207ae1f09bbb",
+        "f6721a207ae1f09bb9",
     ];
     const LIBSODIUM_SEALED: &[&str] = &[
         "01786e4e502848eb349086bfe587de9d90c716d3c06553f2d328b1688131977e",
