@@ -1,10 +1,25 @@
 # Lebenszeichen
 
-Some people cannot manage to reply to messages when they are not doing well.
-Others then worry. On request, Lebenszeichen asks for a minimal sign of life:
-one request, one single possible response, and dismissing counts.
+A notification appears. Lebenszeichen? You just tap it or wipe it like a
+bug, and it's gone.
 
-No chat, no online status, no schedule, no alarm chain.
+That's the whole answer. No small talk, no feeling to express, there's nothing
+to explain and nothing to choose, it takes no technical skill and no thought
+beforehand. It doesn't pull you out of what you're doing or break your train
+of thought. Afterwards you remember, someone thought of you and you've shown
+them you exist. Your peer isn't troubled, you feel good.
+
+Lebenszeichen ("sign of life") is for:
+
+- days when you cannot manage to reply to messages,
+- focused work you don't want a chat to interrupt,
+- parents and children who want a quick "all fine?",
+- older relatives, for whom a message thread is too much hassle.
+
+No chat, no online status, no schedule, no alarm chain. It is not an emergency
+alarm: if nobody reacts, the request only expires. But if you want, it
+integrates: Home Assistant, scripts or your phone's battery can answer for you
+([local interface](docs/local-interface.md)).
 
 ## Status
 
