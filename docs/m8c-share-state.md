@@ -105,9 +105,9 @@ phone (Fairphone 4) with the signed release APK from the branch.
       hardware and ignore the faked values (and the phone charged over the
       adb cable), so nothing happened; the app now reads the sticky
       `ACTION_BATTERY_CHANGED` broadcast first, as the status bar does.
-- [ ] Done test: real battery at 2%, phone switched off, the test contact
-      asks and receives "“Phone empty” (reported)" from another device;
-      after charging the state is cleared everywhere.
+- [x] Done test (2026-11-25): real battery at 2%, phone switched off, the
+      test contact asks and receives "“Phone empty” (reported)" from
+      another device; after charging the state is cleared everywhere.
 - [x] 2026-11-19, real battery: at 2% the phone handed "Phone empty" over;
       the other device showed it as "(from another device)". Found: plugging
       in cleared it only at the next 10-minute check (by then at 5%), as
