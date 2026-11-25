@@ -28,9 +28,9 @@ via their own relay with wake signals, and the CI builds a signed APK. M5
 an answer on one withdraws the request on the other, and new devices are added
 with a QR code and two check codes. M6 (Windows) is done: an installer from
 the CI, notification and foreground window, start at login; still to check
-is Do Not Disturb on Windows 11. M7 to M8b (answer notification, local
-interface, container and Home Assistant) are complete; M8c (handing a state
-to the own devices) is done except its final test. M9 (hardening) is done except for a review and a guide test by
+is Do Not Disturb on Windows 11. M7 to M8c (answer notification, local
+interface, container and Home Assistant, handing a state to the own devices)
+are complete. M9 (hardening) is done except for a review and a guide test by
 a person: [docs/self-hosting.md](docs/self-hosting.md) describes running your
 own relay. Status in [docs/roadmap.md](docs/roadmap.md).
 

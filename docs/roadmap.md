@@ -171,11 +171,12 @@ Scope:
 - **Done when:** a Home Assistant automation and a host script each report "asleep" and the requester sees "“asleep” (reported)".
 - Plan, decisions, page API and test record in `m8b-container.md`. Done criterion met on 2026-11-17: a host script on the container's socket and a `shell_command` in Home Assistant OS each set a state, and the test contact received it as a reported answer after the waiting time.
 
-### M8c – Handing a state to the own devices
+### M8c – Handing a state to the own devices (completed on 2026-11-25)
 - A device can hand its reported state to the other own devices through the sync mailbox (new sync message, contacts and relay see nothing new); clearing is handed on the same way. Each receiving device answers its contacts after the waiting time where reported answers are allowed on it.
 - Option on the state (`share`), on the socket, the pipe and the Android intent.
 - Use case: the phone at low battery hands "Phone empty" to the desktop and the Home Assistant add-on, and clears it again at 5% or when charging. Decided on 2026-11-17: the Android app reads the battery level itself (setting, 2%, checked about every 10 minutes and at every fetch) instead of a Tasker trigger.
 - Plan, decisions and test record in `m8c-share-state.md`.
+- Done criterion met on 2026-11-25 with the real battery; test record in `m8c-share-state.md`.
 - **Done when:** the phone hands over "Phone empty" at 2%, the phone is switched off, a contact asks and sees "“Phone empty” (reported)" from another device after the waiting time; at 5% or when charging the state is cleared on all devices.
 
 ### M9 – Hardening
