@@ -18,8 +18,8 @@ Lebenszeichen ("sign of life") is for:
 
 No chat, no online status, no schedule, no alarm chain. It is not an emergency
 alarm: if nobody reacts, the request only expires. But if you want, it
-integrates: Home Assistant, scripts or your phone's battery can answer for you
-([local interface](docs/local-interface.md)).
+plugs in: Home Assistant, your phone's battery or your own scripts can leave a
+note like "asleep" or "Phone empty" ([local interface](docs/local-interface.md)).
 
 ## Status
 
