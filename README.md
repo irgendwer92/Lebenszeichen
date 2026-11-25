@@ -3,11 +3,11 @@
 A notification appears. Lebenszeichen? You just tap it or wipe it like a
 bug, and it's gone.
 
-That's the whole answer. No small talk, no feeling to express, there's nothing
-to explain and nothing to choose, it takes no technical skill and no thought
+That's the whole answer. No small talk, no feeling to express, nothing
+to explain and nothing to choose. It takes no technical skill and no thought
 beforehand. It doesn't pull you out of what you're doing or break your train
-of thought. Afterwards you remember, someone thought of you and you've shown
-them you exist. Your peer isn't troubled, you feel good.
+of thought. Afterwards you remember: Someone thought of you and you've shown
+them you exist. Your peer isn't troubled, you can relax.
 
 Lebenszeichen ("sign of life") is for:
 
