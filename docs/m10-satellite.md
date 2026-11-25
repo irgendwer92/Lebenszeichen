@@ -597,10 +597,9 @@ Without the API, which is left for later:
 
 ## Open points
 
-1. **When to drop the shared token without a removal.** *Recommendation:*
-   once every own device has its own token on a mailbox (each device marks
-   this in `device`), so that the protection holds before any removal; not
-   in M10.
+None. Decided on 2026-11-25: the shared token on contact mailboxes is
+dropped only at a removal, not earlier. Readers planted before a removal
+are caught by it (`revoke-readers`), which is enough.
 
 ## Work
 
