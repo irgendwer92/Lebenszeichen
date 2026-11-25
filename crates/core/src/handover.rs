@@ -341,6 +341,12 @@ pub struct Handover {
     /// In the form of the state file; open invitations and pairings that
     /// are not complete stay on E.
     pub contacts: Vec<StoredContact>,
+    /// The satellites (M10), with their settings and the replay protection
+    /// of their channels; the `read_token` of each is an enrolment token E
+    /// registered for N on the channel mailbox. Left out when empty, and
+    /// ignored by older devices.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub satellites: Vec<crate::satellite::Satellite>,
 }
 
 impl Handover {
@@ -397,6 +403,11 @@ impl Device {
                     ..c.clone()
                 })
                 .collect(),
+            satellites: self
+                .satellites
+                .iter()
+                .map(crate::satellite::Satellite::for_handover)
+                .collect(),
         })
     }
 
@@ -423,6 +434,8 @@ impl Device {
             transfers: Vec::new(),
             parked: Vec::new(),
             reports: Default::default(),
+            satellites: handover.satellites,
+            satellite_transfers: Vec::new(),
         }
     }
 }

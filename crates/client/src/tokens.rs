@@ -39,6 +39,8 @@ pub(crate) enum Own {
     Contact(MailboxId),
     /// The mailbox of an open invitation.
     Invitation(MailboxId),
+    /// The channel mailbox of a satellite (M10), by its identifier.
+    Channel(MailboxId),
 }
 
 /// What the device holds for one own mailbox.
@@ -83,6 +85,9 @@ pub(crate) fn held(device: &Device, own: Own) -> Option<Held> {
             .iter()
             .find(|i| i.pending.own.mailbox == mailbox)
             .map(|i| of(i, i.new_token, i.pending.own.relay, mailbox)),
+        Own::Channel(mailbox) => device
+            .satellite_by_mailbox(&mailbox)
+            .map(|s| of(s, s.new_token, s.relay, mailbox)),
     }
 }
 
@@ -103,11 +108,17 @@ fn tokens_mut(device: &mut Device, own: Own) -> Option<(&mut Option<Token>, &mut
             .iter_mut()
             .find(|i| i.pending.own.mailbox == mailbox)
             .map(|i| (&mut i.own_token, &mut i.new_token)),
+        Own::Channel(mailbox) => device
+            .satellites
+            .iter_mut()
+            .find(|s| s.mailbox == mailbox)
+            .map(|s| (&mut s.own_token, &mut s.new_token)),
     }
 }
 
 /// Every own mailbox of the device: the sync mailbox, those of contacts
-/// that have not ended, and those of open invitations.
+/// that have not ended, those of open invitations, and the channels of the
+/// satellites.
 pub(crate) fn all_own(device: &Device) -> Vec<Own> {
     let group = device.group.iter().map(|_| Own::Group);
     let contacts = device
@@ -119,7 +130,12 @@ pub(crate) fn all_own(device: &Device) -> Vec<Own> {
         .invitations
         .iter()
         .map(|i| Own::Invitation(i.pending.own.mailbox));
-    group.chain(contacts).chain(invitations).collect()
+    let channels = device.satellites.iter().map(|s| Own::Channel(s.mailbox));
+    group
+        .chain(contacts)
+        .chain(invitations)
+        .chain(channels)
+        .collect()
 }
 
 /// The own mailbox `mailbox` on `relay`, if it is one.

@@ -73,13 +73,15 @@ pub struct DeviceView {
     pub reader: String,
     /// This device.
     pub this: bool,
+    /// A satellite (M10), not a full device.
+    pub satellite: bool,
 }
 
-fn to_hex(reader: &ReaderId) -> String {
+pub(crate) fn to_hex(reader: &ReaderId) -> String {
     reader.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn from_hex(text: &str) -> Option<ReaderId> {
+pub(crate) fn from_hex(text: &str) -> Option<ReaderId> {
     let mut reader = ReaderId::default();
     if text.len() != 2 * reader.len() || !text.is_ascii() {
         return None;
@@ -111,7 +113,7 @@ fn unique_name<'a>(name: &str, taken: impl Iterator<Item = &'a str> + Clone) -> 
 }
 
 /// Checks the name of a device: not empty, at most 32 bytes.
-fn device_name(t: Texts, name: &str) -> Result<String> {
+pub(crate) fn device_name(t: Texts, name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
         return Err(fail!(t, "error-device-name-empty"));
@@ -165,9 +167,10 @@ struct Target {
     own: bool,
 }
 
-/// The mailboxes a new device is registered on: the sync mailbox and those
-/// of the paired contacts, not those of open invitations or pairings in
-/// progress, which the handover leaves out as well.
+/// The mailboxes a new device is registered on: the sync mailbox, those of
+/// the paired contacts and the channels of the satellites, not those of
+/// open invitations or pairings in progress, which the handover leaves out
+/// as well.
 fn mailboxes_for_new_device(device: &Device) -> Vec<Target> {
     let mut list = Vec::new();
     if let Some(group) = &device.group {
@@ -190,6 +193,14 @@ fn mailboxes_for_new_device(device: &Device) -> Vec<Target> {
             own: contact.own_token.is_some(),
         });
     }
+    for satellite in &device.satellites {
+        list.push(Target {
+            relay: satellite.relay,
+            mailbox: satellite.mailbox,
+            token: satellite.token(),
+            own: satellite.own_token.is_some(),
+        });
+    }
     list
 }
 
@@ -208,16 +219,22 @@ fn with_enrolment(device: &Device, enrolment: &HashMap<MailboxId, Token>) -> Dev
             contact.read_token = *token;
         }
     }
+    for satellite in &mut device.satellites {
+        if let Some(token) = enrolment.get(&satellite.mailbox) {
+            satellite.read_token = *token;
+        }
+    }
     device
 }
 
 /// The readers that stay when `removed` is removed: those of the other own
-/// devices. Satellites, once there are any, are added here (M10, part 2).
+/// devices and of the satellites (M10).
 fn kept_readers(device: &Device, removed: &ReaderId) -> Vec<ReaderId> {
     device
         .devices
         .iter()
         .map(|d| d.reader)
+        .chain(device.satellites.iter().map(|s| s.reader))
         .filter(|r| r != removed)
         .collect()
 }
@@ -834,11 +851,19 @@ impl<R: Relay> Ctx<R> {
             name: device.name.clone().unwrap_or_default(),
             reader: to_hex(&device.reader_id),
             this: true,
+            satellite: false,
         }];
         list.extend(device.devices.iter().map(|d| DeviceView {
             name: d.name.clone(),
             reader: to_hex(&d.reader),
             this: false,
+            satellite: false,
+        }));
+        list.extend(device.satellites.iter().map(|s| DeviceView {
+            name: s.name.clone(),
+            reader: to_hex(&s.reader),
+            this: false,
+            satellite: true,
         }));
         Ok(list)
     }
@@ -888,6 +913,9 @@ impl<R: Relay> Ctx<R> {
             let line = match (device.this, device.name.is_empty()) {
                 (true, false) => tr!(t, "out-device-this", name = &device.name),
                 (true, true) => tr!(t, "out-device-this-unnamed"),
+                (false, _) if device.satellite => {
+                    tr!(t, "out-device-satellite", name = &device.name)
+                }
                 (false, _) => tr!(t, "out-device-other", name = &device.name),
             };
             self.say(&line);
@@ -920,6 +948,11 @@ impl<R: Relay> Ctx<R> {
         let reader = from_hex(reader).ok_or_else(|| fail!(t, "error-unknown-device"))?;
         if reader == device.reader_id {
             return Err(fail!(t, "error-remove-this-device"));
+        }
+        if let Some(satellite) = device.satellite(&reader) {
+            let name = satellite.name.clone();
+            self.remove_satellite_reader(&reader, &name).await?;
+            return Ok(Removal::default());
         }
         let name = device
             .devices
@@ -984,6 +1017,8 @@ impl<R: Relay> Ctx<R> {
             device.outbox.clear();
             Ok(())
         })?;
+        // The new send token of the channels goes to the satellites.
+        self.flush_outbox().await?;
         self.say(&tr!(t, "out-device-removed", name = name));
         if others > 0 {
             self.say(&tr!(t, "out-devices-unlinked"));
@@ -1037,6 +1072,15 @@ impl<R: Relay> Ctx<R> {
             .filter(|c| !c.state.ended)
             .map(|c| (c.state.contact.own_mailbox, c.name.clone()))
             .collect();
+        // The channels first: the removed device knows their key and send
+        // token (m10-satellite.md, "Removing a full device while there is a
+        // satellite").
+        if let Some(error) = self
+            .lock_out_of_channels(&keep, reader, &mut removal.hidden)
+            .await?
+        {
+            first_error.get_or_insert(error);
+        }
         for (mailbox, name) in contacts {
             let own = Own::Contact(mailbox);
             let result = match self.take_own_token(own).await? {
@@ -1098,7 +1142,8 @@ impl<R: Relay> Ctx<R> {
         &mut self,
         queue: impl FnOnce(&mut Device, u64) -> std::result::Result<(), lz_core::Error>,
     ) -> Result<()> {
-        if self.load()?.group.is_none() {
+        let device = self.load()?;
+        if device.group.is_none() && device.satellites.is_empty() {
             return Ok(());
         }
         let now = self.now();
@@ -1111,6 +1156,10 @@ impl<R: Relay> Ctx<R> {
     /// once, not again at every fetch while the outbox stays blocked for the
     /// same reason.
     pub(crate) async fn flush_outbox(&mut self) -> Result<()> {
+        // The channels of the satellites first (M10): contacts paired here
+        // still have to be registered for them.
+        self.enrol_satellites().await?;
+        self.flush_channels().await?;
         let refused = self.deliver_outbox().await?.map(|error| {
             tr!(
                 self.texts(),

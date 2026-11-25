@@ -419,7 +419,24 @@ impl ContactState {
             | Body::ContactPart(_)
             | Body::ContactRemoved(_)
             | Body::StateShared(_)
-            | Body::StateCleared => Event::Ignored(Ignored::NotExpected),
+            | Body::StateCleared
+            | Body::SatellitePart(_)
+            | Body::SatelliteSettings(_)
+            | Body::SatelliteContactSettings(_) => Event::Ignored(Ignored::NotExpected),
+            // Nor do messages of a satellite channel.
+            Body::SatAnswered(_)
+            | Body::SatAsked(_)
+            | Body::SatStateShared(_)
+            | Body::SatStateCleared
+            | Body::HomeContactPart(_)
+            | Body::HomeResponded(_)
+            | Body::HomeRequested(_)
+            | Body::HomeRules(_)
+            | Body::HomeContactSettings(_)
+            | Body::HomeSettings(_)
+            | Body::HomeStateShared(_)
+            | Body::HomeStateCleared
+            | Body::HomeSendToken(_) => Event::Ignored(Ignored::NotExpected),
             Body::Unknown(_) => Event::Ignored(Ignored::UnknownType),
         })
     }

@@ -132,6 +132,9 @@ enum Command {
     /// Own devices: add, list, remove
     #[command(subcommand)]
     Device(DeviceCommand),
+    /// Satellites, for development over USB serial
+    #[command(subcommand)]
+    Satellite(SatelliteCommand),
     /// Shows the reported state, or sets, clears or allows it
     State {
         /// Socket of the local interface
@@ -225,6 +228,145 @@ enum DeviceCommand {
         /// Name of the device
         name: String,
     },
+}
+
+#[derive(Subcommand)]
+enum SatelliteCommand {
+    /// Sets up a satellite and writes its setup for USB serial
+    Add {
+        /// Name of the satellite
+        name: String,
+        /// Reader identifier the satellite drew
+        #[arg(long, value_name = "HEX")]
+        reader: Option<String>,
+        /// WiFi name
+        #[arg(long, value_name = "NAME", default_value = "")]
+        wifi_name: String,
+        /// WiFi password
+        #[arg(long, value_name = "PASSWORD", default_value = "")]
+        wifi_password: String,
+        /// File for the setup
+        #[arg(long, value_name = "PATH")]
+        out: Option<PathBuf>,
+    },
+    /// Lists the satellites
+    List,
+    /// Changes the settings of a satellite
+    Settings {
+        /// Name of the satellite
+        name: String,
+        /// Waiting time in minutes
+        #[arg(long, value_name = "N")]
+        wait: Option<u16>,
+        /// Duration of the long-press state in minutes
+        #[arg(long, value_name = "N")]
+        preset_minutes: Option<u32>,
+        /// Reason of the long-press state
+        #[arg(long, value_name = "TEXT", requires = "preset_minutes")]
+        preset_reason: Option<String>,
+        /// Share the long-press state
+        #[arg(long, requires = "preset_minutes")]
+        share: bool,
+        /// Contact for the following settings
+        #[arg(long, value_name = "NAME")]
+        contact: Option<String>,
+        /// Reported answers to the contact: on or off
+        #[arg(long, value_name = "on|off", requires = "contact")]
+        reported: Option<String>,
+        /// Ask button for the contact
+        #[arg(long, value_name = "N", requires = "contact")]
+        ask_button: Option<u8>,
+    },
+    /// Removes a satellite
+    Remove {
+        /// Name of the satellite
+        name: String,
+    },
+}
+
+/// `lz satellite …`.
+async fn satellite<R: Relay>(ctx: &mut Ctx<R>, command: SatelliteCommand) -> Result<()> {
+    use lz_client::satellite::{PresetChange, reader_from_hex, setup_hex};
+    let t = ctx.texts();
+    match command {
+        SatelliteCommand::Add {
+            name,
+            reader,
+            wifi_name,
+            wifi_password,
+            out,
+        } => {
+            let reader = reader.map(|r| reader_from_hex(t, &r)).transpose()?;
+            let setup = ctx
+                .add_satellite(&name, reader, &wifi_name, &wifi_password)
+                .await?;
+            match out {
+                Some(path) => {
+                    write_private(&path, &setup.bytes).map_err(|error| {
+                        ctx::Fail(t.text(
+                            "error-state-file",
+                            &[("error", error.to_string().as_str().into())],
+                        ))
+                    })?;
+                    let path = path.display().to_string();
+                    println!(
+                        "{}",
+                        t.text(
+                            "out-satellite-setup-written",
+                            &[("path", path.as_str().into())]
+                        )
+                    );
+                }
+                None => println!("{}", setup_hex(&setup.bytes)),
+            }
+            Ok(())
+        }
+        SatelliteCommand::List => ctx.list_satellites(),
+        SatelliteCommand::Settings {
+            name,
+            wait,
+            preset_minutes,
+            preset_reason,
+            share,
+            contact,
+            reported,
+            ask_button,
+        } => {
+            let preset = preset_minutes.map(|minutes| match minutes {
+                0 => PresetChange::None,
+                minutes => PresetChange::Set {
+                    minutes,
+                    share,
+                    reason: preset_reason.unwrap_or_default(),
+                },
+            });
+            if wait.is_some() || preset.is_some() {
+                ctx.set_satellite_settings(&name, wait, preset).await?;
+            }
+            if let Some(contact) = contact {
+                let reported = match reported.as_deref() {
+                    None => None,
+                    Some("on") => Some(true),
+                    Some("off") => Some(false),
+                    Some(_) => return Err(ctx::Fail(t.text("error-satellite-settings", &[]))),
+                };
+                ctx.set_satellite_contact(&name, &contact, reported, ask_button)
+                    .await?;
+            }
+            Ok(())
+        }
+        SatelliteCommand::Remove { name } => ctx.remove_satellite(&name).await,
+    }
+}
+
+/// Writes a file only its owner can read.
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(bytes)
 }
 
 /// Asks on the terminal whether a check code matches.
@@ -383,6 +525,7 @@ pub async fn run() -> Result<()> {
         Command::Device(DeviceCommand::Rename { name }) => ctx.rename_device(&name).await,
         // What removing found is printed as notices on the way.
         Command::Device(DeviceCommand::Remove { name }) => ctx.remove_device(&name).await.map(drop),
+        Command::Satellite(command) => satellite(&mut ctx, command).await,
     };
     if let Some(offset) = ctx::clock_warning(ctx.relay.clock_offset()) {
         eprintln!("{}", ctx::clock_warning_text(t, offset));

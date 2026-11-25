@@ -15,6 +15,7 @@ pub mod push;
 pub mod qr;
 pub mod relay;
 pub mod reports;
+pub mod satellite;
 pub mod show;
 pub mod sync;
 mod tokens;

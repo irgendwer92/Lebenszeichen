@@ -7,6 +7,9 @@
 //! [`PADDED_PLAINTEXT_LEN`]: crate::PADDED_PLAINTEXT_LEN
 //! [`SEALED_PLAINTEXT_LEN`]: crate::SEALED_PLAINTEXT_LEN
 
+use crate::satellite::{
+    ContactFlags, ContactSettings, ContactSettingsFor, Part as SatellitePart, Settings, SettingsFor,
+};
 use crate::{
     DeviceName, Error, Hash, MAX_PART_LEN, MailboxId, MessageId, PublicKey, Reader, ReaderId,
     Reason, RelayUrl, Token, TransferId, Writer,
@@ -35,6 +38,42 @@ pub mod kind {
     pub const CONTACT_REMOVED: u8 = 70;
     pub const STATE_SHARED: u8 = 71;
     pub const STATE_CLEARED: u8 = 72;
+    // About satellites, between the full devices (M10).
+    pub const SATELLITE_PART: u8 = 73;
+    pub const SATELLITE_SETTINGS: u8 = 74;
+    pub const SATELLITE_CONTACT_SETTINGS: u8 = 75;
+    // The channel of a satellite (M10), only in the group form with the
+    // channel key. Up: from the satellite to the full devices.
+    pub const SAT_ANSWERED: u8 = 80;
+    pub const SAT_ASKED: u8 = 81;
+    pub const SAT_STATE_SHARED: u8 = 82;
+    pub const SAT_STATE_CLEARED: u8 = 83;
+    // Down: from the full devices to the satellite.
+    pub const HOME_CONTACT_PART: u8 = 88;
+    pub const HOME_RESPONDED: u8 = 89;
+    pub const HOME_REQUESTED: u8 = 90;
+    pub const HOME_RULES: u8 = 91;
+    pub const HOME_CONTACT_SETTINGS: u8 = 92;
+    pub const HOME_SETTINGS: u8 = 93;
+    pub const HOME_STATE_SHARED: u8 = 94;
+    pub const HOME_STATE_CLEARED: u8 = 95;
+    pub const HOME_SEND_TOKEN: u8 = 96;
+
+    /// Types of messages between full devices in the sync mailbox; the
+    /// rest of 64–127 outside the channel range is reserved for them.
+    pub const fn is_sync(kind: u8) -> bool {
+        matches!(kind, 64..=79 | 100..=127)
+    }
+
+    /// Up types of the channel (80–87): from the satellite.
+    pub const fn is_up(kind: u8) -> bool {
+        matches!(kind, 80..=87)
+    }
+
+    /// Down types of the channel (88–99): to the satellite.
+    pub const fn is_down(kind: u8) -> bool {
+        matches!(kind, 88..=99)
+    }
 }
 
 /// A decoded plaintext.
@@ -72,7 +111,39 @@ pub enum Body {
     StateShared(StateShared),
     /// Another device ended the state it handed on.
     StateCleared,
-    /// A type this version does not know. Receivers ignore it; it cannot be
+    /// `satellite_part` (73): a satellite set up on another full device.
+    SatellitePart(SatellitePart),
+    /// `satellite_settings` (74).
+    SatelliteSettings(SettingsFor),
+    /// `satellite_contact_settings` (75).
+    SatelliteContactSettings(ContactSettingsFor),
+    /// `sat_answered` (80): the satellite answered a request.
+    SatAnswered(Responded),
+    /// `sat_asked` (81): the satellite asked a contact.
+    SatAsked(Requested),
+    /// `sat_state_shared` (82): the satellite shares its state.
+    SatStateShared(StateShared),
+    /// `sat_state_cleared` (83).
+    SatStateCleared,
+    /// `home_contact_part` (88): one part of a satellite contact record.
+    HomeContactPart(ContactPart),
+    /// `home_responded` (89): a full device answered a request.
+    HomeResponded(Responded),
+    /// `home_requested` (90): a full device asked a contact.
+    HomeRequested(Requested),
+    /// `home_rules` (91): the own rules for a contact changed.
+    HomeRules(RulesSet),
+    /// `home_contact_settings` (92).
+    HomeContactSettings(ContactSettings),
+    /// `home_settings` (93).
+    HomeSettings(Settings),
+    /// `home_state_shared` (94).
+    HomeStateShared(StateShared),
+    /// `home_state_cleared` (95).
+    HomeStateCleared,
+    /// `home_send_token` (96): the new send token of the channel.
+    HomeSendToken(Token),
+    /// A type this does not know. Receivers ignore it; it cannot be
     /// encoded.
     Unknown(u8),
 }
@@ -183,6 +254,19 @@ impl core::fmt::Debug for PartData {
 pub fn contact_part_ids(plaintext: &[u8]) -> Option<(MailboxId, TransferId)> {
     let mut r = Reader::new(plaintext);
     if r.u8().ok()? != kind::CONTACT_PART {
+        return None;
+    }
+    r.take(16 + 8).ok()?;
+    let body_len = r.u16().ok()?;
+    let mut body = Reader::new(r.take(body_len.into()).ok()?);
+    Some((body.array().ok()?, body.array().ok()?))
+}
+
+/// Satellite and transfer of a `satellite_part` whose body could not be
+/// read, as [`contact_part_ids`].
+pub fn satellite_part_ids(plaintext: &[u8]) -> Option<(ReaderId, TransferId)> {
+    let mut r = Reader::new(plaintext);
+    if r.u8().ok()? != kind::SATELLITE_PART {
         return None;
     }
     r.take(16 + 8).ok()?;
@@ -302,14 +386,62 @@ impl Body {
             Self::ContactRemoved(_) => kind::CONTACT_REMOVED,
             Self::StateShared(_) => kind::STATE_SHARED,
             Self::StateCleared => kind::STATE_CLEARED,
+            Self::SatellitePart(_) => kind::SATELLITE_PART,
+            Self::SatelliteSettings(_) => kind::SATELLITE_SETTINGS,
+            Self::SatelliteContactSettings(_) => kind::SATELLITE_CONTACT_SETTINGS,
+            Self::SatAnswered(_) => kind::SAT_ANSWERED,
+            Self::SatAsked(_) => kind::SAT_ASKED,
+            Self::SatStateShared(_) => kind::SAT_STATE_SHARED,
+            Self::SatStateCleared => kind::SAT_STATE_CLEARED,
+            Self::HomeContactPart(_) => kind::HOME_CONTACT_PART,
+            Self::HomeResponded(_) => kind::HOME_RESPONDED,
+            Self::HomeRequested(_) => kind::HOME_REQUESTED,
+            Self::HomeRules(_) => kind::HOME_RULES,
+            Self::HomeContactSettings(_) => kind::HOME_CONTACT_SETTINGS,
+            Self::HomeSettings(_) => kind::HOME_SETTINGS,
+            Self::HomeStateShared(_) => kind::HOME_STATE_SHARED,
+            Self::HomeStateCleared => kind::HOME_STATE_CLEARED,
+            Self::HomeSendToken(_) => kind::HOME_SEND_TOKEN,
             Self::Unknown(_) => return Err(Error::InvalidValue),
         })
     }
 
-    /// Whether this is a message between own devices, sent only in the group
-    /// form.
+    /// Whether this is a message between own full devices, sent only in
+    /// the group form in the sync mailbox. Channel types are not.
     pub fn is_sync(&self) -> bool {
-        matches!(self.kind(), Ok(kind) if kind >= kind::DEVICE)
+        matches!(self.kind(), Ok(kind) if kind::is_sync(kind))
+    }
+
+    /// Whether this is an up type of the channel, from the satellite.
+    pub fn is_up(&self) -> bool {
+        matches!(self.kind(), Ok(kind) if kind::is_up(kind))
+    }
+
+    /// Whether this is a down type of the channel, to the satellite.
+    pub fn is_down(&self) -> bool {
+        matches!(self.kind(), Ok(kind) if kind::is_down(kind))
+    }
+
+    /// The satellite a message between own devices is about, if any.
+    pub fn sync_satellite(&self) -> Option<&ReaderId> {
+        match self {
+            Self::SatellitePart(p) => Some(&p.reader),
+            Self::SatelliteSettings(s) => Some(&s.reader),
+            Self::SatelliteContactSettings(s) => Some(&s.reader),
+            _ => None,
+        }
+    }
+
+    /// The contact a channel message is about, if any.
+    pub fn channel_contact(&self) -> Option<&MailboxId> {
+        match self {
+            Self::SatAnswered(r) | Self::HomeResponded(r) => Some(&r.contact),
+            Self::SatAsked(r) | Self::HomeRequested(r) => Some(&r.contact),
+            Self::HomeRules(r) => Some(&r.contact),
+            Self::HomeContactSettings(s) => Some(&s.contact),
+            Self::HomeContactPart(p) => Some(&p.contact),
+            _ => None,
+        }
     }
 
     /// The contact a message between own devices is about, if any.
@@ -370,7 +502,35 @@ impl Body {
                 w.text(&state.reason)?;
                 w.put(&state.until.to_be_bytes())
             }
-            Self::StateCleared => Ok(()),
+            Self::StateCleared | Self::SatStateCleared | Self::HomeStateCleared => Ok(()),
+            Self::SatellitePart(part) => {
+                w.put(&part.reader)?;
+                w.put(&part.transfer)?;
+                w.put(&[part.index, part.count, part.data.len])?;
+                w.put(part.data.as_bytes())
+            }
+            Self::SatelliteSettings(s) => {
+                w.put(&s.reader)?;
+                s.settings.write(w)
+            }
+            Self::SatelliteContactSettings(s) => {
+                w.put(&s.reader)?;
+                w.put(&s.settings.contact)?;
+                s.settings.of.write(w)
+            }
+            Self::SatAnswered(r) | Self::HomeResponded(r) => Self::Responded(r.clone()).write(w),
+            Self::SatAsked(r) | Self::HomeRequested(r) => Self::Requested(r.clone()).write(w),
+            Self::SatStateShared(s) | Self::HomeStateShared(s) => {
+                Self::StateShared(s.clone()).write(w)
+            }
+            Self::HomeContactPart(p) => Self::ContactPart(p.clone()).write(w),
+            Self::HomeRules(r) => Self::RulesSet(r.clone()).write(w),
+            Self::HomeContactSettings(s) => {
+                w.put(&s.contact)?;
+                s.of.write(w)
+            }
+            Self::HomeSettings(s) => s.write(w),
+            Self::HomeSendToken(token) => w.put(token),
             Self::Unknown(_) => Err(Error::InvalidValue),
         }
     }
@@ -397,40 +557,98 @@ impl Body {
                 name: r.text()?,
             }),
             kind::DEVICE_REMOVED => Self::DeviceRemoved(r.array()?),
-            kind::REQUESTED => Self::Requested(Requested {
-                contact: r.array()?,
-                request: r.array()?,
-                at: r.u64()?,
-            }),
-            kind::RESPONDED => Self::Responded(Responded {
-                contact: r.array()?,
-                request: r.array()?,
-                kind: ResponseKind::read(r)?,
-                at: r.u64()?,
-            }),
+            kind::REQUESTED => Self::Requested(Self::requested(r)?),
+            kind::RESPONDED => Self::Responded(Self::responded(r)?),
             kind::RULES_SET => Self::RulesSet(RulesSet {
                 contact: r.array()?,
                 rules: Rules::read(r)?,
             }),
-            kind::CONTACT_PART => {
-                let contact = r.array()?;
+            kind::CONTACT_PART => Self::ContactPart(Self::contact_part(r)?),
+            kind::CONTACT_REMOVED => Self::ContactRemoved(r.array()?),
+            kind::STATE_SHARED => Self::StateShared(Self::state_shared(r)?),
+            kind::STATE_CLEARED => Self::StateCleared,
+            kind::SATELLITE_PART => {
+                let reader = r.array()?;
                 let transfer = r.array()?;
                 let [index, count, len] = r.array()?;
-                Self::ContactPart(ContactPart {
-                    contact,
+                Self::SatellitePart(SatellitePart {
+                    reader,
                     transfer,
                     index,
                     count,
                     data: PartData::new(r.take(len.into())?)?,
                 })
             }
-            kind::CONTACT_REMOVED => Self::ContactRemoved(r.array()?),
-            kind::STATE_SHARED => Self::StateShared(StateShared {
-                reason: r.text()?,
-                until: r.u64()?,
+            kind::SATELLITE_SETTINGS => Self::SatelliteSettings(SettingsFor {
+                reader: r.array()?,
+                settings: Settings::read(r)?,
             }),
-            kind::STATE_CLEARED => Self::StateCleared,
+            kind::SATELLITE_CONTACT_SETTINGS => {
+                Self::SatelliteContactSettings(ContactSettingsFor {
+                    reader: r.array()?,
+                    settings: ContactSettings {
+                        contact: r.array()?,
+                        of: ContactFlags::read(r)?,
+                    },
+                })
+            }
+            kind::SAT_ANSWERED => Self::SatAnswered(Self::responded(r)?),
+            kind::SAT_ASKED => Self::SatAsked(Self::requested(r)?),
+            kind::SAT_STATE_SHARED => Self::SatStateShared(Self::state_shared(r)?),
+            kind::SAT_STATE_CLEARED => Self::SatStateCleared,
+            kind::HOME_CONTACT_PART => Self::HomeContactPart(Self::contact_part(r)?),
+            kind::HOME_RESPONDED => Self::HomeResponded(Self::responded(r)?),
+            kind::HOME_REQUESTED => Self::HomeRequested(Self::requested(r)?),
+            kind::HOME_RULES => Self::HomeRules(RulesSet {
+                contact: r.array()?,
+                rules: Rules::read(r)?,
+            }),
+            kind::HOME_CONTACT_SETTINGS => Self::HomeContactSettings(ContactSettings {
+                contact: r.array()?,
+                of: ContactFlags::read(r)?,
+            }),
+            kind::HOME_SETTINGS => Self::HomeSettings(Settings::read(r)?),
+            kind::HOME_STATE_SHARED => Self::HomeStateShared(Self::state_shared(r)?),
+            kind::HOME_STATE_CLEARED => Self::HomeStateCleared,
+            kind::HOME_SEND_TOKEN => Self::HomeSendToken(r.array()?),
             other => Self::Unknown(other),
+        })
+    }
+
+    fn requested(r: &mut Reader<'_>) -> Result<Requested, Error> {
+        Ok(Requested {
+            contact: r.array()?,
+            request: r.array()?,
+            at: r.u64()?,
+        })
+    }
+
+    fn responded(r: &mut Reader<'_>) -> Result<Responded, Error> {
+        Ok(Responded {
+            contact: r.array()?,
+            request: r.array()?,
+            kind: ResponseKind::read(r)?,
+            at: r.u64()?,
+        })
+    }
+
+    fn state_shared(r: &mut Reader<'_>) -> Result<StateShared, Error> {
+        Ok(StateShared {
+            reason: r.text()?,
+            until: r.u64()?,
+        })
+    }
+
+    fn contact_part(r: &mut Reader<'_>) -> Result<ContactPart, Error> {
+        let contact = r.array()?;
+        let transfer = r.array()?;
+        let [index, count, len] = r.array()?;
+        Ok(ContactPart {
+            contact,
+            transfer,
+            index,
+            count,
+            data: PartData::new(r.take(len.into())?)?,
         })
     }
 }
@@ -809,6 +1027,223 @@ mod tests {
         let mut buf = round_trip(Body::ContactPart(longest_part()), PADDED_PLAINTEXT_LEN);
         buf[25..27].copy_from_slice(&40u16.to_be_bytes());
         assert_eq!(contact_part_ids(&buf), None);
+    }
+
+    fn channel_bodies() -> [Body; 20] {
+        use crate::satellite::{ContactFlags, ContactSettings, ContactSettingsFor, Part, Preset};
+        use crate::satellite::{Settings, SettingsFor};
+        let reason = || Reason::new(&"g".repeat(MAX_REASON_LEN)).unwrap();
+        let responded = |kind| Responded {
+            contact: [3; 32],
+            request: [4; 16],
+            kind,
+            at: 7,
+        };
+        let requested = Requested {
+            contact: [3; 32],
+            request: [4; 16],
+            at: 5,
+        };
+        let state = StateShared {
+            reason: reason(),
+            until: 9,
+        };
+        let settings = Settings {
+            waiting_minutes: 20,
+            preset: Some(Preset {
+                minutes: 480,
+                share: true,
+                reason: reason(),
+            }),
+        };
+        let contact_settings = ContactSettings {
+            contact: [3; 32],
+            of: ContactFlags {
+                reported: true,
+                ask_button: 1,
+            },
+        };
+        [
+            Body::SatellitePart(Part {
+                reader: [1; 16],
+                transfer: [5; 16],
+                index: 1,
+                count: 2,
+                data: PartData::new(&[6; MAX_PART_LEN]).unwrap(),
+            }),
+            Body::SatelliteSettings(SettingsFor {
+                reader: [1; 16],
+                settings,
+            }),
+            Body::SatelliteContactSettings(ContactSettingsFor {
+                reader: [1; 16],
+                settings: contact_settings,
+            }),
+            Body::SatAnswered(responded(ResponseKind::Manual)),
+            Body::SatAnswered(responded(ResponseKind::Reported(reason()))),
+            Body::SatAsked(requested.clone()),
+            Body::SatStateShared(state.clone()),
+            Body::SatStateCleared,
+            Body::HomeContactPart(longest_part()),
+            Body::HomeResponded(responded(ResponseKind::Reported(reason()))),
+            Body::HomeRequested(requested),
+            Body::HomeRules(RulesSet {
+                contact: [3; 32],
+                rules: Rules::DEFAULT,
+            }),
+            Body::HomeContactSettings(contact_settings),
+            Body::HomeSettings(settings),
+            Body::HomeSettings(Settings::DEFAULT),
+            Body::HomeStateShared(state),
+            Body::HomeStateCleared,
+            Body::HomeSendToken([8; 32]),
+            Body::HomeResponded(responded(ResponseKind::Manual)),
+            Body::SatAnswered(responded(ResponseKind::Manual)),
+        ]
+    }
+
+    #[test]
+    fn channel_and_satellite_types_round_trip() {
+        for body in channel_bodies() {
+            round_trip(body.clone(), PADDED_PLAINTEXT_LEN);
+            let kind = body.kind().unwrap();
+            let classes = [body.is_sync(), body.is_up(), body.is_down()];
+            match kind {
+                73..=75 => assert_eq!(classes, [true, false, false], "{body:?}"),
+                80..=83 => assert_eq!(classes, [false, true, false], "{body:?}"),
+                88..=96 => assert_eq!(classes, [false, false, true], "{body:?}"),
+                _ => panic!("{kind}"),
+            }
+        }
+        // Old types keep their class; unknown ones have none.
+        assert!(Body::StateCleared.is_sync() && !Body::StateCleared.is_up());
+        assert!(!Body::Request.is_sync() && !Body::Request.is_down());
+        for unknown in [76u8, 79, 84, 87, 97, 99, 100, 127, 128] {
+            let body = Body::Unknown(unknown);
+            assert!(!body.is_sync() && !body.is_up() && !body.is_down());
+            assert_eq!(
+                kind::is_sync(unknown),
+                matches!(unknown, 76..=79 | 100..=127),
+                "{unknown}"
+            );
+            assert_eq!(kind::is_up(unknown), matches!(unknown, 84..=87));
+            assert_eq!(kind::is_down(unknown), matches!(unknown, 97..=99));
+        }
+    }
+
+    #[test]
+    fn channel_layouts_match_documentation() {
+        let bufs = channel_bodies().map(|body| round_trip(body, PADDED_PLAINTEXT_LEN));
+        let [
+            part,
+            settings,
+            contact_settings,
+            answered,
+            answered_reported,
+            asked,
+            sat_shared,
+            sat_cleared,
+            home_part,
+            home_responded,
+            home_requested,
+            home_rules,
+            home_contact_settings,
+            home_settings,
+            default_settings,
+            home_shared,
+            home_cleared,
+            send_token,
+            _,
+            _,
+        ] = bufs;
+
+        assert_eq!(part[0], 73);
+        assert_eq!(&part[25..27], &[0, 213]);
+        assert_eq!(&part[27..43], &[1; 16]);
+        assert_eq!(&part[43..59], &[5; 16]);
+        assert_eq!(&part[59..62], &[1, 2, 178]);
+
+        assert_eq!(settings[0], 74);
+        assert_eq!(&settings[25..27], &[0, 16 + 72]);
+        assert_eq!(&settings[27..43], &[1; 16]);
+        assert_eq!(&settings[43..45], &20u16.to_be_bytes());
+        assert_eq!(&settings[45..49], &480u32.to_be_bytes());
+        assert_eq!(&settings[49..51], &[1, 64]);
+
+        assert_eq!(contact_settings[0], 75);
+        assert_eq!(&contact_settings[25..27], &[0, 50]);
+        assert_eq!(&contact_settings[43..75], &[3; 32]);
+        assert_eq!(&contact_settings[75..77], &[1, 1]);
+
+        // Up and down bodies are those of their sync counterparts.
+        assert_eq!(answered[0], 80);
+        assert_eq!(&answered[25..27], &[0, 58]);
+        assert_eq!(&answered[75..77], &[1, 0]);
+        assert_eq!(&answered[77..85], &7u64.to_be_bytes());
+        assert_eq!(&answered_reported[25..27], &[0, 122]);
+        assert_eq!(&answered_reported[1..], &home_responded[1..]);
+        assert_eq!(home_responded[0], 89);
+        assert_eq!(asked[0], 81);
+        assert_eq!(&asked[25..27], &[0, 56]);
+        assert_eq!(&asked[1..], &home_requested[1..]);
+        assert_eq!(home_requested[0], 90);
+        assert_eq!(sat_shared[0], 82);
+        assert_eq!(&sat_shared[25..27], &[0, 73]);
+        assert_eq!(&sat_shared[1..], &home_shared[1..]);
+        assert_eq!(home_shared[0], 94);
+        assert_eq!((sat_cleared[0], &sat_cleared[25..27]), (83, &[0u8, 0][..]));
+        assert_eq!(
+            (home_cleared[0], &home_cleared[25..27]),
+            (95, &[0u8, 0][..])
+        );
+
+        assert_eq!(home_part[0], 88);
+        assert_eq!(&home_part[25..27], &[0, 229]);
+        assert_eq!(home_rules[0], 91);
+        assert_eq!(&home_rules[25..27], &[0, 42]);
+        assert_eq!(home_contact_settings[0], 92);
+        assert_eq!(&home_contact_settings[25..27], &[0, 34]);
+        assert_eq!(&home_contact_settings[59..61], &[1, 1]);
+        assert_eq!(home_settings[0], 93);
+        assert_eq!(&home_settings[25..27], &[0, 72]);
+        assert_eq!(&default_settings[25..27], &[0, 8]);
+        assert_eq!(&default_settings[27..35], &[0, 15, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(send_token[0], 96);
+        assert_eq!(&send_token[25..27], &[0, 32]);
+        assert_eq!(&send_token[27..59], &[8; 32]);
+    }
+
+    #[test]
+    fn short_channel_bodies_are_rejected_longer_accepted() {
+        for body in channel_bodies() {
+            let buf = round_trip(body.clone(), PADDED_PLAINTEXT_LEN);
+            let len = u16::from_be_bytes([buf[25], buf[26]]);
+            if len > 0 {
+                let mut short = buf;
+                short[25..27].copy_from_slice(&(len - 1).to_be_bytes());
+                assert_eq!(Message::decode(&short), Err(Error::Truncated), "{body:?}");
+            }
+            if usize::from(len) + HEADER_LEN < PADDED_PLAINTEXT_LEN {
+                let mut long = buf;
+                long[25..27].copy_from_slice(&(len + 1).to_be_bytes());
+                assert_eq!(Message::decode(&long).unwrap().body, body);
+            }
+        }
+    }
+
+    #[test]
+    fn undefined_flags_in_settings_are_rejected() {
+        let bufs = channel_bodies().map(|body| round_trip(body, PADDED_PLAINTEXT_LEN));
+        let mut share = bufs[13];
+        share[33] = 2;
+        assert_eq!(Message::decode(&share), Err(Error::InvalidValue));
+        let mut reported = bufs[12];
+        reported[59] = 7;
+        assert_eq!(Message::decode(&reported), Err(Error::InvalidValue));
+        let mut part = bufs[0];
+        part[61] = 179;
+        part[25..27].copy_from_slice(&229u16.to_be_bytes());
+        assert_eq!(Message::decode(&part), Err(Error::TooLong));
     }
 
     #[test]

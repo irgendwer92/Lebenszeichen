@@ -66,7 +66,12 @@ macro_rules! read_access {
     )*};
 }
 
-read_access!(Group, StoredContact, StoredInvitation);
+read_access!(
+    Group,
+    StoredContact,
+    StoredInvitation,
+    crate::satellite::Satellite
+);
 
 /// Everything one device stores.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -113,6 +118,14 @@ pub struct Device {
     /// handover or the group sync.
     #[serde(default, skip_serializing_if = "Reports::is_empty")]
     pub reports: Reports,
+    /// Satellites of the person (M10).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub satellites: Vec<crate::satellite::Satellite>,
+    /// Satellites arriving from another own device, not complete yet; the
+    /// `contact` of each is the reader identifier of the satellite padded
+    /// with 16 zero bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub satellite_transfers: Vec<Transfer>,
 }
 
 /// The sync mailbox of the own devices and the group key.
@@ -414,6 +427,8 @@ impl Device {
             transfers: Vec::new(),
             parked: Vec::new(),
             reports: Reports::default(),
+            satellites: Vec::new(),
+            satellite_transfers: Vec::new(),
         }
     }
 
@@ -437,6 +452,7 @@ impl Device {
         self.relay.as_ref().is_some_and(|r| &r.url == relay)
             || self.group.as_ref().is_some_and(|g| &g.relay == relay)
             || self.contacts.iter().any(|c| &c.own_relay == relay)
+            || self.satellites.iter().any(|s| &s.relay == relay)
             || self
                 .invitations
                 .iter()

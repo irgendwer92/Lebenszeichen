@@ -12,6 +12,7 @@ use std::time::Duration;
 use lz_core::contact::{ContactState, Event};
 use lz_core::group::{SyncEvent, SyncIgnored};
 use lz_core::pairing::Address;
+use lz_core::satellite::{ChannelEvent, ChannelIgnored};
 use lz_core::store::{Device, ReadAccess, StoredContact};
 use lz_core::wire::{ENVELOPE_LEN, MailboxId, RelayUrl, Token};
 use rand_core::OsRng;
@@ -59,6 +60,9 @@ enum FollowUp {
     /// a reader of its own mailbox, with its own token where the relay
     /// offers `reader_tokens`.
     Register { mailbox: MailboxId },
+    /// A satellite arrived from another own device: register this device as
+    /// a reader of its channel mailbox, with its own token (M10).
+    RegisterChannel { mailbox: MailboxId },
     /// This device was removed.
     Removed,
 }
@@ -85,7 +89,8 @@ pub(crate) enum Mode {
 }
 
 /// Own mailboxes grouped by relay, with their read tokens: the sync mailbox
-/// first, then those of contacts and open invitations.
+/// first, then those of contacts and open invitations, then the channels
+/// of the satellites.
 pub(crate) fn own_mailboxes(device: &Device) -> HashMap<RelayUrl, Vec<(MailboxId, Token)>> {
     let mut map: HashMap<RelayUrl, Vec<(MailboxId, Token)>> = HashMap::new();
     if let Some(group) = &device.group {
@@ -104,7 +109,23 @@ pub(crate) fn own_mailboxes(device: &Device) -> HashMap<RelayUrl, Vec<(MailboxId
             .or_default()
             .push((own.mailbox, invitation.token()));
     }
+    for satellite in &device.satellites {
+        map.entry(satellite.relay)
+            .or_default()
+            .push((satellite.mailbox, satellite.token()));
+    }
     map
+}
+
+/// Pending work for the outboxes: messages for the sync mailbox and the
+/// channels, and contacts the satellites still have to get.
+fn queued(device: &Device) -> usize {
+    device.outbox.len()
+        + device
+            .satellites
+            .iter()
+            .map(|s| s.outbox.len() + s.pending.len())
+            .sum::<usize>()
 }
 
 fn name_of(device: &Device, relay: &RelayUrl, mailbox: &MailboxId) -> Option<String> {
@@ -226,6 +247,26 @@ impl<R: Relay> Ctx<R> {
                         continue;
                     }
                     let device = self.load()?;
+                    // The channel of a satellite is gone, or this device
+                    // may no longer read it: the satellite was removed.
+                    let channel = mailbox.and_then(|m| {
+                        device
+                            .satellites
+                            .iter()
+                            .find(|s| s.relay == relay && s.mailbox == m)
+                            .map(|s| s.reader)
+                    });
+                    if let Some(reader) = channel
+                        && (code == "unknown_mailbox" || code == "unknown_reader")
+                    {
+                        if let Some(notice) = self.satellite_gone(&reader)? {
+                            notices.push(notice);
+                        }
+                        if group_gone && self.settle_group(&live, lost_reader, &mut notices)? {
+                            return Ok(notices);
+                        }
+                        continue;
+                    }
                     let sync_mailbox = device
                         .group
                         .as_ref()
@@ -306,7 +347,9 @@ impl<R: Relay> Ctx<R> {
                                 self.removed(&mut notices)?;
                                 return Ok(notices);
                             }
-                            FollowUp::Register { .. } => subscribe = true,
+                            FollowUp::Register { .. } | FollowUp::RegisterChannel { .. } => {
+                                subscribe = true
+                            }
                             _ => {}
                         }
                         if let Some(notice) = self.follow_up(follow_up).await? {
@@ -507,11 +550,11 @@ impl<R: Relay> Ctx<R> {
         let now = self.now();
         let t = self.texts();
         self.update(|device| {
-            let queued = device.outbox.len();
+            let before = queued(device);
             let (notices, follow_ups) = receive_into(t, device, relay, mailbox, data, now)?;
             // The waiting time for a reported answer starts on arrival.
             device.refresh_arrivals(now);
-            Ok((notices, follow_ups, device.outbox.len() > queued))
+            Ok((notices, follow_ups, queued(device) > before))
         })
     }
 
@@ -520,6 +563,25 @@ impl<R: Relay> Ctx<R> {
     async fn follow_up(&mut self, follow_up: FollowUp) -> Result<Option<Notice>> {
         match follow_up {
             FollowUp::Removed => Ok(None),
+            FollowUp::RegisterChannel { mailbox } => {
+                match self.register_self(Own::Channel(mailbox)).await? {
+                    Ok(()) => Ok(None),
+                    Err(error) => {
+                        let t = self.texts();
+                        let name = self
+                            .load()?
+                            .satellite_by_mailbox(&mailbox)
+                            .map(|s| s.name.clone())
+                            .unwrap_or_default();
+                        Ok(Some(Notice::Problem(tr!(
+                            t,
+                            "problem-not-registered",
+                            name = &name,
+                            error = &error.text(t)
+                        ))))
+                    }
+                }
+            }
             FollowUp::Register { mailbox } => {
                 match self.register_self(Own::Contact(mailbox)).await? {
                     Ok(()) => Ok(None),
@@ -695,6 +757,12 @@ fn receive_into(
     {
         return Ok(receive_sync(t, device, data, now));
     }
+    if device
+        .satellite_by_mailbox(mailbox)
+        .is_some_and(|s| s.relay == *relay)
+    {
+        return Ok((receive_channel(t, device, mailbox, data, now), vec![]));
+    }
     if let Some(contact) = device
         .contacts
         .iter_mut()
@@ -850,6 +918,20 @@ fn receive_sync(
                 reason,
                 device: other.clone(),
             },
+            SyncEvent::SatelliteAdded { satellite, name } => {
+                if let Some(s) = device.satellite(&satellite) {
+                    follow_ups.push(FollowUp::RegisterChannel { mailbox: s.mailbox });
+                }
+                Notice::SatelliteAdded { name }
+            }
+            SyncEvent::SatelliteSettings { satellite }
+            | SyncEvent::SatelliteContactSettings { satellite, .. } => Notice::SatelliteSettings {
+                satellite: satellite_name(device, &satellite),
+            },
+            SyncEvent::FromSatellite(event) => match channel_notice(t, device, event) {
+                Some(notice) => notice,
+                None => continue,
+            },
             SyncEvent::PartStored | SyncEvent::Parked => continue,
             SyncEvent::Ignored(why) => Notice::Dropped {
                 name: None,
@@ -859,6 +941,77 @@ fn receive_sync(
         notices.push(notice);
     }
     (notices, follow_ups)
+}
+
+fn satellite_name(device: &Device, reader: &lz_core::wire::ReaderId) -> String {
+    device
+        .satellite(reader)
+        .map(|s| s.name.clone())
+        .unwrap_or_default()
+}
+
+/// Applies a message from the channel of a satellite (M10).
+fn receive_channel(
+    t: Texts,
+    device: &mut Device,
+    mailbox: &MailboxId,
+    data: &[u8],
+    now: u64,
+) -> Vec<Notice> {
+    match device.receive_channel(mailbox, data, now) {
+        Ok(events) => events
+            .into_iter()
+            .filter_map(|event| channel_notice(t, device, event))
+            .collect(),
+        Err(error) => vec![Notice::Dropped {
+            name: None,
+            why: tr!(t, "dropped-own-devices", why = &error.to_string()),
+        }],
+    }
+}
+
+fn channel_notice(t: Texts, device: &Device, event: ChannelEvent) -> Option<Notice> {
+    let name = |contact: &MailboxId| {
+        device
+            .contact_by_mailbox(contact)
+            .map(|c| c.name.clone())
+            .unwrap_or_default()
+    };
+    Some(match event {
+        ChannelEvent::Answered {
+            satellite,
+            contact,
+            kind,
+            ..
+        } => Notice::SatelliteAnswered {
+            name: name(&contact),
+            satellite: satellite_name(device, &satellite),
+            kind,
+        },
+        ChannelEvent::Asked {
+            satellite, contact, ..
+        } => Notice::SatelliteAsked {
+            name: name(&contact),
+            satellite: satellite_name(device, &satellite),
+        },
+        ChannelEvent::StateHanded { satellite, reason } => Notice::SatelliteState {
+            reason,
+            satellite: satellite_name(device, &satellite),
+        },
+        ChannelEvent::Parked => return None,
+        ChannelEvent::Ignored(why) => Notice::Dropped {
+            name: None,
+            why: tr!(
+                t,
+                "dropped-own-devices",
+                why = match why {
+                    ChannelIgnored::Duplicate => "duplicate",
+                    ChannelIgnored::NotUp => "not an up type",
+                    ChannelIgnored::Outdated => "outdated",
+                }
+            ),
+        },
+    })
 }
 
 fn ignored(t: Texts, why: SyncIgnored) -> String {

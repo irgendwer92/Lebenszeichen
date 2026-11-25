@@ -4,7 +4,9 @@
 mod behaviour;
 mod devices;
 mod pairing;
+mod reference;
 mod reports;
+mod satellite;
 mod tokens;
 
 use std::io::{self, Write};

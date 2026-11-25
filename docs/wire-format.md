@@ -101,8 +101,9 @@ the security review of M9 (2026-11-19).
 | 5 | `response` | identifier of the request (16), kind (1): `1` `manual`, `2` `reported`; length of the reason (1), reason (at most 64 bytes UTF-8, only for kind 2, otherwise length 0) |
 | 6 | `end` | empty |
 | 7 | `reveal` | the inviter's secret value `n` (32) |
-| 64–70 | between own devices, only in form C | see [Messages between own devices](#messages-between-own-devices) |
-| 71–127 | reserved for further messages between own devices | – |
+| 64–75 | between own devices, only in form C in the sync mailbox | see [Messages between own devices](#messages-between-own-devices) |
+| 76–79, 100–127 | reserved for further messages between own devices | – |
+| 80–99 | the channel of a satellite (M10), only in form C in a channel mailbox: 80–87 up, 88–99 down | see [Satellite](#satellite-m10) |
 
 Recipients ignore unknown types. If the body of a known type is longer than described here, the additional bytes are ignored; if it is shorter, the message is discarded.
 
@@ -316,6 +317,9 @@ Same plaintext header as for contacts, form C, only in the sync mailbox:
 | 70 | `contact_removed` | contact identifier (32) |
 | 71 | `state_shared` | length of the reason (1), reason (at most 64 bytes UTF-8), end of the state (8, Unix seconds) |
 | 72 | `state_cleared` | – |
+| 73 | `satellite_part` | reader identifier of the satellite (16), transfer identifier (16), number of this part (1), number of parts (1), length (1), data (at most 178 bytes) |
+| 74 | `satellite_settings` | reader identifier of the satellite (16), then as `home_settings` |
+| 75 | `satellite_contact_settings` | reader identifier of the satellite (16), then as `home_contact_settings` |
 
 - `requested`: another device of the person sent a request to this contact. The recipient shows it as open and accepts the contact's response to it.
 - `responded`: another device answered the request. The recipient withdraws its display and lets the minimum interval start from the time of the response.
@@ -327,6 +331,9 @@ Same plaintext header as for contacts, form C, only in the sync mailbox:
 - Replay protection, time window and handling of unknown types are the same as for contacts, with one replay protection for the whole sync mailbox.
 - A sync message about a contact that the recipient does not know yet is kept for up to 24 hours and applied as soon as the contact arrives through `contact_part`. Otherwise a new device would show a request as open that another device has already answered.
 - If the relay refuses a message to the sync mailbox with `mailbox_full` or `rate_limited`, the device keeps it and tries again with every later fetch, at the latest every 5 minutes; after 24 hours it drops it.
+- `satellite_part` (M10) is sent by the device that set up a satellite. The parts form the [satellite record](#satellite-record), checked as for `contact_part`. The recipient adds the satellite unless it knows it, and registers itself as a full reader of the channel mailbox with the enrolment token from the record and a token of its own in one step.
+- `satellite_settings`, `satellite_contact_settings` (M10): another device changed the settings of a satellite; applied only if newer than the last applied ones (per satellite, and per satellite and contact), compared as for `rules_set`. Kept for 24 hours if the satellite is not known yet. The recipient does not pass them on: the sender sent `home_settings` or `home_contact_settings` with the same time and identifier.
+- Every full device sends the down counterpart next to `requested`, `responded`, `rules_set`, `state_shared` and `state_cleared` to the channel of every satellite, with the same time and identifier; see [Satellite](#satellite-m10).
 
 ### Removing a device
 
@@ -337,6 +344,97 @@ Another device of the person (E) removes the reader identifier of the device fro
 - `device_removed` is still understood (older devices send it), but no longer sent.
 
 On relays without `reader_tokens`, removing still does not protect the existing contacts: the removed device keeps their keys and tokens and could register itself again on their mailboxes. On updated relays it is locked out of the mailboxes, but keeps the contact keys and send tokens (`m10-satellite.md`, "What a removed device can still do"). After a lost or stolen device the contacts are paired again (`protocol.md`); the new pairings are out of its reach.
+
+Since M10, removing a device while there are satellites also revokes it on every channel mailbox (`revoke-readers`, keeping the other own devices and the satellites, dropping the shared token) and replaces the send token of the channel (`PUT …/send-token`), which it then sends to the satellite in `home_send_token`; the satellites are kept on every own mailbox.
+
+### Satellite (M10)
+
+A satellite reads the own contact mailboxes with a reader token of its own and the role `satellite`; it holds no group key, sync mailbox or access token. Design and reasons: `m10-satellite.md`, part 2.
+
+**Channel.** One mailbox per satellite, on the relay of the full device that set it up, created in the old form: its shared token is the enrolment token of the other full devices (in the [satellite record](#satellite-record)), as for contact mailboxes. The satellite gets its own enrolment token. Readers: the satellite (role `satellite`, no push address) and every full device (role `full`). One send token, held by all of them, and one channel key (32 bytes): envelopes are form C with the channel key. Full devices accept only up types (80–87), the satellite only down types (88–99); anything else that opens, and anything that does not, is dropped silently. One replay protection for the channel on each side, with the window of contacts. Full devices do not remember down types they read, as they never apply one.
+
+| Type | Name | Direction | Body |
+|---|---|---|---|
+| 80 | `sat_answered` | up | as `responded` (67) |
+| 81 | `sat_asked` | up | as `requested` (66) |
+| 82 | `sat_state_shared` | up | as `state_shared` (71) |
+| 83 | `sat_state_cleared` | up | – |
+| 88 | `home_contact_part` | down | as `contact_part` (69); the parts form the [satellite contact record](#satellite-contact-record) |
+| 89 | `home_responded` | down | as `responded` (67) |
+| 90 | `home_requested` | down | as `requested` (66) |
+| 91 | `home_rules` | down | as `rules_set` (68) |
+| 92 | `home_contact_settings` | down | contact identifier (32), reported answers allowed (1: `0` no, `1` yes), ask button (1: `0` none, otherwise its number) |
+| 93 | `home_settings` | down | waiting time in minutes (2), preset: duration in minutes (4, `0` for no preset), share (1: `0` no, `1` yes), length of the reason (1), reason (at most 64 bytes UTF-8); without a preset, share and length are `0` |
+| 94 | `home_state_shared` | down | as `state_shared` (71) |
+| 95 | `home_state_cleared` | down | – |
+| 96 | `home_send_token` | down | new send token of the channel (32) |
+
+Values other than `0` and `1` where only these are defined make the message unreadable.
+
+- `sat_answered`, `sat_asked`: applied like `responded` and `requested` from another own device, with the time capped at the receiver's clock. Kept for 24 hours if the contact is not known yet.
+- `sat_state_shared`, `sat_state_cleared`: applied like `state_shared` and `state_cleared`, with the sending time and identifier of the channel message as stamp.
+- `home_responded`, `home_requested`, `home_rules`, `home_state_shared`, `home_state_cleared` carry the time and identifier of the sync message they go with (for `home_rules` those of the `rules` to the contact). The satellite applies them as a full device applies their counterparts: `home_rules` and the states only if newer.
+- `home_contact_settings`, `home_settings`: applied only if newer than the last ones applied, per contact and for the satellite. Until the first: reported answers off, no ask button, waiting time 15 minutes, no preset. A full device that binds an ask button to a contact first takes it from the contact that had it.
+- `home_contact_part`: checked as `contact_part`. A new contact is added; for one the satellite has, it takes the name, and own and peer rules whose stamps are newer; the settings in the record carry no stamp and are only taken for a new contact. Down messages about a contact not known yet are kept for 24 hours and applied when it arrives.
+- `home_send_token`: the satellite sends with the new token from then on. The last one received wins, not the newest stamp: the relay keeps the order, and only the device that replaced the token on the relay can still send on the channel.
+
+#### Satellite contact record
+
+At most 698 bytes, at most 4 parts of `home_contact_part`, and in the [setup](#satellite-setup):
+
+| Length | Content |
+|---|---|
+| 32 | Secret contact key |
+| 32 | Public contact key of the contact |
+| 32 | Enrolment token of the satellite on the own mailbox |
+| 1 + at most 120 | Own relay address |
+| 32 | Mailbox identifier of the contact |
+| 32 | Send token for it |
+| 1 + at most 120 | Relay address of the contact |
+| 10 + 8 + 16 | Own rules for this contact as in `rules`, sending time and identifier of the last applied ones |
+| 10 + 8 + 16 | Rules of the contact, with their stamp |
+| 1 + 1 | Settings of the satellite for the contact, as in `home_contact_settings` |
+| 16 + 8 | Open own request: identifier and time; 24 zero bytes if none |
+| 8 | Time of the contact's last manual answer to an own request; 0 if none |
+| 1 + 8 × at most 16 | Times of the own requests to this contact in the last 7 days, oldest first, the open one included (number, times); with more, the newest 16 |
+| 1 + at most 64 | Local name of the contact |
+
+The own mailbox identifier is the contact identifier of `home_contact_part`. Incoming requests of the contact are not in the record; the satellite counts those it reads itself.
+
+#### Satellite record
+
+At most 282 bytes, at most 2 parts of `satellite_part`, and in the handover (`satellites`, as in the state file):
+
+| Length | Content |
+|---|---|
+| 1 + at most 32 | Name of the satellite |
+| 1 + at most 120 | Relay of the channel |
+| 32 | Channel mailbox |
+| 32 | Enrolment token of the recipients on it: the shared token of the channel |
+| 32 | Send token of the channel |
+| 32 | Channel key |
+
+#### Satellite setup
+
+What a full device hands the satellite at setup, over BLE (later) or over USB serial from `lz satellite add` (development). It holds keys and is never sent through a relay.
+
+| Length | Content |
+|---|---|
+| 1 | Version, `0x01` |
+| 16 | Reader identifier of the satellite |
+| 1 + at most 32 | WiFi name (UTF-8) |
+| 1 + at most 64 | WiFi password (UTF-8) |
+| 1 + at most 120 | Relay of the channel |
+| 32 | Channel mailbox |
+| 32 | Enrolment token of the satellite on the channel |
+| 32 | Send token of the channel |
+| 32 | Channel key |
+| 8 + 16 | Stamp of the settings; zero bytes for the defaults |
+| 8 to 72 | Settings, as in `home_settings` |
+| 1 | Number of contacts `n` |
+| `n` × (32 + 2 + at most 698) | Per contact: own mailbox identifier, length of the record, [satellite contact record](#satellite-contact-record) |
+
+The header is at most 461 bytes. The satellite replaces every enrolment token with its own at once (`PUT readers/{own}` with `token_hash`).
 
 ### Known gaps
 

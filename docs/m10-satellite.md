@@ -494,8 +494,8 @@ Full devices learn about a satellite through the sync mailbox:
 
 The record (at most 282 bytes, 2 parts): name (1 + at most 32), relay of
 the channel (1 + at most 120), channel mailbox (32), enrolment token of the
-recipient on it (32), send token (32), channel key (32). Checks as for
-`contact_part`. The handover gets a `satellites` list with the same
+recipients on it (32: the channel's shared token, see below), send token
+(32), channel key (32). Checks as for `contact_part`. The handover gets a `satellites` list with the same
 content, the satellite's settings and the channel's replay protection.
 Older devices ignore types 73 to 75.
 
@@ -595,6 +595,102 @@ Without the API, which is left for later:
 - Persistent storage behind a small interface (contacts, replay
   protection, outbox), and erasing it.
 
+### Settled in the implementation (full devices, 2026-11-26)
+
+Step 2b: wire types, the full-device side in `lz-core` and `lz-client`,
+`lz satellite`, and a reference satellite for the tests
+(`crates/client/src/tests/reference.rs`). Byte layouts are in
+`wire-format.md`, "Satellite (M10)".
+
+Fixes of this design:
+
+- **One enrolment token for all full devices.** `satellite_part` goes to
+  every full device, but the relay refuses a token hash that another
+  reader has, so "the enrolment token of the recipient" cannot be one per
+  recipient. The channel is created in the old form, as contact mailboxes
+  are: its shared token is the enrolment token in the record, every full
+  device registers itself with it and a token of its own in one `PUT`, and
+  the device that set it up does so at once. The satellite never sees the
+  shared token; it gets an enrolment token of its own. The shared token
+  goes at the next removal of a full device (`revoke-readers` with
+  `drop_shared_token`), as on contact mailboxes.
+- **Settings in the satellite contact record carry no stamp**, yet
+  `home_contact_settings` are applied only if newer. So the settings in the
+  record are taken only for a new contact (with an empty stamp, which every
+  `home_contact_settings` beats); a record for a known contact leaves them.
+  Every change is sent down anyway, so the satellite ends with the newest.
+- **`home_send_token`: the last one received wins**, not the newest stamp.
+  With stamps, a device that is removed could plant one with a sending time
+  up to 10 minutes ahead before its removal, and the satellite would ignore
+  the real one. The relay keeps the order, and after the removal only the
+  device that replaced the token on the relay can send on the channel.
+- **The setup** (decision 14) had no byte layout: defined in
+  `wire-format.md`, "Satellite setup", with the own mailbox identifier per
+  contact, which the contact record leaves out.
+- **No preset** is a duration of 0 in `home_settings`.
+- **Sync types end at 79**: 80–99 is the channel, so `is_sync` covers 64–79
+  and 100–127, and 71–127 is no longer "reserved for own devices" as a
+  whole.
+
+Interpretations:
+
+- **3 relays** (decision 9) count the relays the satellite keeps a
+  connection to: that of the channel and those of the own mailboxes it
+  reads. Relays it only delivers to (the contacts') are not counted. Setup
+  refuses more; a contact paired later that would need a fourth is left out
+  with a notice, as is one whose relay lacks `reader_tokens`. The count for
+  a later contact uses all own mailbox relays, so it may refuse where an
+  exact count would not.
+- **The waiting time on the satellite** runs from the time of the request
+  (its sending time, capped at the own clock), not from its arrival as on
+  full devices, so that it follows from the stored requests after a
+  restart.
+- **The times of own requests** in the record include the open request;
+  the satellite rebuilds its outgoing ledger from them (counted entries
+  without identifier, the open one with its identifier).
+- **Incoming requests** of a contact are not in the record (there is no
+  room in 4 parts). At setup the satellite counts only the requests it
+  reads from then on: a request open at that moment is not shown on it,
+  and for up to a week it may accept a request that the full devices
+  discarded under the weekly limit. Only a contact that breaks the rules
+  sends such a request.
+- **Times in up messages** (`sat_answered`, `sat_asked`) are capped at the
+  full device's clock.
+- **An ask button names one contact**: binding it to a contact takes it
+  from the one that had it (two `home_contact_settings`).
+- **Down messages go to every satellite for every contact**: a full device
+  does not know which contacts a satellite got (another device may have
+  enrolled it). The satellite keeps those about unknown contacts for 24
+  hours, then drops them.
+- **Full devices do not remember down types** in the replay protection of
+  the channel; they never apply one, own ones included.
+- **Removing a satellite** deletes its reader on every own contact mailbox
+  and on the channel, then the channel; it is forgotten only when all of
+  that succeeded, so the command can be repeated. Other full devices
+  forget it on `unknown_mailbox` (or `unknown_reader`) for the channel.
+- **Removing a full device** does the channels first: `revoke-readers`
+  keeping the other own devices and the satellites, dropping the shared
+  token, then a new send token stored before it is sent
+  (`new_send_token`), `PUT /send-token`, `home_send_token`. Other remaining
+  full devices still read the channel; their deliveries there are refused
+  until they are added again, and stay in the outbox for 24 hours.
+- **The device list** shows satellites, marked as such; removing one by
+  its reader identifier removes the satellite.
+- **`lz satellite add`** takes the reader identifier the satellite drew
+  (`--reader`) or draws one, and writes the setup to a file (mode 0600) or
+  prints it as hex. WiFi name and password go into the setup as given.
+- **State file**: `satellites` and `satellite_transfers` in format 2 (not
+  released yet), left out when empty. Handover: `satellites`, left out when
+  empty, without own tokens, outbox, parked messages and pending
+  enrolments; E registers N on each channel with an enrolment token, which
+  N replaces as for contact mailboxes.
+
+Test vectors for the C library: `vectors()` in the reference satellite,
+reproducible from a seed; `LZ_VECTORS_OUT=<file> cargo test -p lz-client
+vectors_are_reproducible` writes them: every up and down type as plaintext
+and envelope under a channel key, a satellite contact record, a setup, and
+cases of the asking rule and of the waiting time.
+
 ## Open points
 
 None. Decided on 2026-11-25: the shared token on contact mailboxes is
@@ -619,6 +715,10 @@ are caught by it (`revoke-readers`), which is enough.
 
 ## Test plan
 
+Items marked "model" are covered by the reference satellite against the
+fake relay (`crates/client/src/tests/satellite.rs`, 2026-11-26); they stay
+open until the ESP32-C6 passes them.
+
 - [ ] Relay migration from schema 2: existing mailboxes and readers work
       with the shared token; old `lz` against the new relay passes its
       tests. (Relay side covered by `migration_from_version_2` and the
@@ -636,39 +736,54 @@ are caught by it (`revoke-readers`), which is enough.
       (Client tests, `crates/client/src/tests/tokens.rs`, 2026-11-25.)
 - [x] Removing on an old relay: the client says protection is limited.
       (Client tests, `crates/client/src/tests/tokens.rs`, 2026-11-25.)
-- [ ] A satellite token cannot register or revoke readers, delete the
+- [x] A satellite token cannot register or revoke readers, delete the
       mailbox, drop the shared token, set the send token, derive mailboxes
       or store handover slots (all `401`).
+      (Client tests against the fake relay, `the_satellite_cannot_act_as_a_full_device`,
+      2026-11-26; relay side in `crates/relay/tests/relay.rs`.)
 - [ ] Satellite shows a request from the test contact; a press sends a
       `manual` response; the phone withdraws its display.
+      (model: `a_press_answers_every_open_request_and_the_phone_withdraws_its_own`)
 - [ ] Request answered on the phone: the satellite's light goes off.
+      (model: `an_answer_elsewhere_turns_the_light_off`)
 - [ ] Rules changed on the phone reach the satellite; a request beyond the
       weekly limit is discarded by phone and satellite alike.
+      (model: `rules_changed_on_the_phone_reach_the_satellite`)
 - [ ] A contact paired on the phone appears on the satellite; a contact
       ended disappears from it.
+      (model: `a_contact_paired_later_reaches_the_satellite`)
 - [ ] Long press sets the preset; after the waiting time the test contact
       gets "“asleep” (reported)" from the satellite, only if allowed for it;
       a later press still sends ✓; the phone sends no second reported
       answer.
+      (model: `reported_answers_after_the_waiting_time_only_where_allowed_once`)
 - [ ] A shared state of the satellite is answered by the phone after its
       waiting time; "Phone empty" shared by the phone is answered by the
       satellite; a clear on either side ends it on both; an own unshared
       state stays.
+      (model, without the answers: `states_are_shared_both_ways`)
 - [ ] Ask button: request reaches the test contact, the phone disables its
       button, the answer shows on the OLED; a second ask within the minimum
       interval is refused on the satellite; a request sent from the phone
       disables the ask button.
+      (model: `asking_obeys_the_rules_of_the_contact_and_the_phone_sees_it`, `requests_made_elsewhere_reach_the_satellite`)
 - [ ] Settings changed on one full device reach the satellite and the
       other full devices.
+      (model: `settings_propagate_between_full_devices_and_down`)
 - [ ] A restart during the waiting time: the reported answer still goes out
       once, at the right time.
+      (model: `a_restart_during_the_waiting_time_still_reports_once`)
 - [ ] Full devices drop every down type and the satellite every up type and
       anything unknown; replays are dropped after a restart.
+      (model: `the_satellite_cannot_act_as_a_full_device`, `the_satellite_drops_up_types_and_replays_after_a_restart`)
 - [ ] Removing a full device while there is a satellite: the satellite stays
       linked and gets the new send token; the removed device's send to the
       channel is refused.
+      (model: `removing_a_full_device_keeps_the_satellite_and_rotates_the_send_token`)
 - [ ] Removing the satellite: it deletes its state on the next connection;
       the group stays; a dump of its flash cannot subscribe to any mailbox.
+      (model: `removing_the_satellite_locks_it_out_and_it_wipes_itself`)
 - [ ] Satellite clock 15 minutes off: warning on the OLED, nothing sent.
 - [ ] Satellite offline, press, back online: the response arrives with the
       time of the press.
+      (model: `a_press_offline_goes_out_later_with_the_time_of_the_press`)

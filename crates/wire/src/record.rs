@@ -101,12 +101,12 @@ impl ContactRecord {
 }
 
 impl Stamp {
-    fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> {
+    pub(crate) fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> {
         w.put(&self.at.to_be_bytes())?;
         w.put(&self.id)
     }
 
-    fn read(r: &mut Reader<'_>) -> Result<Self, Error> {
+    pub(crate) fn read(r: &mut Reader<'_>) -> Result<Self, Error> {
         Ok(Self {
             at: r.u64()?,
             id: r.array()?,

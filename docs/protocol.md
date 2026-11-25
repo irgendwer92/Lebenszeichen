@@ -92,8 +92,26 @@ Own devices share a sync mailbox and a symmetric group key. Decided on 2026-11-1
 | `contact_removed` | contact | A contact ended on one device |
 | `state_shared` | reason, end of the state | A reported state handed to the other devices (M8c) |
 | `state_cleared` | – | The shared state ended (M8c) |
+| `satellite_part` | satellite, part of its data | A satellite set up on one device (M10) |
+| `satellite_settings` | satellite, its settings | Waiting time and long-press preset of a satellite changed (M10) |
+| `satellite_contact_settings` | satellite, contact, its settings | Reported answers and ask button of a satellite for a contact changed (M10) |
 
 The earlier plan had `counted` to keep counters equal. It is not needed: every device reads all mailboxes and counts the same requests.
+
+### Satellite (M10)
+
+A satellite (a small device in the hallway with a button and a display) reads the own contact mailboxes like a device, with a reader token of its own and the role `satellite`, but holds no group key, no sync mailbox and no relay access token. It talks to the full devices only through its **channel**: one mailbox and one symmetric key, form C. Types are one-way: the satellite sends only up types, the full devices only down types, and each side drops everything else. Details in `m10-satellite.md` and `wire-format.md`.
+
+| Type | Direction | Purpose |
+|---|---|---|
+| `sat_answered` | up | The satellite answered a request (manual or reported), as `responded` |
+| `sat_asked` | up | The satellite asked a contact, as `requested` |
+| `sat_state_shared`, `sat_state_cleared` | up | Its shared state, as `state_shared` and `state_cleared` |
+| `home_contact_part` | down | A contact for the satellite (one paired later) |
+| `home_responded`, `home_requested`, `home_rules` | down | What a full device did, next to `responded`, `requested`, `rules_set` |
+| `home_contact_settings`, `home_settings` | down | Its settings, set on a full device |
+| `home_state_shared`, `home_state_cleared` | down | The person's shared state |
+| `home_send_token` | down | The new send token of the channel, after a full device was removed |
 
 ## Rules for requests (decided)
 
@@ -127,6 +145,7 @@ Evaluation of responses on the requester's side:
 - If the person reacts on one device, it sends `responded` to the others.
 - A status report applies only to the device that received it. That device sends the `reported` response after the waiting time. Since M8c a report can be shared: the other devices then answer with it too, each where reported answers are allowed on it (`m8c-share-state.md`).
 - A device is removed by another device unregistering it as a reader and ending the group of own devices; the remaining devices are added again to be linked. If a device is lost, the contacts must be paired again, because it knows all contact keys.
+- A satellite (M10) is removed by any full device: its reader is revoked everywhere and its channel deleted, which it takes as the sign to delete its state; the group stays. Removing a full device keeps the satellite linked: the removed device is revoked on the channel too, and the send token of the channel is replaced.
 
 Disadvantage: if one device is compromised, all contact keys are affected.
 
