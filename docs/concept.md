@@ -4,7 +4,9 @@ As of 2026-11-13. Technical details on pairing, messages and the relay are in `p
 
 ## Idea
 
-One person asks another for a minimal sign of life. Responding takes practically no effort and reveals nothing except "someone reacted on the device". No chat, no online status, no schedule, no alarm chain.
+One person asks another for a minimal sign of life. Responding takes practically no effort and reveals nothing except "someone reacted on the device": no small talk, no feeling to express, nothing to choose, no technical skill and no thought beforehand, and it does not break the train of thought. The one asked has shown they exist, the one asking is no longer troubled. No chat, no online status, no schedule, no alarm chain, and no emergency alarm: without a reaction the request only expires. But if you want, it integrates.
+
+Meant for days when someone cannot manage to reply to messages, for focused work that a chat would interrupt, for parents and children on adventures, and for older relatives for whom a message thread is too much hassle.
 
 ## Decisions
 
