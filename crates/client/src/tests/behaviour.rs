@@ -7,10 +7,10 @@ use super::devices::family;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use lz_core::store::Store;
+use lz_core::store::{ReadAccess, Store};
 
 use crate::ctx::Clock;
-use crate::relay::{Relay, RelayError};
+use crate::relay::{ReaderChange, Relay, RelayError};
 
 use super::{
     HOUR, MINUTE, Person, RELAY_A, RELAY_B, TOKEN_A, TOKEN_B, World, expect_err, paired, url,
@@ -541,28 +541,35 @@ async fn lost_laptop() -> (World, Person, Person, Person) {
 }
 
 #[tokio::test]
-async fn removed_device_keeps_the_old_mailboxes_until_the_contact_is_ended() {
+async fn removed_device_keeps_the_contact_keys_but_not_the_mailboxes() {
     let (world, mut phone, mut thief, mut bert) = lost_laptop().await;
     let old = phone.contact("Bert");
     let mailbox = old.state.contact.own_mailbox;
     let reader = thief.device().reader_id;
+    let stolen = thief.contact("Bert");
     assert!(!world.relay.has_reader(RELAY_A, &mailbox, &reader));
 
-    // GAP (see the M9 report): removing a device does not change the keys
-    // of the contacts. The thief registers itself as a reader of the old
-    // mailbox again with the read token it holds, and reads what Bert
-    // sends from then on.
-    world
-        .relay
-        .put_reader(&url(RELAY_A), &mailbox, &old.read_token, &reader, None)
-        .await
-        .unwrap();
-    assert!(world.relay.has_reader(RELAY_A, &mailbox, &reader));
+    // Closed since M10 on updated relays: removing revoked its reader and
+    // dropped the shared token, so none of the tokens it holds registers
+    // it again (on relays before M10 they still do, see
+    // `tests::tokens::removal_is_weak_on_a_relay_before_m10_and_says_so`).
+    for token in [old.read_token, stolen.read_token, stolen.token()] {
+        let put = world
+            .relay
+            .put_reader(
+                &url(RELAY_A),
+                &mailbox,
+                &token,
+                &reader,
+                ReaderChange::push(None),
+            )
+            .await;
+        assert!(
+            matches!(put, Err(RelayError::Refused { status: 401, .. })),
+            "{put:?}"
+        );
+    }
     bert.ctx.request("Anna").await.unwrap();
-    thief.sync().await;
-    let seen = thief.contact("Bert").state.open_request(world.now());
-    assert!(seen.is_some(), "the removed device could not read");
-    // The phone still reads it too.
     assert_eq!(
         phone.sync().await,
         vec![Notice::Request {
@@ -570,12 +577,15 @@ async fn removed_device_keeps_the_old_mailboxes_until_the_contact_is_ended() {
         }]
     );
 
-    // It also still sends as Anna with the old send token and key. Bert
-    // cannot tell: the thief answers Bert's request for her.
-    thief.ctx.respond("Bert").await.unwrap();
+    // GAP (m10-satellite.md, "What a removed device can still do"): the
+    // contact keys and Bert's send token are unchanged. It can still send
+    // to Bert as Anna, within Bert's rules, but it cannot answer the new
+    // request: it never saw it.
+    expect_err(thief.ctx.respond("Bert").await, "Keine offene Anfrage");
+    thief.ctx.request("Bert").await.unwrap();
     let notices = bert.sync().await;
     assert!(
-        matches!(notices.as_slice(), [Notice::Response { .. }]),
+        matches!(notices.as_slice(), [Notice::Request { .. }]),
         "{notices:?}"
     );
 }
@@ -621,7 +631,13 @@ async fn removed_device_cannot_use_the_mailboxes_of_a_new_pairing() {
     let old_read = old.read_token;
     let relay = &world.relay;
     let put = relay
-        .put_reader(&url(RELAY_A), &new_mailbox, &old_read, &reader, None)
+        .put_reader(
+            &url(RELAY_A),
+            &new_mailbox,
+            &old_read,
+            &reader,
+            ReaderChange::push(None),
+        )
         .await;
     assert!(
         matches!(put, Err(RelayError::Refused { status: 401, .. })),
@@ -730,7 +746,7 @@ async fn removed_device_cannot_use_the_old_group() {
             &group.mailbox,
             &group.read_token,
             &thief.device().reader_id,
-            None,
+            ReaderChange::push(None),
         )
         .await;
     assert_eq!(put, Err(RelayError::UnknownMailbox));

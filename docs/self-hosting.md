@@ -273,21 +273,28 @@ The relay migrates its database at start. Take a backup first.
 ## 11. A lost or stolen device
 
 Every device of a person holds the keys of all their contacts. Removing it
-(Devices → the device → Remove) stops the relay from waking it and unlinks
-your devices, so that it cannot follow along, but a device that is in
-someone else's hands could still read and send on the existing contact
-mailboxes. So:
+(Devices → the device → Remove) unlinks your devices and, on an up-to-date
+relay, locks it out of your mailboxes: it can no longer read new messages,
+answer new requests or register itself again, even from a copy of its
+data. It still knows the keys of your contacts, so it could send them
+requests, change your rules towards them or end contacts, and it can still
+answer requests that were open when you removed it. On a relay that is not
+up to date, removing only unregisters it; the app says for which contacts.
+So:
 
 1. Remove the lost device on one of your other devices. Your other devices
    are then no longer linked; they keep working, each on its own.
-2. End each contact and pair again (section 8), or ask your contacts to do so.
-   New mailboxes are unknown to the lost device.
-3. Link your other devices again: on each, remove the app's data (Android:
+2. Answer the requests that were open at that moment yourself, as the app
+   suggests.
+3. To be fully safe, end each contact and pair again (section 8), or ask
+   your contacts to do so; always for contacts the app named as not
+   protected. New mailboxes are unknown to the lost device.
+4. Link your other devices again (update them first): on each, remove the app's data (Android:
    Settings → Apps → Lebenszeichen → Storage → Clear storage; desktop:
    delete its `device.json`, shown under ⚙) and set it up again as another
    device (Devices → Add device on the one you keep). Its contacts come
    back with the handover.
-4. If the lost device had the access token, it can still create mailboxes
+5. If the lost device had the access token, it can still create mailboxes
    on your relay. Replace the token in `relay.env` (the `sed` line of section 3), then
    `docker compose up -d`; existing mailboxes keep working. Give the new
    token to your remaining devices: Devices → **Change access token** in the

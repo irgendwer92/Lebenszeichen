@@ -1075,8 +1075,10 @@ pub async fn device_remove(
     state: tauri::State<'_, AppState>,
     reader: String,
 ) -> Result<Reply<()>, String> {
+    // What removing found (M10) is also in the notices; shown by the UI
+    // from step 3 on.
     let reply = run(path(&state), async move |ctx| {
-        ctx.remove_device_by_reader(&reader).await
+        ctx.remove_device_by_reader(&reader).await.map(drop)
     })
     .await;
     poke(&app);

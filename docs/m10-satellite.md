@@ -254,6 +254,48 @@ Settled in the implementation (relay, 2026-11-25):
   devices that were not updated. They have to be added again after a
   removal anyway (M9); the app says to update them first.
 
+Settled in the implementation (client, 2026-11-25):
+
+- **Contact mailboxes keep the old form**, also on relays with
+  `reader_tokens`: `contact_part` carries one token for all other devices,
+  and the relay refuses a token hash that another reader of the mailbox
+  has, so the shared token is that enrolment token. The device that
+  creates the mailbox registers itself with its own token in the same
+  `PUT`. Only the sync mailbox is created in the new form; its
+  `read_token` in the state file is then the own token, which is never
+  handed over. The shared token on contact mailboxes stays until a removal
+  drops it (open point 1).
+- **Receivers register themselves** from `contact_part`, as before, with the
+  shared token and `token_hash` in one `PUT`, instead of D registering them.
+- **Handover:** E registers N on every mailbox with a fresh random
+  enrolment token per mailbox and hands those over in place of its own
+  tokens; the core leaves own tokens out of every handover. N replaces them
+  while joining; what fails there is retried by every fetch.
+- **Migration:** every fetch (and every tick of `listen`) gives the device
+  its own token on each own mailbox that has none, where the relay lists
+  `reader_tokens`; idempotent. The new token is stored (`new_token`) before
+  it is sent; if the token held so far is refused, the new one is tried, as
+  the relay may have taken it with a lost answer. A refusal of both is
+  remembered for the process. The state file format is 2; files of format 1
+  are read and written back as 2, so that an older version does not open a
+  file whose own tokens it would ignore.
+- **Removing:** `revoke-readers` on every own contact mailbox that has not
+  ended (not on open invitations: the removed device never knew their
+  tokens), with `keep` the other known devices (satellites are added in
+  part 2) and `"drop_shared_token":true`; then the sync mailbox is deleted.
+  On a relay without `reader_tokens` the reader is only unregistered, and
+  the device says for which contacts removing is weak. It also reports how
+  many unknown readers were revoked (planted by the removed device, or left
+  by devices removed earlier) and which contacts had a request open.
+- **`unauthorized`** on an own mailbox: if the device replaced its token
+  meanwhile, it subscribes again (expected, not a removal); a reader
+  without its own token tries to take one; otherwise its access was
+  withdrawn (the shared token was dropped while it was a legacy reader),
+  and it says to set it up again.
+- **Residual:** until N replaces its enrolment tokens, E knows them; a
+  device before M10 never replaces them, so the device that enrolled it
+  could act as it after being removed itself. Update old devices.
+
 ### What a removed device can still do
 
 After E revoked it on relays with `reader_tokens`:
@@ -582,15 +624,19 @@ Without the API, which is left for later:
       with the shared token; old `lz` against the new relay passes its
       tests. (Relay side covered by `migration_from_version_2` and the
       existing relay tests, 2026-11-25.)
-- [ ] Updated devices switch to own tokens; the shared token then no
+- [x] Updated devices switch to own tokens; the shared token then no
       longer subscribes as them.
-- [ ] An old device receives a contact paired on a new one and reads it
+      (Client tests, `crates/client/src/tests/tokens.rs`, 2026-11-25.)
+- [x] An old device receives a contact paired on a new one and reads it
       with the enrolment token.
-- [ ] Removing a full device: its copy of the state gets `unknown_reader`
+      (Client tests, `crates/client/src/tests/tokens.rs`, 2026-11-25.)
+- [x] Removing a full device: its copy of the state gets `unknown_reader`
       and deletes itself; a saved copy can neither subscribe nor register
       itself again on any own mailbox; a new request is not answerable by
       it.
-- [ ] Removing on an old relay: the client says protection is limited.
+      (Client tests, `crates/client/src/tests/tokens.rs`, 2026-11-25.)
+- [x] Removing on an old relay: the client says protection is limited.
+      (Client tests, `crates/client/src/tests/tokens.rs`, 2026-11-25.)
 - [ ] A satellite token cannot register or revoke readers, delete the
       mailbox, drop the shared token, set the send token, derive mailboxes
       or store handover slots (all `401`).

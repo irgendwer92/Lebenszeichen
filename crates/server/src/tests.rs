@@ -141,6 +141,8 @@ fn paired_contact(name: &str, now: u64) -> StoredContact {
         name: name.to_owned(),
         own_relay: relay,
         read_token: [9; 32],
+        own_token: None,
+        new_token: None,
         state: own,
     }
 }

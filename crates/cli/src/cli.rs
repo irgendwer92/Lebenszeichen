@@ -381,7 +381,8 @@ pub async fn run() -> Result<()> {
         }
         Command::Device(DeviceCommand::List) => ctx.list_devices(),
         Command::Device(DeviceCommand::Rename { name }) => ctx.rename_device(&name).await,
-        Command::Device(DeviceCommand::Remove { name }) => ctx.remove_device(&name).await,
+        // What removing found is printed as notices on the way.
+        Command::Device(DeviceCommand::Remove { name }) => ctx.remove_device(&name).await.map(drop),
     };
     if let Some(offset) = ctx::clock_warning(ctx.relay.clock_offset()) {
         eprintln!("{}", ctx::clock_warning_text(t, offset));

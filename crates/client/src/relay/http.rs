@@ -6,9 +6,10 @@
 //! unencrypted, or reach into the local network. In production the relay
 //! sits behind a reverse proxy with TLS.
 
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use futures_util::{SinkExt, StreamExt};
 use lz_core::wire::{Hash, MailboxId, RelayUrl, Token};
@@ -21,7 +22,8 @@ use tokio_tungstenite::Connector;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::{
-    Connection, Delivery, ReaderId, Relay, RelayError, ServerFrame, b64, from_b64, hex, token_hash,
+    Connection, Delivery, Features, MailboxRead, ReaderChange, ReaderId, Relay, RelayError,
+    ServerFrame, b64, from_b64, hex, token_hash,
 };
 
 /// Header with the hash of the fetch token of a handover slot.
@@ -32,6 +34,11 @@ const REPLY_HASH: &str = "Lz-Reply-Hash";
 
 /// Time limit for a single HTTP call.
 const TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long a relay that lists no `reader_tokens` is believed; a relay
+/// that lists it is believed for the life of the process, since relays are
+/// not downgraded.
+const NO_FEATURES_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// A ping keeps idle stream connections alive through proxies and reveals
 /// dead ones.
@@ -74,6 +81,8 @@ pub struct Http {
     client: reqwest::Client,
     /// The same TLS settings for the stream connection.
     tls: Arc<ClientConfig>,
+    /// Features seen per relay, with the time they were asked.
+    features: Arc<Mutex<HashMap<RelayUrl, (Features, Instant)>>>,
 }
 
 /// TLS with `ring`, certificates checked by the operating system: on Linux
@@ -101,6 +110,7 @@ impl Http {
         Ok(Self {
             client,
             tls: Arc::new(tls),
+            features: Arc::default(),
         })
     }
 
@@ -198,7 +208,45 @@ struct VoucherBody {
 
 #[derive(Serialize)]
 struct NewMailbox {
-    read_token_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    read_token_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reader: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reader_token_hash: Option<String>,
+    send_token_hash: String,
+}
+
+#[derive(Deserialize)]
+struct HealthBody {
+    #[serde(default)]
+    features: Vec<String>,
+}
+
+/// The features in the body of `GET /v1/health`; an empty or unreadable
+/// body (relays before M10) lists none.
+fn parse_features(body: &[u8]) -> Features {
+    let listed = serde_json::from_slice::<HealthBody>(body)
+        .map(|b| b.features)
+        .unwrap_or_default();
+    Features {
+        reader_tokens: listed.iter().any(|f| f == "reader_tokens"),
+    }
+}
+
+#[derive(Serialize)]
+struct RevokeBody {
+    keep: Vec<String>,
+    drop_shared_token: bool,
+}
+
+#[derive(Deserialize)]
+struct RevokedBody {
+    revoked: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct SendTokenBody {
     send_token_hash: String,
 }
 
@@ -207,9 +255,26 @@ struct MailboxBody {
     mailbox: String,
 }
 
+/// Fields that are `None` are left out; `push_url: Some(None)` is sent as
+/// `null`.
 #[derive(Serialize)]
 struct ReaderBody<'a> {
-    push_url: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    push_url: Option<Option<&'a str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<&'static str>,
+}
+
+impl<'a> From<ReaderChange<'a>> for ReaderBody<'a> {
+    fn from(change: ReaderChange<'a>) -> Self {
+        Self {
+            push_url: change.push_url,
+            token_hash: change.token.map(token_hash),
+            role: change.role.map(super::Role::as_str),
+        }
+    }
 }
 
 impl Relay for Http {
@@ -229,20 +294,57 @@ impl Relay for Http {
         from_b64(&body.voucher).ok_or_else(|| transport("unlesbarer Gutschein"))
     }
 
+    async fn features(&self, relay: &RelayUrl) -> Result<Features, RelayError> {
+        let known = self
+            .features
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(relay)
+            .copied();
+        if let Some((features, at)) = known
+            && (features.reader_tokens || at.elapsed() < NO_FEATURES_TTL)
+        {
+            return Ok(features);
+        }
+        let request = self.call(Method::GET, relay, "health");
+        let body = send(request, StatusCode::OK)
+            .await?
+            .bytes()
+            .await
+            .map_err(transport)?;
+        let features = parse_features(&body);
+        self.features
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(*relay, (features, Instant::now()));
+        Ok(features)
+    }
+
     async fn create_mailbox(
         &self,
         relay: &RelayUrl,
         authorisation: &Token,
-        read_token: &Token,
+        read: MailboxRead<'_>,
         send_token: &Token,
     ) -> Result<MailboxId, RelayError> {
+        let body = match read {
+            MailboxRead::Shared(read_token) => NewMailbox {
+                read_token_hash: Some(token_hash(read_token)),
+                reader: None,
+                reader_token_hash: None,
+                send_token_hash: token_hash(send_token),
+            },
+            MailboxRead::Reader(reader, token) => NewMailbox {
+                read_token_hash: None,
+                reader: Some(b64(reader)),
+                reader_token_hash: Some(token_hash(token)),
+                send_token_hash: token_hash(send_token),
+            },
+        };
         let request = self
             .call(Method::POST, relay, "mailboxes")
             .bearer_auth(b64(authorisation))
-            .json(&NewMailbox {
-                read_token_hash: token_hash(read_token),
-                send_token_hash: token_hash(send_token),
-            });
+            .json(&body);
         let body: MailboxBody = send(request, StatusCode::CREATED)
             .await?
             .json()
@@ -273,14 +375,71 @@ impl Relay for Http {
         mailbox: &MailboxId,
         read_token: &Token,
         reader: &ReaderId,
-        push_url: Option<&str>,
+        change: ReaderChange<'_>,
     ) -> Result<(), RelayError> {
         let path = format!("mailboxes/{}/readers/{}", b64(mailbox), b64(reader));
         let request = self
             .call(Method::PUT, relay, &path)
             .bearer_auth(b64(read_token))
-            .json(&ReaderBody { push_url });
+            .json(&ReaderBody::from(change));
         send(request, StatusCode::NO_CONTENT).await.map(drop)
+    }
+
+    async fn drop_read_token(
+        &self,
+        relay: &RelayUrl,
+        mailbox: &MailboxId,
+        token: &Token,
+    ) -> Result<(), RelayError> {
+        let path = format!("mailboxes/{}/read-token", b64(mailbox));
+        let request = self
+            .call(Method::DELETE, relay, &path)
+            .bearer_auth(b64(token));
+        send(request, StatusCode::NO_CONTENT).await.map(drop)
+    }
+
+    async fn put_send_token(
+        &self,
+        relay: &RelayUrl,
+        mailbox: &MailboxId,
+        token: &Token,
+        send_token: &Token,
+    ) -> Result<(), RelayError> {
+        let path = format!("mailboxes/{}/send-token", b64(mailbox));
+        let request = self
+            .call(Method::PUT, relay, &path)
+            .bearer_auth(b64(token))
+            .json(&SendTokenBody {
+                send_token_hash: token_hash(send_token),
+            });
+        send(request, StatusCode::NO_CONTENT).await.map(drop)
+    }
+
+    async fn revoke_readers(
+        &self,
+        relay: &RelayUrl,
+        mailbox: &MailboxId,
+        token: &Token,
+        keep: &[ReaderId],
+        drop_shared_token: bool,
+    ) -> Result<Vec<ReaderId>, RelayError> {
+        let path = format!("mailboxes/{}/revoke-readers", b64(mailbox));
+        let request = self
+            .call(Method::POST, relay, &path)
+            .bearer_auth(b64(token))
+            .json(&RevokeBody {
+                keep: keep.iter().map(|r| b64(r)).collect(),
+                drop_shared_token,
+            });
+        let body: RevokedBody = send(request, StatusCode::OK)
+            .await?
+            .json()
+            .await
+            .map_err(transport)?;
+        body.revoked
+            .iter()
+            .map(|text| from_b64(text).ok_or_else(|| transport("unreadable reader identifier")))
+            .collect()
     }
 
     async fn delete_reader(
@@ -542,8 +701,10 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_tungstenite::tungstenite::Message;
 
-    use super::{ClientFrame, Http, parse_frame};
-    use crate::relay::{Delivery, Relay, RelayError, ServerFrame, b64, token_hash};
+    use super::{ClientFrame, Http, parse_features, parse_frame};
+    use crate::relay::{
+        Delivery, MailboxRead, ReaderChange, Relay, RelayError, Role, ServerFrame, b64, token_hash,
+    };
 
     /// Reads one HTTP request and answers it with `status` and `body`.
     /// Returns the request head and body.
@@ -612,7 +773,7 @@ mod tests {
         };
         let client = async {
             let created = http
-                .create_mailbox(&relay, &[1; 32], &[2; 32], &token)
+                .create_mailbox(&relay, &[1; 32], MailboxRead::Shared(&[2; 32]), &token)
                 .await;
             assert_eq!(created, Ok(mailbox));
             let delivered = http.deliver(&relay, &mailbox, &token, &[7; 297]).await;
@@ -625,6 +786,104 @@ mod tests {
                     code: "rate_limited".into()
                 })
             );
+        };
+        tokio::join!(server, client);
+    }
+
+    #[test]
+    fn features_come_from_health() {
+        assert!(parse_features(br#"{"features":["reader_tokens"]}"#).reader_tokens);
+        // Relays before M10 answer with an empty body.
+        assert!(!parse_features(b"").reader_tokens);
+        assert!(!parse_features(br#"{"features":[]}"#).reader_tokens);
+        assert!(!parse_features(br#"{"features":["later"]}"#).reader_tokens);
+        assert!(!parse_features(b"ok").reader_tokens);
+    }
+
+    #[tokio::test]
+    async fn reader_token_calls_follow_the_interface() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let relay = RelayUrl::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let http = Http::new().unwrap();
+        let (mailbox, own, send, reader) = ([3; 32], [4; 32], [5; 32], [6; 16]);
+
+        let server = async {
+            let (head, _) =
+                answer_once(&listener, "200 OK", r#"{"features":["reader_tokens"]}"#).await;
+            assert!(head.starts_with("GET /v1/health HTTP/1.1"), "{head}");
+
+            let body = format!(r#"{{"mailbox":"{}"}}"#, b64(&mailbox));
+            let (head, body) = answer_once(&listener, "201 Created", &body).await;
+            assert!(head.starts_with("POST /v1/mailboxes HTTP/1.1"), "{head}");
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                json,
+                serde_json::json!({
+                    "reader": b64(&reader),
+                    "reader_token_hash": token_hash(&own),
+                    "send_token_hash": token_hash(&send),
+                })
+            );
+
+            // A missing field stays as it is; only what is set is sent.
+            let (head, body) = answer_once(&listener, "204 No Content", "").await;
+            let path = format!(
+                "PUT /v1/mailboxes/{}/readers/{} HTTP/1.1",
+                b64(&mailbox),
+                b64(&reader)
+            );
+            assert!(head.starts_with(&path), "{head}");
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                json,
+                serde_json::json!({"token_hash": token_hash(&send), "role": "satellite"})
+            );
+            let (_, body) = answer_once(&listener, "204 No Content", "").await;
+            assert_eq!(body, br#"{"push_url":null}"#);
+
+            let body = format!(r#"{{"revoked":["{}"]}}"#, b64(&[7; 16]));
+            let (head, body) = answer_once(&listener, "200 OK", &body).await;
+            let path = format!("POST /v1/mailboxes/{}/revoke-readers", b64(&mailbox));
+            assert!(head.starts_with(&path), "{head}");
+            assert!(head.contains(&format!("authorization: Bearer {}", b64(&own))));
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                json,
+                serde_json::json!({"keep": [b64(&reader)], "drop_shared_token": true})
+            );
+
+            let (head, _) = answer_once(&listener, "204 No Content", "").await;
+            let path = format!("DELETE /v1/mailboxes/{}/read-token", b64(&mailbox));
+            assert!(head.starts_with(&path), "{head}");
+            let (head, body) = answer_once(&listener, "204 No Content", "").await;
+            let path = format!("PUT /v1/mailboxes/{}/send-token", b64(&mailbox));
+            assert!(head.starts_with(&path), "{head}");
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["send_token_hash"], token_hash(&send));
+        };
+        let client = async {
+            assert!(http.features(&relay).await.unwrap().reader_tokens);
+            // Known from now on, without asking again.
+            assert!(http.features(&relay).await.unwrap().reader_tokens);
+            let created = http
+                .create_mailbox(&relay, &[1; 32], MailboxRead::Reader(&reader, &own), &send)
+                .await;
+            assert_eq!(created, Ok(mailbox));
+            let change = ReaderChange {
+                token: Some(&send),
+                role: Some(Role::Satellite),
+                ..ReaderChange::default()
+            };
+            let put = http.put_reader(&relay, &mailbox, &own, &reader, change);
+            assert_eq!(put.await, Ok(()));
+            let put = http.put_reader(&relay, &mailbox, &own, &reader, ReaderChange::push(None));
+            assert_eq!(put.await, Ok(()));
+            let keep = [reader];
+            let revoked = http.revoke_readers(&relay, &mailbox, &own, &keep, true);
+            assert_eq!(revoked.await, Ok(vec![[7; 16]]));
+            assert_eq!(http.drop_read_token(&relay, &mailbox, &own).await, Ok(()));
+            let set = http.put_send_token(&relay, &mailbox, &own, &send);
+            assert_eq!(set.await, Ok(()));
         };
         tokio::join!(server, client);
     }

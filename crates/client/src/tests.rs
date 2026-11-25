@@ -5,6 +5,7 @@ mod behaviour;
 mod devices;
 mod pairing;
 mod reports;
+mod tokens;
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,7 +18,7 @@ use lz_core::wire::{Reason, RelayUrl, ResponseKind, Rules, Token};
 use crate::ctx::{self, Clock, Ctx, Fail};
 use crate::i18n::{Language, Texts};
 use crate::relay::fake::FakeRelay;
-use crate::relay::{Relay, b64};
+use crate::relay::{ReaderChange, Relay, b64};
 use crate::show::{Hint, Notice};
 
 /// The German texts, which the assertions of these tests use.
@@ -169,7 +170,7 @@ fn url(text: &str) -> RelayUrl {
     RelayUrl::new(text).unwrap()
 }
 
-fn expect_err(result: Result<(), Fail>, part: &str) {
+fn expect_err<T: std::fmt::Debug>(result: Result<T, Fail>, part: &str) {
     let error = result.unwrap_err();
     assert!(error.0.contains(part), "{error:?} lacks {part:?}");
 }
@@ -536,7 +537,13 @@ async fn acknowledged_messages_do_not_come_again() {
     // A second reader of the same mailbox, as with a second device.
     world
         .relay
-        .put_reader(&url(RELAY_A), &mailbox, &stored.read_token, &[9; 16], None)
+        .put_reader(
+            &url(RELAY_A),
+            &mailbox,
+            &stored.read_token,
+            &[9; 16],
+            ReaderChange::push(None),
+        )
         .await
         .unwrap();
     bert.ctx.request("Anna").await.unwrap();

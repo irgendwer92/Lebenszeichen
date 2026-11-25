@@ -275,6 +275,7 @@ The new device **N** and an existing device **E** of the person exchange four th
 }
 ```
 
+- Since M10, every `read_token` in the handover (group and contacts) is an enrolment token that E registered for N on a relay with `reader_tokens`; N replaces it with its own at once. Own tokens of E are never handed over.
 - `group.seen` is the replay protection of the sync mailbox (message identifiers with their times), so that N discards sync messages that are already reflected in the snapshot.
 - `contacts` contains the contacts in the same JSON form as in the state file of E, including their replay protection and counters. Open invitations stay on the device that created them and are not handed over. Reader identifier and push address of E are device-specific and are not part of the content.
 - Unlike the messages, the handover content is not specified byte by byte here: it is bound to the state file of Lebenszeichen's implementation (`crates/core`, `store.rs`) and carries its own `version`. A device refuses a handover with a version it does not know; the person then updates the older device first.
@@ -287,7 +288,7 @@ The new device **N** and an existing device **E** of the person exchange four th
 |---|---|
 | 32 | Secret contact key |
 | 32 | Public contact key of the contact |
-| 32 | Read token of the own mailbox |
+| 32 | Read token of the own mailbox: its shared token, which the other devices use as enrolment token (M10) |
 | 1 + at most 120 | Own relay address (length, address) |
 | 32 | Mailbox identifier of the contact |
 | 32 | Send token for it |
@@ -329,13 +330,13 @@ Same plaintext header as for contacts, form C, only in the sync mailbox:
 
 ### Removing a device
 
-Another device of the person (E) removes the reader identifier of the device from all mailboxes, then **ends the group**: it deletes the sync mailbox and forgets the group key and the list of devices (since M9).
+Another device of the person (E) removes the reader identifier of the device from all mailboxes, then **ends the group**: it deletes the sync mailbox and forgets the group key and the list of devices (since M9). On a relay with `reader_tokens` (M10), E does the first step with `revoke-readers` and its own token, keeping the other own devices and dropping the shared token, so that the removed device can neither read nor register itself again, and readers it planted go too; on other relays it only unregisters the reader and says that removing is weak there (`m10-satellite.md`, part 1).
 
 - The removed device knows the group key and the tokens of the sync mailbox. With the group kept, it could register itself there again, receive the contacts paired from then on (`contact_part`) and send forged sync messages, such as `device_removed` for E. Without a channel it cannot read, a new group key cannot reach the other devices, so they are added again instead (security review of M9, 2026-11-19).
 - A device whose sync mailbox reports `unknown_mailbox` waits until all its subscriptions have answered. If one of its contact mailboxes reports `unknown_reader`, it was removed: it shows that and deletes its state. Otherwise another device was removed: it leaves the group, keeps its contacts and works on alone, with a notice that it has to be added again to be linked.
 - `device_removed` is still understood (older devices send it), but no longer sent.
 
-Removing still does not protect the existing contacts: the removed device keeps their keys and tokens and could register itself again on their mailboxes. After a lost or stolen device the contacts are paired again (`protocol.md`); the new pairings are out of its reach.
+On relays without `reader_tokens`, removing still does not protect the existing contacts: the removed device keeps their keys and tokens and could register itself again on their mailboxes. On updated relays it is locked out of the mailboxes, but keeps the contact keys and send tokens (`m10-satellite.md`, "What a removed device can still do"). After a lost or stolen device the contacts are paired again (`protocol.md`); the new pairings are out of its reach.
 
 ### Known gaps
 

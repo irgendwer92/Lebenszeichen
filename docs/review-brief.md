@@ -60,11 +60,15 @@ one (`crates/relay/tests/relay.rs`).
 - **The relay sees metadata**: when devices connect, which mailboxes are
   active at the same time, and so can guess who is paired with whom. Meant
   for self-hosted relays.
-- **A lost device keeps the contact keys.** Removing it stops wake signals
-  and ends the group of own devices (so it cannot follow new pairings), but
-  a copy of its state can read and answer on the old contact mailboxes
-  until the contacts are paired again (`wire-format.md`, "Removing a
-  device"). Re-keying contacts on removal is later.
+- **A lost device keeps the contact keys.** Removing it ends the group of
+  own devices (so it cannot follow new pairings) and, on relays with
+  `reader_tokens` (M10), revokes its reader token and every reader it
+  planted and drops the shared token, so a copy of its state can no longer
+  read or answer new requests. It can still send requests, rules and `end`
+  with the contact keys and send tokens, and answer requests open at the
+  removal; on relays without `reader_tokens` it can still read and answer
+  as before (`m10-satellite.md`, part 1). Re-keying contacts on removal is
+  later.
 - **Keys at rest** are protected only by file permissions and the operating
   system (Android app storage, no backup); no encryption of the state file
   yet (open point in `roadmap.md`).

@@ -17,6 +17,7 @@ pub mod relay;
 pub mod reports;
 pub mod show;
 pub mod sync;
+mod tokens;
 
 #[cfg(test)]
 mod tests;

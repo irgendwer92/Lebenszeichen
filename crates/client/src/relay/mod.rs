@@ -1,5 +1,5 @@
 //! Access to relays, as described in `docs/wire-format.md`, section
-//! "Relay-Schnittstelle".
+//! "Relay interface".
 //!
 //! [`Relay`] covers every relay at once: each call names the relay by its
 //! base address, because contacts may live on different relays. [`Http`]
@@ -157,6 +157,73 @@ pub trait Connection {
     fn ack(&mut self, mailbox: &MailboxId, seq: u64) -> Result<(), RelayError>;
 }
 
+/// Optional parts of the relay interface a relay offers, from
+/// `GET /v1/health` (M10). Relays before M10 answer with an empty body and
+/// offer none; they accept unknown fields and ignore them, so a client
+/// never assumes a feature that is not listed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Features {
+    /// A read token per reader: own tokens, the new mailbox form,
+    /// dropping the shared token, setting the send token and revoking
+    /// readers (`docs/m10-satellite.md`, part 1).
+    pub reader_tokens: bool,
+}
+
+/// Role of a reader with a token of its own (M10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// A full device: may manage the mailbox and its readers.
+    Full,
+    /// A satellite: may only read and change its own push address and
+    /// token.
+    Satellite,
+}
+
+impl Role {
+    /// The name in the JSON of the relay interface.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Satellite => "satellite",
+        }
+    }
+}
+
+/// How a new mailbox is read, for [`Relay::create_mailbox`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MailboxRead<'a> {
+    /// The old form: a shared read token, held by every reader that has
+    /// no token of its own.
+    Shared(&'a Token),
+    /// The new form (M10, only on relays with `reader_tokens`): no shared
+    /// token; this reader is the first full reader, with this own token.
+    Reader(&'a ReaderId, &'a Token),
+}
+
+/// A change to a reader with `PUT readers/{reader}`. A field that is `None`
+/// is left out of the request. Relays with `reader_tokens` leave such a
+/// field as it is; older relays treat a missing push address as none and
+/// ignore the other fields, so clients send `token` and `role` only to
+/// relays with `reader_tokens`, and always send `push_url` to older ones.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReaderChange<'a> {
+    /// The push address, or `Some(None)` to remove it.
+    pub push_url: Option<Option<&'a str>>,
+    /// The reader's own token; the relay gets its hash.
+    pub token: Option<&'a Token>,
+    pub role: Option<Role>,
+}
+
+impl<'a> ReaderChange<'a> {
+    /// Sets or removes the push address only, as before M10.
+    pub fn push(push_url: Option<&'a str>) -> Self {
+        Self {
+            push_url: Some(push_url),
+            ..Self::default()
+        }
+    }
+}
+
 /// The calls of the relay interface.
 ///
 /// The futures are not required to be `Send`: every user runs the client on
@@ -170,12 +237,16 @@ pub trait Relay {
         access_token: &Token,
     ) -> Result<Token, RelayError>;
 
-    /// Creates a mailbox, authorised by an access token or a voucher.
+    /// The features of the relay, from `GET /v1/health`.
+    async fn features(&self, relay: &RelayUrl) -> Result<Features, RelayError>;
+
+    /// Creates a mailbox, authorised by an access token, a voucher, or the
+    /// shared token or a full reader's token of a voucher mailbox.
     async fn create_mailbox(
         &self,
         relay: &RelayUrl,
         authorisation: &Token,
-        read_token: &Token,
+        read: MailboxRead<'_>,
         send_token: &Token,
     ) -> Result<MailboxId, RelayError>;
 
@@ -186,19 +257,53 @@ pub trait Relay {
         read_token: &Token,
     ) -> Result<(), RelayError>;
 
-    /// Registers this device as reader of the mailbox, or changes its push
-    /// address. Without one, the relay does not wake the device.
+    /// Registers a reader of the mailbox, or changes it: its push address
+    /// (without one, the relay does not wake the device), and on relays
+    /// with `reader_tokens` its own token and role.
     async fn put_reader(
         &self,
         relay: &RelayUrl,
         mailbox: &MailboxId,
         read_token: &Token,
         reader: &ReaderId,
-        push_url: Option<&str>,
+        change: ReaderChange<'_>,
     ) -> Result<(), RelayError>;
 
-    /// Unregisters a reader of the mailbox. A reader that is not registered
-    /// gives `Refused { status: 404, code: "unknown_reader" }`.
+    /// Drops the shared token of the mailbox (M10), with a full reader's
+    /// token. Readers without a token of their own lose access.
+    async fn drop_read_token(
+        &self,
+        relay: &RelayUrl,
+        mailbox: &MailboxId,
+        token: &Token,
+    ) -> Result<(), RelayError>;
+
+    /// Replaces the send token of the mailbox (M10), with a full reader's
+    /// token.
+    async fn put_send_token(
+        &self,
+        relay: &RelayUrl,
+        mailbox: &MailboxId,
+        token: &Token,
+        send_token: &Token,
+    ) -> Result<(), RelayError>;
+
+    /// Revokes every reader of the mailbox except the caller and `keep`,
+    /// and with `drop_shared_token` the shared token, in one step (M10).
+    /// Needs the caller's own full token. Returns the revoked readers.
+    async fn revoke_readers(
+        &self,
+        relay: &RelayUrl,
+        mailbox: &MailboxId,
+        token: &Token,
+        keep: &[ReaderId],
+        drop_shared_token: bool,
+    ) -> Result<Vec<ReaderId>, RelayError>;
+
+    /// Unregisters a reader of the mailbox, with the shared token or a full
+    /// reader's token, or the reader's own token for itself. A reader that
+    /// is not registered gives `Refused { status: 404, code:
+    /// "unknown_reader" }`.
     async fn delete_reader(
         &self,
         relay: &RelayUrl,
@@ -207,8 +312,8 @@ pub trait Relay {
         reader: &ReaderId,
     ) -> Result<(), RelayError>;
 
-    /// Stores a handover slot, authorised by the access token or any read
-    /// token of this relay. With `reply_hash`, the relay also reserves the
+    /// Stores a handover slot, authorised by the access token, or the
+    /// shared token or a full reader's token of any mailbox of this relay. With `reply_hash`, the relay also reserves the
     /// reveal slot that belongs to `slot`.
     async fn put_slot(
         &self,

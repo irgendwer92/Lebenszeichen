@@ -45,7 +45,10 @@ pub enum SyncEvent {
     RulesSet { contact: MailboxId, rules: Rules },
     /// A contact paired on another device is complete here. The caller
     /// registers this device as a reader of the own mailbox `contact` on
-    /// `relay`, with `read_token` and its push address.
+    /// `relay`, with `read_token` and its push address. Since M10
+    /// `read_token` is the enrolment token for the other devices (the
+    /// mailbox's shared token): where the relay has `reader_tokens`, the
+    /// caller gives itself its own token in the same step.
     ContactAdded {
         contact: MailboxId,
         relay: RelayUrl,
@@ -522,7 +525,9 @@ impl Device {
 }
 
 /// The record of a contact for the other devices. Names are cut to 64
-/// bytes.
+/// bytes. The read token in it is the one this device created the mailbox
+/// with, its shared token, which serves the other devices as enrolment
+/// token (M10); this device's own token never goes into it.
 fn record_of(stored: &StoredContact) -> ContactRecord {
     let state = &stored.state;
     ContactRecord {
@@ -565,6 +570,8 @@ fn contact_from_record(own_mailbox: MailboxId, record: ContactRecord) -> StoredC
         name: record.name.as_str().to_owned(),
         own_relay: record.own_relay,
         read_token: record.read_token,
+        own_token: None,
+        new_token: None,
         state,
     }
 }
@@ -618,6 +625,8 @@ pub(crate) mod tests {
             name: name.into(),
             own_relay: RelayUrl::new("https://relay.example").unwrap(),
             read_token: [fill + 50; 32],
+            own_token: None,
+            new_token: None,
             state: own,
         };
         (stored, peer)

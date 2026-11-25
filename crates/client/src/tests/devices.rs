@@ -20,7 +20,7 @@ use super::{
 use crate::ctx::Fail;
 use crate::devices::{Check, Dialog};
 use crate::relay::fake::{FakeRelay, Origin};
-use crate::relay::{Relay, RelayError};
+use crate::relay::{MailboxRead, Relay, RelayError};
 use crate::show::Notice;
 
 /// Seconds the clock moves on every pause.
@@ -190,20 +190,25 @@ pub(super) async fn family(world: &World) -> (Person, Person, Person) {
 /// helper always asks for "Laptop").
 pub(super) async fn add_tablet(world: &World, phone: &mut Person) -> Person {
     let mut tablet = world.blank();
+    join(world, phone, &mut tablet, RELAY_A).await;
+    tablet
+}
+
+/// `new`, a blank device, joins through `existing` on `relay`.
+pub(super) async fn join(world: &World, existing: &mut Person, new: &mut Person, relay: &str) {
     let log = Shared::default();
     let (added, joined) = join_and_add(
-        phone,
-        &mut tablet,
-        RELAY_A,
+        existing,
+        new,
+        relay,
         world.dialog(Role::Existing, &log),
         world.dialog(Role::New, &log),
     )
     .await;
     added.unwrap();
     joined.unwrap();
-    phone.out.take();
-    tablet.out.take();
-    tablet
+    existing.out.take();
+    new.out.take();
 }
 
 fn bert_mailbox(phone: &Person) -> lz_core::wire::MailboxId {
@@ -1071,7 +1076,7 @@ async fn without_access_token_the_sync_mailbox_is_derived() {
             .create_mailbox(
                 &url(RELAY_B),
                 &voucher_mailbox.read_token,
-                &[1; 32],
+                MailboxRead::Shared(&[1; 32]),
                 &[2; 32],
             )
             .await

@@ -17,7 +17,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use lz_core::contact::ContactState;
 use lz_core::pairing::{Address, PairingState, PendingInvitation, accept};
 use lz_core::store::{
-    Device, JsonFile, RelayAccount, ReportSetting, Store, StoredContact, StoredInvitation, Unsent,
+    Device, JsonFile, ReadAccess, RelayAccount, ReportSetting, Store, StoredContact,
+    StoredInvitation, Unsent,
 };
 use lz_core::wire::invitation::MAX_TEXT_LEN;
 use lz_core::wire::{
@@ -28,7 +29,7 @@ use rand_core::{OsRng, RngCore};
 use serde::Serialize;
 
 use crate::i18n::{Language, Texts};
-use crate::relay::{Relay, RelayError, from_b64};
+use crate::relay::{MailboxRead, Relay, RelayError, from_b64};
 use crate::show::{self, Hint, Hints, when, with_hints};
 
 /// A failed command, with a message for the person at the keyboard.
@@ -324,23 +325,20 @@ impl<R: Relay> Ctx<R> {
                 hint = &inline(self.hints, t, Hint::InitWithAccessToken)
             ));
         };
+        // The old form also on relays with `reader_tokens`: the shared
+        // token goes to the other own devices in `contact_part`, as their
+        // enrolment token; this device takes its own token at once.
         let read_token = random_token();
         let send_token = random_token();
         let mailbox = self
             .relay
-            .create_mailbox(&url, &access, &read_token, &send_token)
+            .create_mailbox(&url, &access, MailboxRead::Shared(&read_token), &send_token)
             .await
             .loc(t)?;
 
         let prepared = async {
-            self.relay
-                .put_reader(
-                    &url,
-                    &mailbox,
-                    &read_token,
-                    &device.reader_id,
-                    device.push_url.as_deref(),
-                )
+            let own_token = self
+                .join_new_mailbox(&url, &mailbox, &read_token, &device)
                 .await
                 .loc(t)?;
             let voucher = match voucher {
@@ -359,6 +357,8 @@ impl<R: Relay> Ctx<R> {
                 device.invitations.push(StoredInvitation {
                     name: name.into(),
                     read_token,
+                    own_token,
+                    new_token: None,
                     pending,
                 });
                 Ok(())
@@ -431,11 +431,17 @@ impl<R: Relay> Ctx<R> {
             }
         };
 
+        // The old form, as for an invitation.
         let read_token = random_token();
         let send_token = random_token();
         let mailbox = self
             .relay
-            .create_mailbox(&own_relay, &authorisation, &read_token, &send_token)
+            .create_mailbox(
+                &own_relay,
+                &authorisation,
+                MailboxRead::Shared(&read_token),
+                &send_token,
+            )
             .await
             .loc(t)?;
         let own = Address {
@@ -444,15 +450,10 @@ impl<R: Relay> Ctx<R> {
             send_token,
         };
         let mut stored = false;
+        let mut own_token = None;
         let result = async {
-            self.relay
-                .put_reader(
-                    &own_relay,
-                    &mailbox,
-                    &read_token,
-                    &device.reader_id,
-                    device.push_url.as_deref(),
-                )
+            own_token = self
+                .join_new_mailbox(&own_relay, &mailbox, &read_token, &device)
                 .await
                 .loc(t)?;
             // A new contact key for every acceptance, also when retrying.
@@ -467,6 +468,8 @@ impl<R: Relay> Ctx<R> {
                     name: name.into(),
                     own_relay,
                     read_token,
+                    own_token,
+                    new_token: None,
                     state: ContactState::new(contact),
                 });
                 Ok(())
@@ -508,9 +511,10 @@ impl<R: Relay> Ctx<R> {
                     Ok(())
                 })?;
             }
+            let token = own_token.unwrap_or(read_token);
             let _ = self
                 .relay
-                .delete_mailbox(&own_relay, &mailbox, &read_token)
+                .delete_mailbox(&own_relay, &mailbox, &token)
                 .await;
             return Err(error);
         }
@@ -757,7 +761,7 @@ impl<R: Relay> Ctx<R> {
             let own = &invitation.pending.own;
             if let Err(error) = self
                 .relay
-                .delete_mailbox(&own.relay, &own.mailbox, &invitation.read_token)
+                .delete_mailbox(&own.relay, &own.mailbox, &invitation.token())
                 .await
             {
                 self.warn_unless_gone(&error);
@@ -828,7 +832,7 @@ impl<R: Relay> Ctx<R> {
         let (own_relay, own_mailbox, read_token) = (
             contact.own_relay,
             contact.state.contact.own_mailbox,
-            contact.read_token,
+            contact.token(),
         );
         // Only paired contacts are known to the other own devices.
         let known_elsewhere = contact.state.is_paired();
@@ -1224,7 +1228,7 @@ impl<R: Relay> Ctx<R> {
             Ok((
                 contact.own_relay,
                 contact.state.contact.own_mailbox,
-                contact.read_token,
+                contact.token(),
             ))
         })?;
         self.delete_own(&relay, &mailbox, &token).await;
