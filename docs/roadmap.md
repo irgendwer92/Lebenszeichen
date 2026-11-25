@@ -188,7 +188,7 @@ Scope:
 - **Done when:** someone without prior knowledge can set up a relay and pair two devices using the guide.
 
 ### M10 – Satellite (microcontroller client)
-- A standalone microcontroller client (approach B below): an ESP32-C6 with OLED and button speaks the protocol with the relay itself, shows an open request and answers it with a press. New device role "satellite": all contacts, no group key, a narrow channel to the own devices.
+- A standalone microcontroller client (approach B below): an ESP32-C6 with OLED and button speaks the protocol with the relay itself, shows an open request and answers it with a press, answers with a reported state (long press, later a sensor), shares states with the own devices both ways, and can ask a contact with its own button. New device role "satellite": all contacts, no group key, a narrow channel to the own devices.
 - A read token per reader on the relay, so that removing any device locks it out of the contact mailboxes.
 - Later in the milestone: a portable C library for ESP-IDF, Arduino and the Pico SDK, with MicroPython, CircuitPython, PlatformIO and ESPHome support. Setup via BLE, to be decided.
 - Plan, decisions and test plan in `m10-satellite.md`.

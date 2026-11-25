@@ -31,8 +31,22 @@ ends the group, `m9-hardening.md`). This is "approach B" of the roadmap
    setup.
 5. **Setup and pairing of the satellite via BLE**, to be decided later. Not
    designed here; constraints are listed under open points.
-6. **A button press is a full manual sign of life**: sent at once, kind
-   `manual`. The satellite never sends reported responses.
+6. **What the satellite does besides answering** (revised 2026-11-25):
+   - A button press is a full manual sign of life: sent at once, kind
+     `manual`.
+   - It can hold a **reported state** (reason and end), set locally by a
+     long press (a preset such as "asleep", 8 hours) or later by a sensor
+     through the ESPHome component. It answers with kind `reported` under
+     the same rules as every device: only after its waiting time, only to
+     contacts that allow reported answers on it, at most one per request.
+   - It **shares states both ways** as in M8c: its shared state reaches the
+     full devices, and theirs (for example "Phone empty") reaches it.
+   - It can **ask**: an ask button bound to one contact ("Is Mum okay?")
+     sends a `request` under the contact's rules, and the OLED and light
+     show the answer.
+   - Its settings for this (reported answers per contact, waiting time,
+     long-press preset, ask buttons) are set on a full device and sent
+     through the channel. It cannot change them itself, nor any rules.
 7. **Several open requests, one button:** one press answers all open
    requests shown; a second button, if present, only scrolls through them.
 8. **The name of the asking contact is shown on the OLED**; the satellite is
@@ -41,6 +55,16 @@ ends the group, `m9-hardening.md`). This is "approach B" of the roadmap
    add a satellite beyond that.
 10. **Before BLE exists**, a satellite is set up over USB serial from `lz`,
     for development only and not shipped.
+11. **Buttons:** the first board has the answer button and one ask button;
+    the long press for the preset is on the answer button. More ask buttons
+    are a firmware build option, bound to contacts by
+    `home_contact_settings`.
+12. **One preset in M10.** The ESPHome component sets reason, duration and
+    share directly through the library, without a preset. A list of presets
+    can come later in `home_settings` without a new type.
+13. **The answer to an own request** is shown on the OLED, with the light in
+    its colour, until the next press or 24 hours; dismissing it sends
+    nothing, and a press while a request is open still answers that request.
 
 ## Threat model
 
@@ -50,7 +74,9 @@ person. The case to cover is a satellite that is lost or taken from the
 hallway: once the person removes it on the phone, it must not be able to
 answer new requests. Professional attackers who extract keys before the
 person notices are out of scope. Before removal, a stolen satellite can do
-what the satellite can do anyway; removal is the remedy.
+what the satellite can do anyway: answer, ask, and share a state, so that
+the full devices answer with its reason. A reported answer is always shown
+as reported, so this is not a fake "✓". Removal is the remedy.
 
 ## Part 1: read token per reader
 
@@ -192,9 +218,34 @@ against fake signs of life; re-pairing is for the rest.
   mailbox, then `sat_answered` on the channel. Without network it keeps both
   and sends them later with the time of the press (valid as long as the
   request had not expired then).
-- Ignores everything else in contact mailboxes: `response` from the contact
-  (it has no own requests), `rules` from the contact, `end` marks the
-  contact ended and turns its light off.
+- **Reported answers.** Two state slots as in M8c: the own state (long
+  press, sensor) and the handed state (from a full device); the valid one
+  set last applies. When the waiting time after an open request has passed,
+  a state is valid, the contact allows reported answers on the satellite
+  and no reported answer to this request was sent yet, here or elsewhere,
+  it sends `response`, kind `reported`, and `sat_answered` with that kind.
+  The request stays open, as everywhere. Another long press, or the end of
+  the time, ends the own state.
+- **Sharing.** If the preset says so (`home_settings`), a long press also
+  shares the state (`sat_state_shared`), and ending it sends
+  `sat_state_cleared`. Received `home_state_shared` and
+  `home_state_cleared` act as `state_shared` and `state_cleared` in M8c:
+  newest wins by sending time and identifier, a clear ends the handed state
+  and a shared own state, an own state that was never shared stays.
+- **Asking.** An ask button checks the requester's side of the rules
+  (`wire-format.md`, "Rules for requests") with the contact's rules for the
+  person: an own open request, the minimum interval since the contact's
+  last manual answer to an own request, the weekly limit over own requests.
+  If allowed, it sends `request` to the contact's mailbox and `sat_asked`
+  on the channel; otherwise the OLED shows "possible again from 18:00". It
+  learns requests sent from full devices through `home_requested`. The
+  contact's `response` arrives in the own mailbox, which the satellite
+  reads: the OLED shows "✓ Mum 14:02" or the reported reason, and the light
+  changes colour until the next press. It needs the contact's `rules` for
+  this; it reads them in the own mailbox itself (last writer wins), and
+  the contact record carries the current ones.
+- `end` from a contact marks the contact ended and turns its light off.
+  Other types in contact mailboxes are ignored.
 - Writes and checks the direction marker of form A (it has both public
   keys), and keeps replay protection per contact and for the channel as in
   `wire-format.md`, persisted in flash, so that a restart does not reopen
@@ -215,31 +266,47 @@ C (`crypto_secretbox`), with the plaintext header of `wire-format.md`.
 - **Send token:** one, held by the satellite and the full devices.
 - **Replay protection:** one set for the channel on each side, same window
   as for contacts.
-- **Types are one-way.** The satellite accepts only the types "to the
-  satellite", full devices only the type "from the satellite". Anything
-  else that opens with the channel key is dropped silently, as is anything
-  that does not open. A reflected message is therefore always of a type the
-  receiver drops; no direction marker is needed.
-- The channel carries no state and no reports, and nothing a full device
-  would take as an instruction other than "the satellite answered".
+- **Types are one-way.** Up types (80–87, `sat_*`) go from the satellite to
+  the full devices, down types (88–99, `home_*`) from the full devices to
+  the satellite. Full devices accept only up types, the satellite only down
+  types. Anything else that opens with the channel key is dropped silently,
+  as is anything that does not open. A reflected message is therefore
+  always of a type the receiver drops; no direction marker is needed.
+- Up types carry only what the satellite did (answered, asked) and its
+  shared state. A full device takes nothing else from the satellite: no
+  rules, no contacts, no devices, no settings.
 
-Messages (the range 80–89 is reserved for the channel, only in form C, only
-in a channel mailbox):
+Messages (the range 80–99 is for the channel, only in form C, only in a
+channel mailbox; types not listed are reserved):
 
 | Type | Name | Direction | Body |
 |---|---|---|---|
-| 80 | `sat_answered` | satellite → full | contact identifier (32), identifier of the request (16), time of the response (8) |
-| 81 | `sat_contact_part` | full → satellite | as `contact_part` (69): contact identifier (32), transfer identifier (16), part (1), number of parts (1), length (1), data (at most 178) |
-| 82 | `sat_responded` | full → satellite | contact identifier (32), identifier of the request (16), time of the response (8) |
-| 83 | `sat_rules` | full → satellite | contact identifier (32), own rules for this contact as in `rules` (10) |
-| 84 | `sat_send_token` | full → satellite | new send token of the channel (32) |
+| 80 | `sat_answered` | up | as `responded` (67): contact identifier (32), identifier of the request (16), kind (1), length of the reason (1), reason (at most 64), time of the response (8) |
+| 81 | `sat_asked` | up | as `requested` (66): contact identifier (32), identifier of the request (16), time of the request (8) |
+| 82 | `sat_state_shared` | up | as `state_shared` (71): length of the reason (1), reason (at most 64), end of the state (8) |
+| 83 | `sat_state_cleared` | up | – |
+| 88 | `home_contact_part` | down | as `contact_part` (69): contact identifier (32), transfer identifier (16), part (1), number of parts (1), length (1), data (at most 178) |
+| 89 | `home_responded` | down | as `responded` (67) |
+| 90 | `home_requested` | down | as `requested` (66) |
+| 91 | `home_rules` | down | contact identifier (32), own rules for this contact as in `rules` (10) |
+| 92 | `home_contact_settings` | down | contact identifier (32), reported answers allowed on the satellite (1: `0` no, `1` yes), ask button (1: `0` none, otherwise its number) |
+| 93 | `home_settings` | down | waiting time in minutes (2), preset: duration in minutes (4), share (1: `0` no, `1` yes), length of the reason (1), reason (at most 64) |
+| 94 | `home_state_shared` | down | as `state_shared` (71) |
+| 95 | `home_state_cleared` | down | – |
+| 96 | `home_send_token` | down | new send token of the channel (32) |
 
-- `sat_answered`: full devices apply it like `responded` with kind `manual`:
-  withdraw the display, start the minimum interval from that time. Parked
-  for 24 hours if the contact or request is not known yet, as for sync
+- `sat_answered`: full devices apply it like `responded` with its kind: a
+  manual one withdraws the display and starts the minimum interval, a
+  reported one keeps them from sending a second reported answer. Parked for
+  24 hours if the contact or request is not known yet, as for sync
   messages. Not passed on.
-- `sat_contact_part`: a contact paired later, or all contacts at setup. The
-  parts form the **satellite contact record** (at most 501 bytes, 3 parts):
+- `sat_asked`: applied like `requested`: the button is disabled on the full
+  devices, and they accept the contact's response to it.
+- `sat_state_shared`, `sat_state_cleared`: applied like `state_shared` and
+  `state_cleared` from another full device (M8c), with the same stamps;
+  each full device reads the channel itself, so none passes them on.
+- `home_contact_part`: a contact paired later, or all contacts at setup. The
+  parts form the **satellite contact record** (at most 698 bytes, 4 parts):
 
   | Length | Content |
   |---|---|
@@ -251,25 +318,43 @@ in a channel mailbox):
   | 32 | Send token for it |
   | 1 + at most 120 | Relay address of the contact |
   | 10 + 8 + 16 | Own rules for this contact, with sending time and message identifier of the last applied ones |
+  | 10 + 8 + 16 | Rules of the contact, with their stamp |
+  | 1 + 1 | Contact settings of the satellite, as in `home_contact_settings` |
+  | 16 + 8 | Open own request: identifier and time, zero bytes if none |
+  | 8 | Time of the contact's last manual answer to an own request, 0 if none |
+  | 1 + 8 × at most 16 | Times of the own requests to this contact in the last 7 days (number, times) |
   | 1 + at most 64 | Local name of the contact |
 
-  Same checks for parts as for `contact_part`. The satellite stores the
-  contact, replaces the enrolment token with its own and subscribes. A
-  record for a contact it has already replaces the name and the rules if
-  its rules stamp is newer, so that a renamed contact can be sent again.
-- `sat_responded`: another device answered manually; the satellite turns
-  the light off and starts the minimum interval. Reported responses are not
-  sent, as they leave the request open.
-- `sat_rules`: sent with the same time and identifier as the `rules` to the
-  contact, applied only if newer (last writer wins, as `rules_set`).
-- `sat_send_token`: after a full device was removed (below). The satellite
+  Same checks for parts as for `contact_part`; 4 parts are within what
+  `contact_part` accepts. The satellite stores the contact, replaces the
+  enrolment token with its own and subscribes. A record for a contact it
+  has already replaces the name, and rules and settings whose stamp is
+  newer, so that a renamed contact can be sent again. With more than 16
+  own requests in a week the oldest are left out; the satellite may then
+  allow a request that the contact discards, and the contact's check stays
+  authoritative, as on every device.
+- `home_responded`: another device answered. Manual: the satellite turns
+  the light off and starts the minimum interval. Reported: it sends no
+  reported answer of its own to that request; the light stays on.
+- `home_requested`: a full device asked the contact; the satellite counts
+  it, disables the ask button and accepts the response.
+- `home_rules`: sent with the same time and identifier as the `rules` to
+  the contact, applied only if newer (last writer wins, as `rules_set`).
+- `home_contact_settings`, `home_settings`: applied only if newer, by
+  sending time and identifier. Defaults until one arrives: reported answers
+  off for every contact (as `concept.md`), waiting time 15 minutes, no
+  preset, no ask buttons.
+- `home_state_shared`, `home_state_cleared`: sent with the same time and
+  identifier as the matching sync message.
+- `home_send_token`: after a full device was removed (below). The satellite
   sends with the new token from then on.
 
-Every full device sends its own `sat_*` next to the matching sync message:
-`sat_responded` with `responded`, `sat_rules` with `rules_set`,
-`sat_contact_part` with `contact_part` (after registering the satellite's
-reader with role `satellite` and an enrolment token). Retries use the
-outbox, as for the sync mailbox.
+Every full device sends its own `home_*` next to the matching sync message:
+`home_responded` with `responded` (both kinds), `home_requested` with
+`requested`, `home_rules` with `rules_set`, `home_state_shared` and
+`home_state_cleared` with theirs, `home_contact_part` with `contact_part`
+(after registering the satellite's reader with role `satellite` and an
+enrolment token). Retries use the outbox, as for the sync mailbox.
 
 **Not on the channel, and why:**
 
@@ -278,8 +363,9 @@ outbox, as for the sync mailbox.
 - *Contact removed*: the device that ends a contact deletes its mailbox; the
   satellite gets `unknown_mailbox` for it and deletes the contact. Same for
   the 90-day cleanup.
-- *Requests of the person's own*: the satellite does not ask.
-- *States (M8, M8c)*: the satellite sends no reported responses.
+- *Rules of the contact*: the satellite reads them in the own mailbox.
+- *The satellite's own settings, up*: full devices learn them from each
+  other (below), never from the satellite.
 - *Device list, group changes*: the satellite does not need them.
 
 ### The satellite among the full devices
@@ -294,7 +380,18 @@ The record (at most 282 bytes, 2 parts): name (1 + at most 32), relay of
 the channel (1 + at most 120), channel mailbox (32), enrolment token of the
 recipient on it (32), send token (32), channel key (32). Checks as for
 `contact_part`. The handover gets a `satellites` list with the same
-content and the channel's replay protection. Older devices ignore type 73.
+content, the satellite's settings and the channel's replay protection.
+Older devices ignore types 73 to 75.
+
+The satellite's settings are kept on every full device, so that any of them
+can show and change them. The device that changes them sends `home_*` to
+the channel and tells the other full devices through the sync mailbox,
+applied only if newer:
+
+| Type | Name | Body |
+|---|---|---|
+| 74 | `satellite_settings` | reader identifier of the satellite (16), then as `home_settings` |
+| 75 | `satellite_contact_settings` | reader identifier of the satellite (16), then as `home_contact_settings` |
 
 The satellite shows up in the device list as a satellite. Any full device
 can remove it.
@@ -313,7 +410,9 @@ can remove it.
    satellite is the only way its channel mailbox goes away.
 4. A stolen satellite that stays offline keeps its keys, but with them it
    cannot read new requests anywhere; see "What a removed device can still
-   do".
+   do". Asking and reporting add nothing there: with the channel deleted it
+   can no longer share a state with the full devices, and the answers to
+   its own requests arrive in the own mailboxes, which it cannot read.
 
 ### Removing a full device while there is a satellite
 
@@ -321,8 +420,9 @@ The removed device R knows the channel key and send token. E:
 
 1. revokes R on the channel mailbox, so it can read nothing there;
 2. sets a new send token (`PUT /send-token`) and sends it to the satellite
-   in `sat_send_token`, so that R cannot fill the channel or feed the
-   satellite forged rules, contacts or "answered elsewhere";
+   in `home_send_token`, so that R cannot fill the channel or feed the
+   satellite forged rules, settings, contacts, states or "answered
+   elsewhere";
 3. keeps the channel key: R can neither read nor send on the channel any
    more, and the key alone opens only what R saw before.
 
@@ -335,7 +435,7 @@ the new send token and an enrolment token.
 
 The pairing full device D creates the own mailbox, registers the other full
 devices and the satellite (role `satellite`) with enrolment tokens, sends
-`contact_part` to the sync mailbox and `sat_contact_part` to the channel.
+`contact_part` to the sync mailbox and `home_contact_part` to the channel.
 If D was offline from the group (after a removal), the satellite gets the
 contact once D is added again, like the other full devices.
 
@@ -344,6 +444,15 @@ contact once D is added again, like the other full devices.
 Secure boot and flash encryption (with NVS encryption) are the recommended
 setup on the ESP32-C6. On platforms without flash encryption, such as the
 RP2040, keys are in plain flash; removal still locks a stolen one out.
+
+Kept in flash, so that a restart changes nothing a contact or the person
+could notice: contacts with replay protection and counters; incoming
+requests of the last 7 days (identifier, time, answered manually, reported
+answer sent); own requests of the last 7 days and the open one; both state
+slots with their stamps; settings with their stamps; the outbox. Waiting
+time timers are not stored: after a restart they follow from the times of
+the open requests and the waiting time. Writes are small and rare (a few
+per request), well within the wear of NVS.
 
 ### What the C library must implement
 
@@ -355,8 +464,12 @@ Without the API, which is left for later:
   satellite unless setup uses it. libsodium (an ESP-IDF component) or
   TweetNaCl fit; Monocypher does not (XChaCha20 instead of XSalsa20).
 - Envelopes of exactly 297 bytes, the plaintext header, the bodies of
-  types 4, 5, 6 and 80–84, the direction marker, padding with zero bytes.
-- Rules for requests, replay protection, the satellite contact record.
+  types 3–6 and 80–96, the direction marker, padding with zero bytes.
+- Rules for requests on both sides (accepting a request, and checking an
+  own one with the contact's rules), replay protection, the satellite
+  contact record.
+- Reported answers: two state slots, newest-wins stamps, waiting time
+  timers, one reported answer per request.
 - Relay access: HTTPS with certificate check (a CA bundle), WebSocket with
   the JSON frames of `wire-format.md`, b64url and hex.
 - Time from NTP, checked against the relay's `Date` header; above 5 minutes
@@ -387,14 +500,16 @@ Without the API, which is left for later:
 
 ## Work
 
-- Wire: types 73, 80–84, the satellite contact and satellite records.
+- Wire: types 73–75, 80–83, 88–96, the satellite contact and satellite
+  records.
 - Relay: schema 3, token matching and roles, new calls, `/health`
   features, check order of `subscribe`, tests.
 - Core and client: own tokens and enrolment, removal with revoke and
-  dropping the shared token, satellite list, channel send and receive,
-  removing a satellite, `lz satellite` commands.
-- App: satellite in the device list, remove, notices for relays without
-  `reader_tokens`.
+  dropping the shared token, satellite list and settings, channel send and
+  receive, removing a satellite, `lz satellite` commands.
+- App: satellite in the device list with its settings (reported answers
+  per contact, waiting time, preset, ask buttons), remove, notices for
+  relays without `reader_tokens`.
 - Satellite firmware for the ESP32-C6, on the first cut of the C library.
 - Docs: `wire-format.md`, `protocol.md`, `self-hosting.md` (lost device),
   `review-brief.md`, roadmap.
@@ -423,8 +538,24 @@ Without the API, which is left for later:
       weekly limit is discarded by phone and satellite alike.
 - [ ] A contact paired on the phone appears on the satellite; a contact
       ended disappears from it.
-- [ ] Full devices drop every channel type except 80; the satellite drops
-      80 and anything unknown; replays are dropped after a restart.
+- [ ] Long press sets the preset; after the waiting time the test contact
+      gets "“asleep” (reported)" from the satellite, only if allowed for it;
+      a later press still sends ✓; the phone sends no second reported
+      answer.
+- [ ] A shared state of the satellite is answered by the phone after its
+      waiting time; "Phone empty" shared by the phone is answered by the
+      satellite; a clear on either side ends it on both; an own unshared
+      state stays.
+- [ ] Ask button: request reaches the test contact, the phone disables its
+      button, the answer shows on the OLED; a second ask within the minimum
+      interval is refused on the satellite; a request sent from the phone
+      disables the ask button.
+- [ ] Settings changed on one full device reach the satellite and the
+      other full devices.
+- [ ] A restart during the waiting time: the reported answer still goes out
+      once, at the right time.
+- [ ] Full devices drop every down type and the satellite every up type and
+      anything unknown; replays are dropped after a restart.
 - [ ] Removing a full device while there is a satellite: the satellite stays
       linked and gets the new send token; the removed device's send to the
       channel is refused.
