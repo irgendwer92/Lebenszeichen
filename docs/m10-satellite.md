@@ -65,6 +65,38 @@ ends the group, `m9-hardening.md`). This is "approach B" of the roadmap
 13. **The answer to an own request** is shown on the OLED, with the light in
     its colour, until the next press or 24 hours; dismissing it sends
     nothing, and a press while a request is open still answers that request.
+14. **Setup via BLE, from the Android app only in M10** (desktop BLE later;
+    `lz` over USB serial stays for development). Our own Lebenszeichen GATT
+    service, the same on every SDK, not Espressif's provisioning (ESP-IDF
+    only). The satellite is in setup mode when it has no state or when the
+    button is held at power-on. Both sides exchange fresh X25519 keys over
+    BLE; a 6-digit check code from both keys and a commitment, as in
+    contact pairing, is shown on the OLED and on the phone and confirmed on
+    the phone. Over that encrypted link the phone hands over WiFi name and
+    password, the channel (relay, channel mailbox, enrolment token, send
+    token, channel key) **and all contact records**; the channel carries only
+    later changes. The satellite draws its own reader identifier and
+    replaces the enrolment token at once.
+15. **Changing WiFi**: setup mode again from the phone; keys and contacts
+    stay. **Factory reset**: the button held for about 10 seconds at
+    power-on wipes everything, as a removal does. Boards without a display
+    (a printed fixed code) come later.
+16. **C library**: one pure C99 core (`lz_core`: envelopes, crypto, message
+    types, rules, satellite state; no network, no flash, no `malloc`; time,
+    randomness and storage through callbacks) and thin adapters per SDK for
+    network, storage and BLE. Crypto from libsodium where the SDK ships it
+    (ESP-IDF, Arduino-ESP32), otherwise the bundled TweetNaCl; SHA-256 from
+    mbedTLS. API around `lz_poll()` with events (request opened, request
+    closed, answer received) and actions (answer, ask, set state). The Rust
+    crates generate test vectors that the C tests in CI reproduce byte for
+    byte.
+17. **Order of the SDKs**: ESP-IDF with the ESP32-C6 firmware first, then
+    ESPHome, Arduino, Pico SDK, MicroPython and CircuitPython. The code
+    lives under `firmware/` in this repository; a CI job mirrors it into a
+    separate repository `lebenszeichen-c` for the Arduino Library Manager,
+    PlatformIO and ESPHome.
+18. **License of the library**: LGPL-3.0-or-later with a static linking
+    exception (draft in `license-exception.md`, legal review open).
 
 ## Threat model
 
@@ -106,11 +138,11 @@ A bearer token for a mailbox is matched against the shared token, if there
 is one, and against the `token_hash` of every reader of that mailbox. The
 match decides the rights:
 
-| Token | Subscribe, ack | Change own push address, own token | Register, change, revoke other readers | Delete mailbox, drop shared token, set send token | Derive mailboxes, store handover slots |
-|---|---|---|---|---|---|
-| Shared token | as a legacy reader | yes | yes | delete only | yes |
-| Full reader | yes | yes | yes | yes | yes |
-| Satellite reader | yes | yes | no | no | no |
+| Token | Subscribe, ack | Change own push address, own token | Register, change, revoke other readers | Delete mailbox, drop shared token, set send token | Revoke all readers but a given set | Derive mailboxes, store handover slots |
+|---|---|---|---|---|---|---|
+| Shared token | as a legacy reader | yes, for legacy readers | yes | delete only | no | yes |
+| Full reader | yes | yes | yes | yes | yes | yes |
+| Satellite reader | yes | yes | no | no | no | no |
 
 A reader with a token of its own subscribes only with that token; the
 shared token no longer works for it. Satellite tokens never authorize
@@ -126,6 +158,7 @@ API changes, all under `/v1`:
 | `DELETE /mailboxes/{m}/readers/{r}` | Also allowed with the reader's own token (leaving). |
 | `DELETE /mailboxes/{m}/read-token` | New, full reader only: drops the shared token. Legacy readers lose access. `204`, also if there was none. |
 | `PUT /mailboxes/{m}/send-token` | New, full reader only: `{"send_token_hash":"<hex>"}` replaces the send token. Used for the satellite channel. |
+| `POST /mailboxes/{m}/revoke-readers` | New, full reader only (its own token): `{"keep":["<b64url>",…],"drop_shared_token":true\|false}`. Revokes every reader except the caller and those in `keep`, and drops the shared token if asked, in one transaction. `200 {"revoked":["<b64url>",…]}`. Part of `reader_tokens`. |
 | WebSocket `subscribe` | Frame unchanged. Order of checks: mailbox (`unknown_mailbox`), **then reader** (`unknown_reader`), then token (`unauthorized`). Today the token comes before the reader. |
 
 - The new order lets a revoked device learn that it was removed: revoking
@@ -139,6 +172,44 @@ API changes, all under `/v1`:
   reader's mailbox as they are now through the shared token.
 - The relay still does not know which readers belong to one person; the
   reader identifier already links mailboxes of one device today.
+
+Settled in the implementation (relay, 2026-11-25):
+
+- `role` in the schema is the role of a reader with a token of its own; a
+  legacy reader subscribes with the shared token whatever its role. A new
+  reader without `role` is a full reader. A stored role other than 1 counts
+  as satellite.
+- A satellite may not send `role` at all, not even its own. A token hash
+  that the shared token or another reader of the same mailbox already has
+  is refused (`400`), so a token always names one principal.
+- In `PUT readers/{r}` a missing field stays as it is; `"push_url":null`
+  still removes the push address. Old clients always send `push_url`.
+- Changing a reader's token or dropping the shared token ends live
+  subscriptions opened with the old token, with `unauthorized`; every
+  delivery and acknowledgement checks the token again. A device that
+  replaces its enrolment token while subscribed subscribes again with the
+  new one.
+- Dropping the shared token keeps the legacy readers registered (messages
+  wait for their acknowledgement up to 24 hours); a full reader revokes them.
+- Authorization and the change it allows run in one transaction, so a
+  reader revoked at the same moment cannot register itself again.
+- `DELETE readers/{r}` and the other calls keep their old order: wrong
+  token before unknown reader. Only `subscribe` changed.
+- The shared token is not really weaker than a full reader: it can register
+  a full reader with a token of its choice. The table limits what it does
+  directly; the protection comes from dropping it.
+- **Hidden readers.** Before removal, R (with the shared token or its own
+  full token) can register extra readers with tokens of its choice; the
+  relay has no list of readers. Revoking only R's reader would leave them.
+  Hence `revoke-readers`: E names the readers it knows to keep, and every
+  other reader goes, together with the shared token, so that nothing
+  planted survives and the shared token cannot plant a new one in between.
+  The caller is always kept, whether it names itself or not: the call can
+  never leave a mailbox without the full reader that made it, and a device
+  that wants to leave uses `DELETE readers/{own}`. `keep` holds at most 16
+  identifiers; unknown ones are ignored. Revoked readers' live
+  subscriptions end with `unknown_reader`, and waiting messages no longer
+  wait for them. The shared token and satellites may not call it.
 
 ### Client
 
@@ -154,8 +225,10 @@ API changes, all under `/v1`:
   enrolment tokens. In `contact_part` the field "read token of the own
   mailbox" becomes the enrolment token for all other devices of the group.
 - **Removing a device** (extends `wire-format.md`, "Removing a device"):
-  E revokes the reader of the removed device R on every own mailbox, drops
-  the shared token there, deletes the sync mailbox (the group ends, as
+  on every own mailbox E calls `revoke-readers` with
+  `"drop_shared_token":true` and as `keep` the readers of the devices that
+  stay (the other full devices and the satellite), so that R and any reader
+  R planted go in one step; it deletes the sync mailbox (the group ends, as
   since M9), and rotates the send token of the satellite channel if there
   is one (below). Remaining devices are added again as since M9 and get
   fresh enrolment tokens with the handover.
@@ -186,7 +259,8 @@ API changes, all under `/v1`:
 After E revoked it on relays with `reader_tokens`:
 
 - It cannot read anything new on the own mailboxes, nor register itself
-  again.
+  again; readers it planted before the removal are revoked with it
+  (`revoke-readers`).
 - **Requests open at the moment of removal**: it knows their identifiers
   and can answer them until they expire (default 24 hours) or the person
   answers them manually; after a manual response the requester accepts no
@@ -418,7 +492,9 @@ can remove it.
 
 The removed device R knows the channel key and send token. E:
 
-1. revokes R on the channel mailbox, so it can read nothing there;
+1. revokes R on the channel mailbox with `revoke-readers` (keeping the
+   satellite and the other full devices), so that neither R nor a reader it
+   planted can read there;
 2. sets a new send token (`PUT /send-token`) and sends it to the satellite
    in `home_send_token`, so that R cannot fill the channel or feed the
    satellite forged rules, settings, contacts, states or "answered
@@ -479,21 +555,7 @@ Without the API, which is left for later:
 
 ## Open points
 
-1. **Setup and pairing via BLE, to be decided.** Constraints from this
-   design: setup is started on a full device and needs the relay with
-   `reader_tokens`; it must hand the satellite the channel (relay, channel
-   mailbox, enrolment token, send token, channel key) and WiFi credentials,
-   over an authenticated BLE link (for example a code on the OLED compared
-   on the phone); the satellite generates its own reader identifier and
-   replaces the enrolment token at once. Contacts can then come through the
-   channel. *Recommendation:* keep BLE to this bootstrap of about 300 bytes.
-2. **Initial contacts and the channel limits.** 3 parts per contact; a
-   mailbox holds at most 32 waiting messages, and they wait until every
-   full device has acknowledged them. More than about 8 contacts at setup
-   can hit the limit. *Recommendation:* the outbox paces them (it already
-   retries on `mailbox_full`); if that proves slow, a sealed handover slot
-   with all records.
-3. **When to drop the shared token without a removal.** *Recommendation:*
+1. **When to drop the shared token without a removal.** *Recommendation:*
    once every own device has its own token on a mailbox (each device marks
    this in `device`), so that the protection holds before any removal; not
    in M10.
@@ -518,7 +580,8 @@ Without the API, which is left for later:
 
 - [ ] Relay migration from schema 2: existing mailboxes and readers work
       with the shared token; old `lz` against the new relay passes its
-      tests.
+      tests. (Relay side covered by `migration_from_version_2` and the
+      existing relay tests, 2026-11-25.)
 - [ ] Updated devices switch to own tokens; the shared token then no
       longer subscribes as them.
 - [ ] An old device receives a contact paired on a new one and reads it

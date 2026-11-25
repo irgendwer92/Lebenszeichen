@@ -347,22 +347,43 @@ HTTPS and WebSocket under the path `/v1`. Tokens are in the header `Authorizatio
 
 | Call | Authorization | Request | Response |
 |---|---|---|---|
-| `GET /v1/health` | – | – | `200` |
+| `GET /v1/health` | – | – | `200 {"features":["reader_tokens"]}` (M10); older relays answer `200` with an empty body |
 | `POST /v1/vouchers` | Access token | – | `201 {"voucher":"…","expires_in":600}` |
-| `POST /v1/mailboxes` | Access token, voucher, or read token of a voucher mailbox (M5) | `{"read_token_hash":"<hex>","send_token_hash":"<hex>"}` | `201 {"mailbox":"…"}` |
-| `DELETE /v1/mailboxes/{mailbox}` | Read token | – | `204` |
-| `PUT /v1/mailboxes/{mailbox}/readers/{reader}` | Read token | `{"push_url":"https://…"}` or `{"push_url":null}` | `204` |
-| `DELETE /v1/mailboxes/{mailbox}/readers/{reader}` | Read token | – | `204` |
+| `POST /v1/mailboxes` | Access token, voucher, or the shared token or a full reader's token of a voucher mailbox (M5, M10) | `{"read_token_hash":"<hex>","send_token_hash":"<hex>"}`, or since M10 `{"reader":"<b64url>","reader_token_hash":"<hex>","send_token_hash":"<hex>"}`: no shared token, the reader is the first full reader | `201 {"mailbox":"…"}` |
+| `DELETE /v1/mailboxes/{mailbox}` | Shared token or full reader | – | `204` |
+| `DELETE /v1/mailboxes/{mailbox}/read-token` | Full reader (M10) | – | `204`, also if there was no shared token |
+| `PUT /v1/mailboxes/{mailbox}/send-token` | Full reader (M10) | `{"send_token_hash":"<hex>"}` | `204` |
+| `POST /v1/mailboxes/{mailbox}/revoke-readers` | Full reader (M10) | `{"keep":["<reader>",…],"drop_shared_token":true\|false}`, at most 16 identifiers | `200 {"revoked":["<reader>",…]}` |
+| `PUT /v1/mailboxes/{mailbox}/readers/{reader}` | Shared token or full reader for any reader; a satellite only for itself | `{"push_url":"https://…"}` or `{"push_url":null}`; since M10 optionally `"token_hash":"<hex>"` and `"role":"full"\|"satellite"` | `204` |
+| `DELETE /v1/mailboxes/{mailbox}/readers/{reader}` | Shared token or full reader for any reader; the reader's own token for itself | – | `204` |
 | `POST /v1/mailboxes/{mailbox}/messages` | Send token | Body: the 297 bytes of the envelope, `application/octet-stream` | `202` |
-| `PUT /v1/handovers/{handover}` | Access token or read token of any mailbox on this relay (limits per voucher family since M9); for a reveal slot the reply token (M5) | Header `Lz-Fetch-Hash: <hex>`, optionally `Lz-Reply-Hash: <hex>`; body: at most 64 KiB, `application/octet-stream` | `201` |
+| `PUT /v1/handovers/{handover}` | Access token, or the shared token or a full reader's token of any mailbox on this relay (limits per voucher family since M9); for a reveal slot the reply token (M5) | Header `Lz-Fetch-Hash: <hex>`, optionally `Lz-Reply-Hash: <hex>`; body: at most 64 KiB, `application/octet-stream` | `201` |
 | `GET /v1/handovers/{handover}` | Fetch token; for a reveal slot the reply token (M5) | – | `200` with the stored bytes as body; deleted afterwards |
+
+### Read tokens (M10)
+
+Each reader of a mailbox may have a token of its own (only its hash is stored) and a role, `full` or `satellite`. The read token of the old form becomes the mailbox's **shared token**; a full reader can drop it. A bearer token for a mailbox is matched against the shared token, if there is one, and against the token of every reader of that mailbox:
+
+| Token | Subscribe, ack | Change own push address, own token | Register, change, revoke other readers | Delete mailbox | Drop shared token, set send token, revoke all readers but a given set | Derive mailboxes, store handover slots |
+|---|---|---|---|---|---|---|
+| Shared token | as a legacy reader (one without a token of its own) | yes, for legacy readers | yes | yes | no | yes |
+| Full reader | as itself | yes | yes | yes | yes | yes |
+| Satellite | as itself | yes | no | no | no | no |
+
+- A reader with a token of its own subscribes only with it; the shared token no longer works for it.
+- `PUT readers/{reader}`: a field that is missing stays as it is (since M10; before, a missing `push_url` removed it). A new reader is a full reader unless `role` says otherwise, and needs `token_hash` if the mailbox has no shared token. A satellite may send only `push_url` and `token_hash`, for itself. A `token_hash` that the shared token or another reader of the mailbox already has is refused with `400`.
+- Changing a reader's token or dropping the shared token ends live subscriptions opened with the old token (error `unauthorized`); the device subscribes again with its current token. Every delivery and acknowledgement checks the token again.
+- Dropping the shared token keeps the legacy readers registered; they can no longer subscribe and are revoked like any other reader.
+- Revoking a reader deletes it with its token; a live subscription ends with `unknown_reader`.
+- `revoke-readers` deletes every reader of the mailbox except the caller (always kept, named or not) and those in `keep`, and with `"drop_shared_token":true` also drops the shared token, all in one step. Unknown identifiers in `keep` are ignored. It is how a device removes another one: readers the removed device registered behind the others' backs go with it, and the shared token cannot register a new one in between. Revoked readers' subscriptions end with `unknown_reader`; messages no longer wait for their acknowledgement.
+- The relay ignores fields it does not know, so a relay without `reader_tokens` in `/health` accepts `token_hash` and `role` with `204` and does nothing with them. Clients check `/health` first.
 
 Error codes:
 
 | Status | `error` | Meaning |
 |---|---|---|
-| 400 | `bad_request` | Request not readable; for a message, a body that is not exactly 297 bytes |
-| 401 | `unauthorized` | Token missing or does not match |
+| 400 | `bad_request` | Request not readable; for a message, a body that is not exactly 297 bytes; for a reader, more than 16, a new one without token on a mailbox without shared token, or a token hash already taken |
+| 401 | `unauthorized` | Token missing or does not match, or the token does not have the right (M10) |
 | 404 | `unknown_mailbox` | The mailbox does not exist or no longer exists. This is how a client recognizes that it was removed. |
 | 404 | `unknown_reader` | Reader not registered |
 | 404 | `unknown_handover` | No handover under this identifier, or already retrieved or expired |
@@ -376,14 +397,14 @@ Error codes:
 
 A voucher is valid for 10 minutes and for exactly one mailbox. The relay accepts only message bodies of exactly 297 bytes, the length of an envelope, and does not check their content (since M9; before, any body up to 512 bytes).
 
-**Derived mailboxes (M5):** Whoever shows the read token of a mailbox that was created with a voucher may create up to 10 further mailboxes with it. They count as long as they exist; deleting one frees its place, but a voucher mailbox can derive at most 30 mailboxes in its lifetime, so that deleting and creating again cannot go on forever (since M9). Derived mailboxes cannot create further mailboxes, and neither can mailboxes created with the access token. The relay checks the count and creates the mailbox in one step, so that simultaneous requests cannot exceed 10. A derived mailbox stays when its voucher mailbox is deleted and then follows only the 90-day rule; it can no longer be used to create further ones, because the voucher mailbox is gone. This lets people without an access token create a sync mailbox for several devices, and later also invite contacts themselves, without letting strangers onto the relay: every derived mailbox goes back to a voucher issued by a holder of the access token. The holder of the access token cannot withdraw such mailboxes; that is the price of the relay not knowing who belongs to whom.
+**Derived mailboxes (M5):** Whoever shows the shared token or a full reader's token (M10) of a mailbox that was created with a voucher may create up to 10 further mailboxes with it. They count as long as they exist; deleting one frees its place, but a voucher mailbox can derive at most 30 mailboxes in its lifetime, so that deleting and creating again cannot go on forever (since M9). Derived mailboxes cannot create further mailboxes, and neither can mailboxes created with the access token. The relay checks the count and creates the mailbox in one step, so that simultaneous requests cannot exceed 10. A derived mailbox stays when its voucher mailbox is deleted and then follows only the 90-day rule; it can no longer be used to create further ones, because the voucher mailbox is gone. This lets people without an access token create a sync mailbox for several devices, and later also invite contacts themselves, without letting strangers onto the relay: every derived mailbox goes back to a voucher issued by a holder of the access token. The holder of the access token cannot withdraw such mailboxes; that is the price of the relay not knowing who belongs to whom.
 
 ### Handover
 
 Handover slots carry challenge, revealed value and handover when a device is added (see [Adding a device](#adding-a-device)). The identifier `{handover}` is the `b64url` of the SHA-256 values given there.
 
-- `PUT` needs a token of this relay, to keep strangers from storing data on it. The read token of any mailbox suffices, so that people without an access token can add devices as well. At most two slots authorized with the same token wait at the same time, at most 64 on the relay.
-- **Voucher families (M9):** A voucher mailbox and the mailboxes derived from it form a voucher family; a derived mailbox stays in it when the voucher mailbox is deleted. Slots authorized with read tokens of one voucher family share the limit of two, and all voucher families together hold at most 32 slots, reserved reveal slots included. The access token and the read tokens of mailboxes created with it are not limited this way, so guests cannot keep the holder of the access token from adding devices. If several mailboxes have the same read token hash and one of them belongs to a voucher family, that family's limits apply.
+- `PUT` needs a token of this relay, to keep strangers from storing data on it. The shared token or a full reader's token of any mailbox suffices (a satellite's does not, M10), so that people without an access token can add devices as well. At most two slots authorized with the same token wait at the same time, at most 64 on the relay.
+- **Voucher families (M9):** A voucher mailbox and the mailboxes derived from it form a voucher family; a derived mailbox stays in it when the voucher mailbox is deleted. Slots authorized with tokens of the mailboxes of one voucher family (shared tokens and full readers' tokens) share the limit of two, and all voucher families together hold at most 32 slots, reserved reveal slots included. The access token and the read tokens of mailboxes created with it are not limited this way, so guests cannot keep the holder of the access token from adding devices. If several mailboxes have the same read token hash and one of them belongs to a voucher family, that family's limits apply.
 - `PUT` names the hash of the fetch token in `Lz-Fetch-Hash`; `GET` needs the fetch token itself. Whoever only sees the device code can therefore neither read nor delete a slot.
 - **Reveal slot:** If a `PUT` also names `Lz-Reply-Hash`, the relay reserves the slot `SHA-256("lebenszeichen-v1-reveal" || slot)` in the same step, where `slot` are the 32 bytes of the identifier just stored. If that reveal identifier exists or is reserved already, the whole `PUT` fails with `409`. The reservation lasts 10 minutes from the reserving `PUT`, independent of when the reserving slot is fetched or deleted. The reveal slot accepts exactly one `PUT` of exactly 32 bytes, authorized with the reply token in `Authorization: Bearer` instead of a relay token and without `Lz-Fetch-Hash`; `GET` on it also needs the reply token, and a successful `GET` deletes it. A reserved or filled reveal slot counts towards the limit of 64 slots on the relay and, if reserved by a voucher family, towards the 32 of all voucher families, not towards the two per token or per family. This lets the new device answer without a token of the relay.
 - The relay deletes a slot with the first successful `GET`, at the latest 10 minutes after the `PUT`. A second `PUT` to an existing or reserved identifier fails with `409`.
@@ -410,6 +431,7 @@ From the relay:
 ```
 
 - A connection can subscribe to any number of mailboxes. The reader must be registered beforehand.
+- `subscribe` checks the mailbox (`unknown_mailbox`), then the reader (`unknown_reader`), then the token (`unauthorized`), so that a revoked device learns that it was removed (since M10; before, the token came before the reader). `token` is the reader's own token, or the shared token for a legacy reader.
 - `seq` counts upward per mailbox and starts at 1. After `subscribed`, the relay sends all waiting messages with `seq` above this reader's last acknowledgment, then new ones as they arrive.
 - `ack` acknowledges all messages of this mailbox up to and including `seq`. A client acknowledges only once it has durably stored or processed the message.
 - The relay deletes a message as soon as all registered readers have acknowledged it, at the latest 24 hours after arrival. If a mailbox has no reader, the message stays for up to those 24 hours.

@@ -18,6 +18,9 @@ pub enum Event {
     MailboxDeleted,
     /// This reader was removed from the mailbox.
     ReaderRemoved(ReaderId),
+    /// A token of the mailbox changed: the shared token was dropped or a
+    /// reader got a new token. Connections check their subscription again.
+    AccessChanged,
 }
 
 /// Identifies one WebSocket connection.

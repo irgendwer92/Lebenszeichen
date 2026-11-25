@@ -1,7 +1,7 @@
 //! Relay server: accepts ciphertext, hands it on and deletes it.
 //!
 //! The relay knows neither names nor keys nor message types. The interface is
-//! specified in `docs/wire-format.md`, section "Relay-Schnittstelle".
+//! specified in `docs/wire-format.md`, section "Relay interface".
 //!
 //! [`app`] builds the router from an [`AppState`]; `main.rs` only reads the
 //! configuration and starts the server, so tests can run the relay in-process.
@@ -173,6 +173,18 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/v1/mailboxes/{mailbox}",
             axum::routing::delete(api::delete_mailbox),
+        )
+        .route(
+            "/v1/mailboxes/{mailbox}/read-token",
+            axum::routing::delete(api::drop_read_token),
+        )
+        .route(
+            "/v1/mailboxes/{mailbox}/send-token",
+            put(api::put_send_token),
+        )
+        .route(
+            "/v1/mailboxes/{mailbox}/revoke-readers",
+            post(api::revoke_readers),
         )
         .route(
             "/v1/mailboxes/{mailbox}/readers/{reader}",
