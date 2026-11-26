@@ -10,8 +10,9 @@ The core does no I/O: no network, no flash, no `malloc`, no global mutable
 state. Everything lives in one caller-owned `lz_ctx`. Time and randomness
 come through callbacks, persistence through one blob the caller stores.
 Thin adapters per SDK (ESP-IDF first, then Arduino, Pico SDK, MicroPython)
-move bytes between it and the network, the flash and the buttons; they are
-not part of this directory yet.
+move bytes between it and the network, the flash and the buttons. The
+ESP-IDF adapter and the ESP32-C6 firmware are in `esp-idf/`
+([`esp-idf/README.md`](esp-idf/README.md)); the others follow.
 
 The binding specification is `docs/wire-format.md` ("Satellite (M10)",
 envelopes, rules for requests, relay interface). The executable model it
@@ -30,6 +31,7 @@ follows is the Rust reference satellite, `SatState` and `RefSatellite` in
 | `src/` | The core (`wire.c`, `relay.c`, `ledger.c`, `satellite.c`, `io.c`, `store.c`, `crypto.c`, `sha256.c`) |
 | `third_party/tweetnacl/` | TweetNaCl (public domain), the default crypto backend |
 | `tests/` | Host tests (CTest), the fake relay, the Rust test vectors |
+| `esp-idf/` | The ESP-IDF component `lebenszeichen` (core and adapter) and the ESP32-C6 satellite firmware |
 
 ## Building on a host
 

@@ -69,6 +69,24 @@ jobs:
       - name: Tests
         run: ctest --test-dir build --output-on-failure
 
+  satellite-c6:
+    name: Satellite firmware (ESP32-C6)
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.1.1
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        working-directory: firmware/esp-idf/satellite-c6
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py build
+          idf.py merge-bin -o lz-satellite-c6-full.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lz-satellite-c6
+          path: firmware/esp-idf/satellite-c6/build/lz-satellite-c6-full.bin
+          if-no-files-found: error
+
   android-strings:
     name: Android strings
     runs-on: ubuntu-latest

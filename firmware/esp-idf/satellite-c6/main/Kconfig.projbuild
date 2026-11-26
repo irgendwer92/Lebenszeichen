@@ -1,0 +1,27 @@
+menu "Satellite board"
+
+config SAT_PIN_SDA
+    int "OLED SDA"
+    default 20
+config SAT_PIN_SCL
+    int "OLED SCL"
+    default 19
+config SAT_OLED_ADDR
+    hex "OLED I2C address"
+    default 0x3C
+config SAT_PIN_ANSWER
+    int "Answer button (to GND)"
+    default 18
+config SAT_PIN_ASK
+    int "Ask button (to GND)"
+    default 14
+config SAT_PIN_LED
+    int "RGB LED (WS2812)"
+    default 8
+config SAT_TZ
+    string "Time zone (POSIX TZ)"
+    default "CET-1CEST,M3.5.0,M10.5.0/3"
+    help
+        Only for showing times; the protocol uses UTC.
+
+endmenu

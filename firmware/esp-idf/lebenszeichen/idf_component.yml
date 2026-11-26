@@ -1,0 +1,6 @@
+description: Lebenszeichen satellite core (lz_core) with its ESP-IDF adapter
+license: LGPL-3.0-or-later WITH LicenseRef-Lebenszeichen-static-linking-exception
+dependencies:
+  idf: ">=6.0"
+  espressif/libsodium: "^1.0.20"
+  espressif/esp_websocket_client: "^1.4.0"

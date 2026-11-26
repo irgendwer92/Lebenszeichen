@@ -725,6 +725,33 @@ as they were); the C tests reproduce all of them byte for byte.
 - **Removal** counts only for errors to a subscription the satellite made
   on the channel's connection.
 
+### Settled in the implementation (ESP32-C6 firmware, 2026-11-26)
+
+Step 4b: `firmware/esp-idf/` ([README](../firmware/esp-idf/README.md)),
+ESP-IDF 6.1, built in CI with the official Docker image.
+
+- **Board**: ESP32-C6 SuperMini, SSD1306 128×64 on I²C (SDA GPIO20, SCL
+  GPIO19), answer button GPIO18, ask button GPIO14 (both to GND), the
+  onboard WS2812 on GPIO8 as the light. The BOOT button is not used: held at
+  power-on it starts the flasher, which would clash with the reset hold.
+- **Light**: blue pulse while a request is open, a green flash after
+  answering or asking, steady dim green (teal for a reported one) while the
+  answer to an own ask is shown, dim yellow while a state applies, red
+  blinking after a minute without WiFi or relay, with the clock off or
+  access lost, purple for setup and reset.
+- **Setup over USB serial** takes the hex `lz satellite add` prints, as it
+  is (`> /dev/ttyACM0`); every line end tries what has arrived, nothing is
+  printed while waiting.
+- **Reset**: the answer button held at power-on shows a 10-second
+  countdown; released earlier, nothing happens.
+- **Storage**: the blob in NVS (192 KB partition for up to `lz_save_max()`
+  twice), WiFi with RAM storage so that the password exists only in the
+  blob. Flash and NVS encryption stay off by default because they burn
+  eFuses; the README says how to turn them on.
+- **Display texts** are English; the time zone for showing times is a
+  build setting (default Central Europe), since the setup carries none.
+- The OLED goes dark after a minute with nothing to show.
+
 ## Open points
 
 None. Decided on 2026-11-25: the shared token on contact mailboxes is

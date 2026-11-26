@@ -1,0 +1,17 @@
+CONFIG_IDF_TARGET="esp32c6"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# The SuperMini has no UART bridge: console on the built-in USB.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+# TLS to up to three relays at once plus HTTPS: allocate buffers as needed.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+CONFIG_FREERTOS_HZ=1000
+# Flash and NVS encryption with secure boot are the recommended setup
+# (m10-satellite.md, decision 4); they burn eFuses for good, so they are
+# not on by default. See README.md, "Flash encryption".
