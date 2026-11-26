@@ -1144,8 +1144,10 @@ function joinEvent({ step, code, text, qr }) {
 /// Draws the list of devices of this person.
 async function showDevices() {
   let list;
+  let satellites = [];
   try {
     list = await call("devices");
+    if (list.some((d) => d.satellite)) satellites = await call("satellites");
   } catch {
     return;
   }
@@ -1167,23 +1169,44 @@ async function showDevices() {
           parts.push(button(t("ui-rename"), async () => renameForm(item, device.name)));
         }
       } else {
+        if (device.satellite) {
+          parts.splice(1, 0, el("span", "this-device", `🛰 ${t("ui-satellite-tag")}`));
+        }
+        parts.push(spacer());
+        if (device.satellite) {
+          parts.push(
+            button(t("ui-satellite-settings"), async () => {
+              const form = $(`satellite-form-${device.reader}`);
+              form.hidden = !form.hidden;
+              if (form.hidden) openSatellites.delete(device.reader);
+              else openSatellites.add(device.reader);
+            }),
+          );
+        }
         parts.push(
-          spacer(),
           confirmButton(
-            `device-remove:${device.name}`,
+            `device-remove:${device.reader}`,
             t("ui-remove"),
             t("ui-confirm-again"),
             async () => {
-              await call("device_remove", { reader: device.reader });
+              const removal = await call("device_remove", { reader: device.reader });
+              showRemoval(removal);
               await showDevices();
             },
           ),
         );
       }
       item.append(row(...parts));
+      if (device.satellite) {
+        const sat = satellites.find((s) => s.reader === device.reader);
+        const form = satelliteForm(device, sat);
+        form.hidden = !openSatellites.has(device.reader);
+        item.append(form);
+      }
       return item;
     }),
   );
+  $("remove-hint").hidden = !list.some((d) => !d.this);
   try {
     const code = await tauri.core.invoke("setup_code").then((reply) => reply.value);
     $("setup-code-qr").replaceChildren(qrSvg(code.qr, "ui-qr-setup"));
@@ -1194,6 +1217,123 @@ async function showDevices() {
     $("setup-code-details").hidden = true;
     $("setup-code-details").open = false;
   }
+}
+
+/// Satellites (by reader) whose settings are open in the device list.
+const openSatellites = new Set();
+
+/// What removing a device found, calmly: first what the person has to do
+/// (answer open requests), then the weaker removal, then the leftovers.
+function showRemoval(removal) {
+  const box = $("removal-result");
+  const lines = [t("ui-removal-done")];
+  if (removal.open_requests.length > 0) {
+    lines.push(t("ui-removal-open", { names: removal.open_requests.join(", ") }));
+  }
+  if (removal.weak.length > 0) {
+    lines.push(t("ui-removal-weak", { names: removal.weak.join(", ") }));
+  }
+  if (removal.hidden > 0) {
+    lines.push(t("ui-removal-hidden", { count: removal.hidden }));
+  }
+  box.replaceChildren(...lines.map((line) => el("p", "", line)));
+  box.hidden = false;
+}
+
+/// The settings of a satellite: waiting time and long-press preset, then
+/// per contact the reported answers and the ask button.
+function satelliteForm(device, sat) {
+  const form = el("form", "stack");
+  form.id = `satellite-form-${device.reader}`;
+  if (!sat) return form;
+  const field = (label, input) => {
+    const wrap = el("label", "", label);
+    wrap.append(input);
+    return wrap;
+  };
+  const number = (value, min, max) => {
+    const input = el("input");
+    input.type = "number";
+    input.min = min;
+    input.max = max;
+    input.step = 1;
+    input.required = true;
+    input.value = value;
+    return input;
+  };
+  const checkbox = (label, checked) => {
+    const input = el("input");
+    input.type = "checkbox";
+    input.checked = checked;
+    const wrap = el("label", "check");
+    wrap.append(input, document.createTextNode(` ${label}`));
+    return { wrap, input };
+  };
+
+  const wait = number(sat.waiting_minutes, 1, 1440);
+  const reason = el("input");
+  reason.maxLength = 64;
+  reason.value = sat.preset?.reason ?? "";
+  const minutes = number(sat.preset?.minutes ?? 480, 1, 10080);
+  const share = checkbox(t("ui-satellite-preset-share"), sat.preset?.share ?? false);
+  const save = el("button", "primary", t("ui-save"));
+  save.type = "submit";
+  form.append(
+    field(t("ui-satellite-wait"), wait),
+    el("h3", "", t("ui-satellite-preset-heading")),
+    field(t("ui-satellite-preset-reason"), reason),
+    field(t("ui-satellite-preset-minutes"), minutes),
+    share.wrap,
+    save,
+  );
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    try {
+      await call("satellite_settings", {
+        name: sat.name,
+        waitingMinutes: Number(wait.value),
+        presetMinutes: Number(minutes.value),
+        presetShare: share.input.checked,
+        presetReason: reason.value,
+      });
+    } catch {
+      // Already shown by `call`.
+    } finally {
+      save.disabled = false;
+    }
+  });
+
+  form.append(el("h3", "", t("ui-satellite-contacts-heading")));
+  if (sat.contacts.length === 0) {
+    form.append(el("p", "note", t("ui-satellite-no-contacts")));
+  }
+  for (const contact of sat.contacts) {
+    const reported = checkbox(t("ui-satellite-reported"), contact.reported);
+    const ask = el("select");
+    ask.append(new Option(t("ui-satellite-ask-none"), "0"));
+    for (let n = 1; n <= 4; n++) ask.append(new Option(t("ui-satellite-ask-n", { n }), String(n)));
+    ask.value = String(contact.ask_button);
+    const apply = async () => {
+      try {
+        await call("satellite_contact", {
+          name: sat.name,
+          contact: contact.name,
+          reported: reported.input.checked,
+          askButton: Number(ask.value),
+        });
+      } catch {
+        // Already shown by `call`.
+      }
+      await showDevices();
+    };
+    reported.input.addEventListener("change", apply);
+    ask.addEventListener("change", apply);
+    const box = el("div", "stack");
+    box.append(el("strong", "", contact.name), reported.wrap, field(t("ui-satellite-ask-button"), ask));
+    form.append(box);
+  }
+  return form;
 }
 
 /// Turns the entry of this device into a field for its new name.

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-satellite-contact"
+description = "Enables the satellite_contact command without any pre-configured scope."
+commands.allow = ["satellite_contact"]
+
+[[permission]]
+identifier = "deny-satellite-contact"
+description = "Denies the satellite_contact command without any pre-configured scope."
+commands.deny = ["satellite_contact"]
