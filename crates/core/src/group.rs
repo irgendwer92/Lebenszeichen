@@ -12,8 +12,10 @@ use crate::Error;
 use crate::contact::{ContactState, remember};
 use crate::crypto::{self, ContactKey};
 use crate::pairing::{Address, Contact, PairingState, check_time, new_message};
+use crate::satellite::{ChannelEvent, transfer_key};
 use crate::store::{Device, KnownDevice, Outgoing, Parked, StoredContact, Transfer, TransferPart};
-use crate::wire::message::contact_part_ids;
+use crate::wire::message::{contact_part_ids, satellite_part_ids};
+use crate::wire::satellite::Record as SatelliteRecord;
 use crate::wire::{
     Body, ContactName, ContactPart, ContactRecord, DeviceAnnounce, DeviceName, ENVELOPE_LEN,
     MailboxId, Message, MessageId, PartData, ReaderId, RelayUrl, Requested, Responded,
@@ -45,7 +47,10 @@ pub enum SyncEvent {
     RulesSet { contact: MailboxId, rules: Rules },
     /// A contact paired on another device is complete here. The caller
     /// registers this device as a reader of the own mailbox `contact` on
-    /// `relay`, with `read_token` and its push address.
+    /// `relay`, with `read_token` and its push address. Since M10
+    /// `read_token` is the enrolment token for the other devices (the
+    /// mailbox's shared token): where the relay has `reader_tokens`, the
+    /// caller gives itself its own token in the same step.
     ContactAdded {
         contact: MailboxId,
         relay: RelayUrl,
@@ -56,10 +61,25 @@ pub enum SyncEvent {
     StateHanded { reason: Option<String> },
     /// Another device ended this contact; it was deleted here.
     ContactRemoved { contact: MailboxId, name: String },
-    /// A part of a contact transfer was stored; more are missing.
+    /// A satellite set up on another device is complete here (M10). The
+    /// caller registers this device as a reader of its channel mailbox,
+    /// with the enrolment token in it and its own token.
+    SatelliteAdded { satellite: ReaderId, name: String },
+    /// Another device changed the settings of a satellite.
+    SatelliteSettings { satellite: ReaderId },
+    /// Another device changed what a satellite does for a contact.
+    SatelliteContactSettings {
+        satellite: ReaderId,
+        contact: MailboxId,
+    },
+    /// An up message of a satellite, parked until its contact arrived,
+    /// was applied now.
+    FromSatellite(ChannelEvent),
+    /// A part of a contact or satellite transfer was stored; more are
+    /// missing.
     PartStored,
-    /// The message is about a contact not known yet and is kept for 24
-    /// hours.
+    /// The message is about a contact or satellite not known yet and is
+    /// kept for 24 hours.
     Parked,
     /// The message was dropped.
     Ignored(SyncIgnored),
@@ -78,7 +98,7 @@ pub enum SyncIgnored {
     /// applied last.
     Outdated,
     /// A `device` or `device_removed` about this device, or a transfer of a
-    /// contact that exists already.
+    /// contact or satellite that exists already.
     Known,
     /// The transfer was inconsistent or unreadable and was discarded.
     Discarded,
@@ -98,7 +118,11 @@ impl Device {
             Ok(message) => message,
             Err(error) => {
                 if let Some((contact, transfer)) = contact_part_ids(&plaintext) {
-                    self.discard_transfer(contact, transfer, now);
+                    discard_transfer(&mut self.transfers, contact, transfer, now);
+                }
+                if let Some((reader, transfer)) = satellite_part_ids(&plaintext) {
+                    let key = transfer_key(&reader);
+                    discard_transfer(&mut self.satellite_transfers, key, transfer, now);
                 }
                 return Err(error.into());
             }
@@ -121,6 +145,7 @@ impl Device {
         self.outbox.retain(|o| fresh(o.created_at));
         self.parked.retain(|p| fresh(p.received_at));
         self.transfers.retain(|t| fresh(t.first_seen));
+        self.expire_satellites(now);
     }
 
     /// `envelope` is given for a message just received, so that it can be
@@ -170,6 +195,40 @@ impl Device {
                     self.apply_to_contact(contact, message, now)
                 }
             }
+            Body::SatellitePart(part) => return self.apply_satellite_part(part, now, events),
+            Body::SatelliteSettings(_) | Body::SatelliteContactSettings(_) => {
+                let reader = *message.body.sync_satellite().expect("both name one");
+                if self.satellite(&reader).is_none() {
+                    let Some(envelope) = envelope else { return };
+                    self.parked.push(Parked {
+                        envelope,
+                        received_at: now,
+                    });
+                    return events.push(SyncEvent::Parked);
+                }
+                let stamp = Stamp {
+                    at: message.sent_at,
+                    id: message.id,
+                };
+                match message.body {
+                    Body::SatelliteSettings(set) => match self.apply_satellite_settings(set, stamp)
+                    {
+                        true => SyncEvent::SatelliteSettings { satellite: reader },
+                        false => SyncEvent::Ignored(SyncIgnored::Outdated),
+                    },
+                    Body::SatelliteContactSettings(set) => {
+                        let contact = set.settings.contact;
+                        match self.apply_satellite_contact(set, stamp) {
+                            true => SyncEvent::SatelliteContactSettings {
+                                satellite: reader,
+                                contact,
+                            },
+                            false => SyncEvent::Ignored(SyncIgnored::Outdated),
+                        }
+                    }
+                    _ => unreachable!("matched above"),
+                }
+            }
             Body::Hello(_)
             | Body::HelloOk
             | Body::Rules(_)
@@ -177,9 +236,64 @@ impl Device {
             | Body::Response(_)
             | Body::End
             | Body::Reveal(_) => SyncEvent::Ignored(SyncIgnored::NotExpected),
+            // Channel messages belong in a channel mailbox only.
+            Body::SatAnswered(_)
+            | Body::SatAsked(_)
+            | Body::SatStateShared(_)
+            | Body::SatStateCleared
+            | Body::HomeContactPart(_)
+            | Body::HomeResponded(_)
+            | Body::HomeRequested(_)
+            | Body::HomeRules(_)
+            | Body::HomeContactSettings(_)
+            | Body::HomeSettings(_)
+            | Body::HomeStateShared(_)
+            | Body::HomeStateCleared
+            | Body::HomeSendToken(_) => SyncEvent::Ignored(SyncIgnored::NotExpected),
             Body::Unknown(_) => SyncEvent::Ignored(SyncIgnored::UnknownType),
         };
         events.push(event);
+    }
+
+    fn apply_satellite_part(
+        &mut self,
+        part: crate::wire::SatellitePart,
+        now: u64,
+        events: &mut Vec<SyncEvent>,
+    ) {
+        if self.satellite(&part.reader).is_some() || part.reader == self.reader_id {
+            return events.push(SyncEvent::Ignored(SyncIgnored::Known));
+        }
+        let key = transfer_key(&part.reader);
+        let bytes = match assemble(
+            &mut self.satellite_transfers,
+            key,
+            part.transfer,
+            part.index,
+            part.count,
+            part.data.as_bytes(),
+            now,
+        ) {
+            Assembled::Complete(bytes) => bytes,
+            Assembled::Stored => return events.push(SyncEvent::PartStored),
+            Assembled::Duplicate => return events.push(SyncEvent::Ignored(SyncIgnored::Duplicate)),
+            Assembled::Discarded => return events.push(SyncEvent::Ignored(SyncIgnored::Discarded)),
+        };
+        let Ok(record) = SatelliteRecord::from_bytes(&bytes) else {
+            discard_transfer(&mut self.satellite_transfers, key, part.transfer, now);
+            return events.push(SyncEvent::Ignored(SyncIgnored::Discarded));
+        };
+        self.satellite_transfers
+            .retain(|t| !(t.contact == key && t.transfer == part.transfer));
+        let satellite = Device::satellite_from_record(part.reader, record);
+        let name = satellite.name.clone();
+        self.satellites.push(satellite);
+        events.push(SyncEvent::SatelliteAdded {
+            satellite: part.reader,
+            name,
+        });
+        let reader = part.reader;
+        self.apply_parked_where(|body| body.sync_satellite() == Some(&reader), now, events);
     }
 
     fn apply_device(&mut self, device: DeviceAnnounce) -> SyncEvent {
@@ -257,64 +371,26 @@ impl Device {
         if self.contact_by_mailbox(&part.contact).is_some() {
             return events.push(SyncEvent::Ignored(SyncIgnored::Known));
         }
-        let pos = match self
-            .transfers
-            .iter()
-            .position(|t| t.contact == part.contact && t.transfer == part.transfer)
-        {
-            Some(pos) => pos,
-            None => {
-                self.transfers.push(Transfer {
-                    contact: part.contact,
-                    transfer: part.transfer,
-                    count: part.count,
-                    parts: Vec::new(),
-                    first_seen: now,
-                    discarded: false,
-                });
-                self.transfers.len() - 1
-            }
+        let bytes = match assemble(
+            &mut self.transfers,
+            part.contact,
+            part.transfer,
+            part.index,
+            part.count,
+            part.data.as_bytes(),
+            now,
+        ) {
+            Assembled::Complete(bytes) => bytes,
+            Assembled::Stored => return events.push(SyncEvent::PartStored),
+            Assembled::Duplicate => return events.push(SyncEvent::Ignored(SyncIgnored::Duplicate)),
+            Assembled::Discarded => return events.push(SyncEvent::Ignored(SyncIgnored::Discarded)),
         };
-        let transfer = &mut self.transfers[pos];
-        if transfer.discarded {
-            return events.push(SyncEvent::Ignored(SyncIgnored::Discarded));
-        }
-        let data = part.data.as_bytes();
-        let slot = transfer
-            .parts
-            .binary_search_by_key(&part.index, |p| p.index);
-        let consistent = part.count == transfer.count
-            && part.index < part.count
-            && match slot {
-                Ok(i) => transfer.parts[i].data == data,
-                Err(_) => true,
-            };
-        if !consistent {
-            transfer.discarded = true;
-            transfer.parts.clear();
-            return events.push(SyncEvent::Ignored(SyncIgnored::Discarded));
-        }
-        let Err(slot) = slot else {
-            // The same part again, under a new message identifier.
-            return events.push(SyncEvent::Ignored(SyncIgnored::Duplicate));
-        };
-        transfer.parts.insert(
-            slot,
-            TransferPart {
-                index: part.index,
-                data: data.to_vec(),
-            },
-        );
-        if transfer.parts.len() < usize::from(transfer.count) {
-            return events.push(SyncEvent::PartStored);
-        }
-
-        let bytes: Vec<u8> = transfer.parts.iter().flat_map(|p| p.data.clone()).collect();
         let Ok(record) = ContactRecord::from_bytes(&bytes) else {
-            self.discard_transfer(part.contact, part.transfer, now);
+            discard_transfer(&mut self.transfers, part.contact, part.transfer, now);
             return events.push(SyncEvent::Ignored(SyncIgnored::Discarded));
         };
-        self.transfers.remove(pos);
+        self.transfers
+            .retain(|t| !(t.contact == part.contact && t.transfer == part.transfer));
         events.push(SyncEvent::ContactAdded {
             contact: part.contact,
             relay: record.own_relay,
@@ -323,41 +399,35 @@ impl Device {
         self.contacts
             .push(contact_from_record(part.contact, record));
         self.apply_parked(part.contact, now, events);
-    }
-
-    /// Marks a transfer as discarded, so that its further parts are ignored
-    /// until it expires.
-    fn discard_transfer(&mut self, contact: MailboxId, transfer: TransferId, now: u64) {
-        match self
-            .transfers
-            .iter_mut()
-            .find(|t| t.contact == contact && t.transfer == transfer)
-        {
-            Some(t) => {
-                t.discarded = true;
-                t.parts.clear();
-            }
-            None => self.transfers.push(Transfer {
-                contact,
-                transfer,
-                count: 0,
-                parts: Vec::new(),
-                first_seen: now,
-                discarded: true,
-            }),
-        }
+        let contact = part.contact;
+        events.extend(
+            self.apply_parked_up(&contact, now)
+                .into_iter()
+                .map(SyncEvent::FromSatellite),
+        );
     }
 
     /// Applies the parked messages about a contact that just arrived, in the
     /// order they were received.
     fn apply_parked(&mut self, contact: MailboxId, now: u64, events: &mut Vec<SyncEvent>) {
+        self.apply_parked_where(|body| body.sync_contact() == Some(&contact), now, events);
+    }
+
+    /// Applies the parked messages whose body matches, in the order they
+    /// were received.
+    fn apply_parked_where(
+        &mut self,
+        matches: impl Fn(&Body) -> bool,
+        now: u64,
+        events: &mut Vec<SyncEvent>,
+    ) {
         let Some(group) = &self.group else { return };
         let key = group.key.clone();
         for parked in std::mem::take(&mut self.parked) {
             let Ok(message) = crypto::open_group(&parked.envelope, &key) else {
                 continue;
             };
-            if message.body.sync_contact() == Some(&contact) {
+            if matches(&message.body) {
                 self.apply_sync(message, None, now, events);
             } else {
                 self.parked.push(parked);
@@ -368,13 +438,16 @@ impl Device {
     /// Encrypts a sync message into the outbox and enters its identifier
     /// into the replay protection, so the own copy is dropped on reading.
     ///
-    /// Does nothing without a group: then there are no other devices.
+    /// Queues the down counterpart for every satellite as well (M10),
+    /// with the same time and identifier. Without a group nothing goes to
+    /// the sync mailbox: then there are no other devices.
     pub(crate) fn queue_sync(
         &mut self,
         message: &Message,
         now: u64,
         rng: &mut impl CryptoRngCore,
     ) -> Result<(), Error> {
+        self.mirror_down(message, now, rng)?;
         let Some(group) = &mut self.group else {
             return Ok(());
         };
@@ -470,6 +543,9 @@ impl Device {
         if !stored.state.is_paired() || stored.state.ended {
             return Err(Error::Unexpected);
         }
+        // The satellites get it once the client has registered them (M10).
+        self.enrol_satellites(contact, now);
+        let stored = self.contact_by_mailbox(contact).expect("checked above");
         let mut bytes = [0; record::MAX_LEN];
         let len = record_of(stored).to_bytes(&mut bytes);
         let parts = record::split(&bytes[..len]);
@@ -521,8 +597,104 @@ impl Device {
     }
 }
 
+/// How a part of a transfer was taken.
+enum Assembled {
+    /// Stored; more parts are missing.
+    Stored,
+    /// The same part again, under a new message identifier.
+    Duplicate,
+    /// The transfer is inconsistent, or was before.
+    Discarded,
+    /// All parts are there, put together in order.
+    Complete(Vec<u8>),
+}
+
+/// Adds a part to the transfer `key`, `transfer` in `transfers` and checks
+/// it as `wire-format.md` says for `contact_part`.
+fn assemble(
+    transfers: &mut Vec<Transfer>,
+    key: MailboxId,
+    transfer: TransferId,
+    index: u8,
+    count: u8,
+    data: &[u8],
+    now: u64,
+) -> Assembled {
+    let pos = match transfers
+        .iter()
+        .position(|t| t.contact == key && t.transfer == transfer)
+    {
+        Some(pos) => pos,
+        None => {
+            transfers.push(Transfer {
+                contact: key,
+                transfer,
+                count,
+                parts: Vec::new(),
+                first_seen: now,
+                discarded: false,
+            });
+            transfers.len() - 1
+        }
+    };
+    let entry = &mut transfers[pos];
+    if entry.discarded {
+        return Assembled::Discarded;
+    }
+    let slot = entry.parts.binary_search_by_key(&index, |p| p.index);
+    let consistent = count == entry.count
+        && index < count
+        && match slot {
+            Ok(i) => entry.parts[i].data == data,
+            Err(_) => true,
+        };
+    if !consistent {
+        entry.discarded = true;
+        entry.parts.clear();
+        return Assembled::Discarded;
+    }
+    let Err(slot) = slot else {
+        return Assembled::Duplicate;
+    };
+    entry.parts.insert(
+        slot,
+        TransferPart {
+            index,
+            data: data.to_vec(),
+        },
+    );
+    if entry.parts.len() < usize::from(entry.count) {
+        return Assembled::Stored;
+    }
+    Assembled::Complete(entry.parts.iter().flat_map(|p| p.data.clone()).collect())
+}
+
+/// Marks a transfer as discarded, so that its further parts are ignored
+/// until it expires.
+fn discard_transfer(transfers: &mut Vec<Transfer>, key: MailboxId, transfer: TransferId, now: u64) {
+    match transfers
+        .iter_mut()
+        .find(|t| t.contact == key && t.transfer == transfer)
+    {
+        Some(t) => {
+            t.discarded = true;
+            t.parts.clear();
+        }
+        None => transfers.push(Transfer {
+            contact: key,
+            transfer,
+            count: 0,
+            parts: Vec::new(),
+            first_seen: now,
+            discarded: true,
+        }),
+    }
+}
+
 /// The record of a contact for the other devices. Names are cut to 64
-/// bytes.
+/// bytes. The read token in it is the one this device created the mailbox
+/// with, its shared token, which serves the other devices as enrolment
+/// token (M10); this device's own token never goes into it.
 fn record_of(stored: &StoredContact) -> ContactRecord {
     let state = &stored.state;
     ContactRecord {
@@ -565,6 +737,8 @@ fn contact_from_record(own_mailbox: MailboxId, record: ContactRecord) -> StoredC
         name: record.name.as_str().to_owned(),
         own_relay: record.own_relay,
         read_token: record.read_token,
+        own_token: None,
+        new_token: None,
         state,
     }
 }
@@ -618,6 +792,8 @@ pub(crate) mod tests {
             name: name.into(),
             own_relay: RelayUrl::new("https://relay.example").unwrap(),
             read_token: [fill + 50; 32],
+            own_token: None,
+            new_token: None,
             state: own,
         };
         (stored, peer)

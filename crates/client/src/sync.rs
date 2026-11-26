@@ -12,7 +12,8 @@ use std::time::Duration;
 use lz_core::contact::{ContactState, Event};
 use lz_core::group::{SyncEvent, SyncIgnored};
 use lz_core::pairing::Address;
-use lz_core::store::{Device, StoredContact};
+use lz_core::satellite::{ChannelEvent, ChannelIgnored};
+use lz_core::store::{Device, ReadAccess, StoredContact};
 use lz_core::wire::{ENVELOPE_LEN, MailboxId, RelayUrl, Token};
 use rand_core::OsRng;
 use tokio::sync::mpsc;
@@ -22,6 +23,7 @@ use crate::i18n::Texts;
 use crate::relay::{Connection, Delivery, Relay, RelayError, ServerFrame};
 use crate::reports::Failed;
 use crate::show::Notice;
+use crate::tokens::{Own, Taken, held, own_of};
 
 /// How long to wait for the relay to confirm subscriptions.
 const SUBSCRIBE_WAIT: Duration = Duration::from_secs(10);
@@ -33,7 +35,8 @@ const LISTEN_TICK: Duration = Duration::from_secs(10);
 /// An open connection with what it has subscribed.
 struct Live {
     connection: Box<dyn Connection>,
-    subscribed: HashSet<MailboxId>,
+    /// Subscribed mailboxes, with the token each was subscribed with.
+    subscribed: HashMap<MailboxId, Token>,
     /// Subscribed, but neither `subscribed` nor `error` came back yet.
     awaiting: HashSet<MailboxId>,
 }
@@ -54,12 +57,12 @@ enum FollowUp {
         token: Token,
     },
     /// A contact arrived from another own device: register this device as
-    /// a reader of its own mailbox.
-    Register {
-        relay: RelayUrl,
-        mailbox: MailboxId,
-        token: Token,
-    },
+    /// a reader of its own mailbox, with its own token where the relay
+    /// offers `reader_tokens`.
+    Register { mailbox: MailboxId },
+    /// A satellite arrived from another own device: register this device as
+    /// a reader of its channel mailbox, with its own token (M10).
+    RegisterChannel { mailbox: MailboxId },
     /// This device was removed.
     Removed,
 }
@@ -86,26 +89,43 @@ pub(crate) enum Mode {
 }
 
 /// Own mailboxes grouped by relay, with their read tokens: the sync mailbox
-/// first, then those of contacts and open invitations.
+/// first, then those of contacts and open invitations, then the channels
+/// of the satellites.
 pub(crate) fn own_mailboxes(device: &Device) -> HashMap<RelayUrl, Vec<(MailboxId, Token)>> {
     let mut map: HashMap<RelayUrl, Vec<(MailboxId, Token)>> = HashMap::new();
     if let Some(group) = &device.group {
         map.entry(group.relay)
             .or_default()
-            .push((group.mailbox, group.read_token));
+            .push((group.mailbox, group.token()));
     }
     for contact in device.contacts.iter().filter(|c| !c.state.ended) {
         map.entry(contact.own_relay)
             .or_default()
-            .push((contact.state.contact.own_mailbox, contact.read_token));
+            .push((contact.state.contact.own_mailbox, contact.token()));
     }
     for invitation in &device.invitations {
         let own = &invitation.pending.own;
         map.entry(own.relay)
             .or_default()
-            .push((own.mailbox, invitation.read_token));
+            .push((own.mailbox, invitation.token()));
+    }
+    for satellite in &device.satellites {
+        map.entry(satellite.relay)
+            .or_default()
+            .push((satellite.mailbox, satellite.token()));
     }
     map
+}
+
+/// Pending work for the outboxes: messages for the sync mailbox and the
+/// channels, and contacts the satellites still have to get.
+fn queued(device: &Device) -> usize {
+    device.outbox.len()
+        + device
+            .satellites
+            .iter()
+            .map(|s| s.outbox.len() + s.pending.len())
+            .sum::<usize>()
 }
 
 fn name_of(device: &Device, relay: &RelayUrl, mailbox: &MailboxId) -> Option<String> {
@@ -140,6 +160,7 @@ impl<R: Relay> Ctx<R> {
         let (deliveries, mut incoming) = mpsc::unbounded_channel();
         let mut live: HashMap<RelayUrl, Live> = HashMap::new();
         let mut notices = Vec::new();
+        self.ensure_own_tokens().await?;
         self.retry_push_url().await?;
         self.flush_outbox().await?;
         self.flush_unsent().await?;
@@ -183,6 +204,7 @@ impl<R: Relay> Ctx<R> {
                 tokio::select! {
                     delivery = incoming.recv() => delivery,
                     _ = tick.tick() => {
+                        self.ensure_own_tokens().await?;
                         self.flush_outbox().await?;
                         self.check_pairings(&mut notices).await?;
                         self.reconcile(&mut live, &deliveries, &mut notices).await?;
@@ -216,7 +238,35 @@ impl<R: Relay> Ctx<R> {
                     if let (Some(l), Some(mailbox)) = (live.get_mut(&relay), mailbox) {
                         l.awaiting.remove(&mailbox);
                     }
+                    if code == "unauthorized"
+                        && let Some(mailbox) = mailbox
+                        && self
+                            .unauthorized(&mut live, &relay, &mailbox, &deliveries, &mut notices)
+                            .await?
+                    {
+                        continue;
+                    }
                     let device = self.load()?;
+                    // The channel of a satellite is gone, or this device
+                    // may no longer read it: the satellite was removed.
+                    let channel = mailbox.and_then(|m| {
+                        device
+                            .satellites
+                            .iter()
+                            .find(|s| s.relay == relay && s.mailbox == m)
+                            .map(|s| s.reader)
+                    });
+                    if let Some(reader) = channel
+                        && (code == "unknown_mailbox" || code == "unknown_reader")
+                    {
+                        if let Some(notice) = self.satellite_gone(&reader)? {
+                            notices.push(notice);
+                        }
+                        if group_gone && self.settle_group(&live, lost_reader, &mut notices)? {
+                            return Ok(notices);
+                        }
+                        continue;
+                    }
                     let sync_mailbox = device
                         .group
                         .as_ref()
@@ -297,7 +347,9 @@ impl<R: Relay> Ctx<R> {
                                 self.removed(&mut notices)?;
                                 return Ok(notices);
                             }
-                            FollowUp::Register { .. } => subscribe = true,
+                            FollowUp::Register { .. } | FollowUp::RegisterChannel { .. } => {
+                                subscribe = true
+                            }
                             _ => {}
                         }
                         if let Some(notice) = self.follow_up(follow_up).await? {
@@ -366,6 +418,54 @@ impl<R: Relay> Ctx<R> {
         Ok(false)
     }
 
+    /// A subscription of an own mailbox ended or was refused with
+    /// `unauthorized` (M10). Expected when this device replaced its token
+    /// meanwhile (an enrolment token, or the shared token on migrating):
+    /// it subscribes again with the current one. A reader without its own
+    /// token whose shared token was dropped tries to take its own; if that
+    /// fails too, its access was withdrawn and it has to be added again.
+    /// Returns whether the error is dealt with.
+    async fn unauthorized(
+        &mut self,
+        live: &mut HashMap<RelayUrl, Live>,
+        relay: &RelayUrl,
+        mailbox: &MailboxId,
+        deliveries: &mpsc::UnboundedSender<Delivery>,
+        notices: &mut Vec<Notice>,
+    ) -> Result<bool> {
+        let device = self.load()?;
+        let Some(own) = own_of(&device, relay, mailbox) else {
+            return Ok(false);
+        };
+        let Some(l) = live.get_mut(relay) else {
+            return Ok(false);
+        };
+        let Some(used) = l.subscribed.get(mailbox).copied() else {
+            return Ok(false);
+        };
+        let Some(before) = held(&device, own) else {
+            return Ok(false);
+        };
+        let recovered = before.token != used
+            || (before.own_token.is_none()
+                && self.take_own_token(own).await? == Taken::Done
+                && held(&self.load()?, own).is_some_and(|h| h.token != used));
+        if !recovered {
+            // Kept as subscribed, so that it is not tried again until the
+            // connection is new.
+            let name = name_of(&device, relay, mailbox);
+            let notice = Notice::LostAccess { name };
+            self.show(&notice);
+            notices.push(notice);
+            return Ok(true);
+        }
+        if let Some(l) = live.get_mut(relay) {
+            l.subscribed.remove(mailbox);
+        }
+        self.reconcile(live, deliveries, notices).await?;
+        Ok(true)
+    }
+
     /// This device was removed by another one: says so and deletes the
     /// state.
     fn removed(&mut self, notices: &mut Vec<Notice>) -> Result<()> {
@@ -405,7 +505,7 @@ impl<R: Relay> Ctx<R> {
                 Entry::Vacant(slot) => match self.relay.connect(&relay, deliveries.clone()).await {
                     Ok(connection) => slot.insert(Live {
                         connection,
-                        subscribed: HashSet::new(),
+                        subscribed: HashMap::new(),
                         awaiting: HashSet::new(),
                     }),
                     Err(error) => {
@@ -422,14 +522,17 @@ impl<R: Relay> Ctx<R> {
                 },
             };
             for (mailbox, token) in mailboxes {
-                if l.subscribed.contains(&mailbox) {
+                // A token replaced meanwhile ends the subscription with
+                // `unauthorized`; only then is it subscribed again, see
+                // [`Ctx::unauthorized`].
+                if l.subscribed.contains_key(&mailbox) {
                     continue;
                 }
                 if l.connection
                     .subscribe(&mailbox, &token, &device.reader_id)
                     .is_ok()
                 {
-                    l.subscribed.insert(mailbox);
+                    l.subscribed.insert(mailbox, token);
                     l.awaiting.insert(mailbox);
                 }
             }
@@ -447,11 +550,11 @@ impl<R: Relay> Ctx<R> {
         let now = self.now();
         let t = self.texts();
         self.update(|device| {
-            let queued = device.outbox.len();
+            let before = queued(device);
             let (notices, follow_ups) = receive_into(t, device, relay, mailbox, data, now)?;
             // The waiting time for a reported answer starts on arrival.
             device.refresh_arrivals(now);
-            Ok((notices, follow_ups, device.outbox.len() > queued))
+            Ok((notices, follow_ups, queued(device) > before))
         })
     }
 
@@ -460,26 +563,34 @@ impl<R: Relay> Ctx<R> {
     async fn follow_up(&mut self, follow_up: FollowUp) -> Result<Option<Notice>> {
         match follow_up {
             FollowUp::Removed => Ok(None),
-            FollowUp::Register {
-                relay,
-                mailbox,
-                token,
-            } => {
-                let device = self.load()?;
-                match self
-                    .relay
-                    .put_reader(
-                        &relay,
-                        &mailbox,
-                        &token,
-                        &device.reader_id,
-                        device.push_url.as_deref(),
-                    )
-                    .await
-                {
+            FollowUp::RegisterChannel { mailbox } => {
+                match self.register_self(Own::Channel(mailbox)).await? {
                     Ok(()) => Ok(None),
                     Err(error) => {
-                        let name = name_of(&device, &relay, &mailbox).unwrap_or_default();
+                        let t = self.texts();
+                        let name = self
+                            .load()?
+                            .satellite_by_mailbox(&mailbox)
+                            .map(|s| s.name.clone())
+                            .unwrap_or_default();
+                        Ok(Some(Notice::Problem(tr!(
+                            t,
+                            "problem-not-registered",
+                            name = &name,
+                            error = &error.text(t)
+                        ))))
+                    }
+                }
+            }
+            FollowUp::Register { mailbox } => {
+                match self.register_self(Own::Contact(mailbox)).await? {
+                    Ok(()) => Ok(None),
+                    Err(error) => {
+                        let device = self.load()?;
+                        let name = device
+                            .contact_by_mailbox(&mailbox)
+                            .map(|c| c.name.clone())
+                            .unwrap_or_default();
                         let t = self.texts();
                         Ok(Some(Notice::Problem(tr!(
                             t,
@@ -557,7 +668,7 @@ impl<R: Relay> Ctx<R> {
                         envelope,
                         contact.own_relay,
                         contact.state.contact.own_mailbox,
-                        contact.read_token,
+                        contact.token(),
                     ));
                 } else if let Some(hello) = contact.state.contact.hello_to_repeat(now) {
                     repeat.push((
@@ -616,7 +727,7 @@ impl<R: Relay> Ctx<R> {
         })?;
         for invitation in expired {
             let own = &invitation.pending.own;
-            self.delete_own(&own.relay, &own.mailbox, &invitation.read_token)
+            self.delete_own(&own.relay, &own.mailbox, &invitation.token())
                 .await;
             let name = &invitation.name;
             let id = if invitation.pending.is_outdated() {
@@ -645,6 +756,12 @@ fn receive_into(
         .is_some_and(|g| g.relay == *relay && g.mailbox == *mailbox)
     {
         return Ok(receive_sync(t, device, data, now));
+    }
+    if device
+        .satellite_by_mailbox(mailbox)
+        .is_some_and(|s| s.relay == *relay)
+    {
+        return Ok((receive_channel(t, device, mailbox, data, now), vec![]));
     }
     if let Some(contact) = device
         .contacts
@@ -698,6 +815,8 @@ fn receive_into(
                 name: name.clone(),
                 own_relay: invitation.pending.own.relay,
                 read_token: invitation.read_token,
+                own_token: invitation.own_token,
+                new_token: invitation.new_token,
                 state: ContactState::new(contact),
             });
             Ok::<_, Fail>((
@@ -784,16 +903,8 @@ fn receive_sync(
                 device: other.clone(),
                 rules,
             },
-            SyncEvent::ContactAdded {
-                contact,
-                relay,
-                read_token,
-            } => {
-                follow_ups.push(FollowUp::Register {
-                    relay,
-                    mailbox: contact,
-                    token: read_token,
-                });
+            SyncEvent::ContactAdded { contact, .. } => {
+                follow_ups.push(FollowUp::Register { mailbox: contact });
                 Notice::OwnContactAdded {
                     name: name(device, &contact),
                     device: other.clone(),
@@ -807,6 +918,20 @@ fn receive_sync(
                 reason,
                 device: other.clone(),
             },
+            SyncEvent::SatelliteAdded { satellite, name } => {
+                if let Some(s) = device.satellite(&satellite) {
+                    follow_ups.push(FollowUp::RegisterChannel { mailbox: s.mailbox });
+                }
+                Notice::SatelliteAdded { name }
+            }
+            SyncEvent::SatelliteSettings { satellite }
+            | SyncEvent::SatelliteContactSettings { satellite, .. } => Notice::SatelliteSettings {
+                satellite: satellite_name(device, &satellite),
+            },
+            SyncEvent::FromSatellite(event) => match channel_notice(t, device, event) {
+                Some(notice) => notice,
+                None => continue,
+            },
             SyncEvent::PartStored | SyncEvent::Parked => continue,
             SyncEvent::Ignored(why) => Notice::Dropped {
                 name: None,
@@ -816,6 +941,77 @@ fn receive_sync(
         notices.push(notice);
     }
     (notices, follow_ups)
+}
+
+fn satellite_name(device: &Device, reader: &lz_core::wire::ReaderId) -> String {
+    device
+        .satellite(reader)
+        .map(|s| s.name.clone())
+        .unwrap_or_default()
+}
+
+/// Applies a message from the channel of a satellite (M10).
+fn receive_channel(
+    t: Texts,
+    device: &mut Device,
+    mailbox: &MailboxId,
+    data: &[u8],
+    now: u64,
+) -> Vec<Notice> {
+    match device.receive_channel(mailbox, data, now) {
+        Ok(events) => events
+            .into_iter()
+            .filter_map(|event| channel_notice(t, device, event))
+            .collect(),
+        Err(error) => vec![Notice::Dropped {
+            name: None,
+            why: tr!(t, "dropped-own-devices", why = &error.to_string()),
+        }],
+    }
+}
+
+fn channel_notice(t: Texts, device: &Device, event: ChannelEvent) -> Option<Notice> {
+    let name = |contact: &MailboxId| {
+        device
+            .contact_by_mailbox(contact)
+            .map(|c| c.name.clone())
+            .unwrap_or_default()
+    };
+    Some(match event {
+        ChannelEvent::Answered {
+            satellite,
+            contact,
+            kind,
+            ..
+        } => Notice::SatelliteAnswered {
+            name: name(&contact),
+            satellite: satellite_name(device, &satellite),
+            kind,
+        },
+        ChannelEvent::Asked {
+            satellite, contact, ..
+        } => Notice::SatelliteAsked {
+            name: name(&contact),
+            satellite: satellite_name(device, &satellite),
+        },
+        ChannelEvent::StateHanded { satellite, reason } => Notice::SatelliteState {
+            reason,
+            satellite: satellite_name(device, &satellite),
+        },
+        ChannelEvent::Parked => return None,
+        ChannelEvent::Ignored(why) => Notice::Dropped {
+            name: None,
+            why: tr!(
+                t,
+                "dropped-own-devices",
+                why = match why {
+                    ChannelIgnored::Duplicate => "duplicate",
+                    ChannelIgnored::NotUp => "not an up type",
+                    ChannelIgnored::Outdated => "outdated",
+                }
+            ),
+        },
+    })
 }
 
 fn ignored(t: Texts, why: SyncIgnored) -> String {
@@ -866,7 +1062,7 @@ fn receive_for_contact(
     let delete_own = FollowUp::DeleteOwn {
         relay: contact.own_relay,
         mailbox: contact.state.contact.own_mailbox,
-        token: contact.read_token,
+        token: contact.token(),
     };
     match event {
         Event::Paired => {

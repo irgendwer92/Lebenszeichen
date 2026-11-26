@@ -1,0 +1,21 @@
+menu "Lebenszeichen"
+
+config LZ_ALLOW_HTTP
+    bool "Allow http:// relays (development only)"
+    default n
+    help
+        Accept relay addresses with http:// as well as https://, for a
+        local development relay. Never enable this for a device in use.
+
+config LZ_NTP_SERVER
+    string "NTP server"
+    default "pool.ntp.org"
+
+config LZ_TASK_STACK
+    int "Stack of the Lebenszeichen task (bytes)"
+    default 12288
+    help
+        The core needs about 8 KB (channel message, new contact, X25519),
+        plus what the application's hooks use (display rendering).
+
+endmenu

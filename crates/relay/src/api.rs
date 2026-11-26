@@ -10,10 +10,12 @@ use subtle::ConstantTimeEq;
 
 use crate::hub::Event;
 use crate::ids::{self, HandoverId, Hash, MailboxId, ReaderId, Token};
-use crate::limits::{MAX_HANDOVER_BYTES, MAX_JSON_BODY, REVEAL_BYTES, VOUCHER_TTL_SECS};
+use crate::limits::{
+    MAX_HANDOVER_BYTES, MAX_JSON_BODY, MAX_READERS_PER_MAILBOX, REVEAL_BYTES, VOUCHER_TTL_SECS,
+};
 use crate::store::{
-    CreateMailbox as Created, Family, Grant, MailboxAuth, NewHandover, PostMessage, PutHandover,
-    PutReader, PutReveal, TakeHandover,
+    Access, CreateMailbox as Created, Family, Grant, NewHandover, NewMailbox, PostMessage,
+    Principal, PutHandover, PutReader, PutReveal, ReadAccess, ReaderChange, Role, TakeHandover,
 };
 
 /// Header with the hash of the fetch token of a handover slot.
@@ -23,9 +25,13 @@ const FETCH_HASH: &str = "lz-fetch-hash";
 const REPLY_HASH: &str = "lz-reply-hash";
 use crate::{ApiError, AppState};
 
-/// `GET /v1/health`
-pub async fn health() -> StatusCode {
-    StatusCode::OK
+/// Features of this relay, listed by `GET /v1/health`.
+const FEATURES: &[&str] = &["reader_tokens"];
+
+/// `GET /v1/health`: `200` with the features of this relay. Relays before
+/// M10 answer with an empty body.
+pub async fn health() -> impl IntoResponse {
+    Json(serde_json::json!({ "features": FEATURES }))
 }
 
 /// `POST /v1/vouchers`, with the access token.
@@ -52,14 +58,35 @@ pub async fn create_voucher(
     ))
 }
 
+/// Body of `POST /v1/mailboxes`: either the old form with the shared token
+/// (`read_token_hash`) or the new one with the first full reader (`reader`
+/// and `reader_token_hash`), never both.
 #[derive(Deserialize)]
 struct CreateMailbox {
-    read_token_hash: String,
+    read_token_hash: Option<String>,
+    reader: Option<String>,
+    reader_token_hash: Option<String>,
     send_token_hash: String,
 }
 
-/// `POST /v1/mailboxes`, with the access token, a voucher or the read token
-/// of a voucher mailbox, tried in this order.
+impl CreateMailbox {
+    fn parse(&self) -> Option<NewMailbox> {
+        let read = match (&self.read_token_hash, &self.reader, &self.reader_token_hash) {
+            (Some(shared), None, None) => ReadAccess::Shared(ids::decode_hex_hash(shared)?),
+            (None, Some(reader), Some(token_hash)) => {
+                ReadAccess::Reader(ids::decode(reader)?, ids::decode_hex_hash(token_hash)?)
+            }
+            _ => return None,
+        };
+        Some(NewMailbox {
+            read,
+            send_token_hash: ids::decode_hex_hash(&self.send_token_hash)?,
+        })
+    }
+}
+
+/// `POST /v1/mailboxes`, with the access token, a voucher or the shared
+/// token or a full reader's token of a voucher mailbox, tried in this order.
 pub async fn create_mailbox(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -67,12 +94,7 @@ pub async fn create_mailbox(
 ) -> Result<impl IntoResponse, ApiError> {
     let token = bearer(&headers)?;
     let request: CreateMailbox = read_json(body).await?;
-    let auth = MailboxAuth {
-        read_token_hash: ids::decode_hex_hash(&request.read_token_hash)
-            .ok_or(ApiError::BadRequest)?,
-        send_token_hash: ids::decode_hex_hash(&request.send_token_hash)
-            .ok_or(ApiError::BadRequest)?,
-    };
+    let mailbox = request.parse().ok_or(ApiError::BadRequest)?;
     let grant = if is_access_token(&state, &token) {
         Grant::AccessToken
     } else {
@@ -81,7 +103,7 @@ pub async fn create_mailbox(
     let id: MailboxId = ids::random();
     let now = state.now();
     match state
-        .db(move |s| s.create_mailbox(&id, &auth, grant, now))
+        .db(move |s| s.create_mailbox(&id, &mailbox, grant, now))
         .await?
     {
         Created::Created(_) => {}
@@ -94,25 +116,166 @@ pub async fn create_mailbox(
     ))
 }
 
-/// `DELETE /v1/mailboxes/{mailbox}`, with the read token.
+/// `DELETE /v1/mailboxes/{mailbox}`, with the shared token or a full
+/// reader's token.
 pub async fn delete_mailbox(
     State(state): State<AppState>,
     Path(mailbox): Path<String>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
     let mailbox = parse_mailbox(&mailbox)?;
-    authorize(&state, &headers, &mailbox, |a| a.read_token_hash).await?;
-    state.db(move |s| s.delete_mailbox(&mailbox)).await?;
+    let hash = ids::sha256(&bearer(&headers)?);
+    access(state.db(move |s| s.delete_mailbox(&mailbox, &hash)).await?)?;
     state.0.hub.notify(&mailbox, Event::MailboxDeleted);
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Deserialize)]
-struct PutReaderBody {
-    push_url: Option<String>,
+/// `DELETE /v1/mailboxes/{mailbox}/read-token`, with a full reader's token:
+/// drops the shared token, so that legacy readers lose access. Live
+/// subscriptions with it end.
+pub async fn drop_read_token(
+    State(state): State<AppState>,
+    Path(mailbox): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let mailbox = parse_mailbox(&mailbox)?;
+    let hash = ids::sha256(&bearer(&headers)?);
+    access(
+        state
+            .db(move |s| s.drop_shared_token(&mailbox, &hash))
+            .await?,
+    )?;
+    state.0.hub.notify(&mailbox, Event::AccessChanged);
+    Ok(StatusCode::NO_CONTENT)
 }
 
-/// `PUT /v1/mailboxes/{mailbox}/readers/{reader}`, with the read token.
+/// Body of `POST /v1/mailboxes/{mailbox}/revoke-readers`.
+#[derive(Deserialize)]
+struct RevokeReadersBody {
+    /// Readers to keep, besides the caller.
+    keep: Vec<String>,
+    /// Whether to drop the shared token in the same step. Required, so that
+    /// a removal decides it explicitly.
+    drop_shared_token: bool,
+}
+
+/// `POST /v1/mailboxes/{mailbox}/revoke-readers`, with a full reader's
+/// token: revokes every reader except the caller and those in `keep`, and
+/// with `drop_shared_token` drops the shared token, in one step. Live
+/// subscriptions of revoked readers end with `unknown_reader`, those with
+/// the dropped shared token with `unauthorized`. Answers with the revoked
+/// readers.
+pub async fn revoke_readers(
+    State(state): State<AppState>,
+    Path(mailbox): Path<String>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<impl IntoResponse, ApiError> {
+    let mailbox = parse_mailbox(&mailbox)?;
+    let hash = ids::sha256(&bearer(&headers)?);
+    // The token is checked before the body is, as for readers.
+    let principal = access(state.db(move |s| s.principal(&mailbox, &hash)).await?)?;
+    if !matches!(principal, Principal::Reader(_, Role::Full)) {
+        return Err(ApiError::Unauthorized);
+    }
+    let request: RevokeReadersBody = read_json(body).await?;
+    if request.keep.len() > MAX_READERS_PER_MAILBOX {
+        return Err(ApiError::BadRequest);
+    }
+    let keep = request
+        .keep
+        .iter()
+        .map(|text| parse_reader(text))
+        .collect::<Result<Vec<_>, _>>()?;
+    let drop_shared = request.drop_shared_token;
+    let revoked = access(
+        state
+            .db(move |s| s.revoke_readers(&mailbox, &hash, &keep, drop_shared))
+            .await?,
+    )?;
+    for reader in &revoked {
+        state.0.hub.notify(&mailbox, Event::ReaderRemoved(*reader));
+    }
+    if drop_shared {
+        state.0.hub.notify(&mailbox, Event::AccessChanged);
+    }
+    let revoked: Vec<String> = revoked.iter().map(|id| ids::encode(id)).collect();
+    Ok(Json(serde_json::json!({ "revoked": revoked })))
+}
+
+#[derive(Deserialize)]
+struct SendTokenBody {
+    send_token_hash: String,
+}
+
+/// `PUT /v1/mailboxes/{mailbox}/send-token`, with a full reader's token:
+/// replaces the send token.
+pub async fn put_send_token(
+    State(state): State<AppState>,
+    Path(mailbox): Path<String>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<StatusCode, ApiError> {
+    let mailbox = parse_mailbox(&mailbox)?;
+    let hash = ids::sha256(&bearer(&headers)?);
+    // The token is checked before the body is, as for readers.
+    let principal = access(state.db(move |s| s.principal(&mailbox, &hash)).await?)?;
+    if !matches!(principal, Principal::Reader(_, Role::Full)) {
+        return Err(ApiError::Unauthorized);
+    }
+    let request: SendTokenBody = read_json(body).await?;
+    let send_hash = ids::decode_hex_hash(&request.send_token_hash).ok_or(ApiError::BadRequest)?;
+    access(
+        state
+            .db(move |s| s.set_send_token(&mailbox, &hash, &send_hash))
+            .await?,
+    )?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Body of `PUT /v1/mailboxes/{mailbox}/readers/{reader}`. A missing field
+/// leaves the reader's value as it is; `"push_url":null` removes the push
+/// URL. `token_hash` and `role` are new in M10.
+#[derive(Deserialize)]
+struct PutReaderBody {
+    #[serde(default, deserialize_with = "present")]
+    push_url: Option<Option<String>>,
+    token_hash: Option<String>,
+    role: Option<String>,
+}
+
+/// Tells a field given as `null` (`Some(None)`) from a missing one (`None`).
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+impl PutReaderBody {
+    fn parse(self) -> Option<ReaderChange> {
+        let token_hash = match &self.token_hash {
+            Some(text) => Some(ids::decode_hex_hash(text)?),
+            None => None,
+        };
+        let role = match self.role.as_deref() {
+            None => None,
+            Some("full") => Some(Role::Full),
+            Some("satellite") => Some(Role::Satellite),
+            Some(_) => return None,
+        };
+        Some(ReaderChange {
+            push_url: self.push_url,
+            token_hash,
+            role,
+        })
+    }
+}
+
+/// `PUT /v1/mailboxes/{mailbox}/readers/{reader}`: with the shared token or
+/// a full reader's token for any reader; with a satellite's token only for
+/// itself, and without `role`.
 pub async fn put_reader(
     State(state): State<AppState>,
     Path((mailbox, reader)): Path<(String, String)>,
@@ -121,9 +284,12 @@ pub async fn put_reader(
 ) -> Result<StatusCode, ApiError> {
     let mailbox = parse_mailbox(&mailbox)?;
     let reader = parse_reader(&reader)?;
-    authorize(&state, &headers, &mailbox, |a| a.read_token_hash).await?;
+    let hash = ids::sha256(&bearer(&headers)?);
+    // A wrong token is reported before an unreadable body.
+    access(state.db(move |s| s.principal(&mailbox, &hash)).await?)?;
     let request: PutReaderBody = read_json(body).await?;
-    if let Some(url) = &request.push_url {
+    let change = request.parse().ok_or(ApiError::BadRequest)?;
+    if let Some(Some(url)) = &change.push_url {
         state
             .0
             .push_policy
@@ -132,16 +298,24 @@ pub async fn put_reader(
     }
     let now = state.now();
     let outcome = state
-        .db(move |s| s.put_reader(&mailbox, &reader, request.push_url.as_deref(), now))
+        .db(move |s| s.put_reader(&mailbox, &reader, &hash, &change, now))
         .await?;
     match outcome {
-        PutReader::Ok => Ok(StatusCode::NO_CONTENT),
+        PutReader::Ok { token_changed } => {
+            if token_changed {
+                state.0.hub.notify(&mailbox, Event::AccessChanged);
+            }
+            Ok(StatusCode::NO_CONTENT)
+        }
         PutReader::UnknownMailbox => Err(ApiError::UnknownMailbox),
-        PutReader::TooManyReaders => Err(ApiError::BadRequest),
+        PutReader::Unauthorized => Err(ApiError::Unauthorized),
+        PutReader::TooManyReaders | PutReader::BadRequest => Err(ApiError::BadRequest),
     }
 }
 
-/// `DELETE /v1/mailboxes/{mailbox}/readers/{reader}`, with the read token.
+/// `DELETE /v1/mailboxes/{mailbox}/readers/{reader}`: with the shared token
+/// or a full reader's token for any reader, with a reader's own token for
+/// itself (leaving).
 pub async fn delete_reader(
     State(state): State<AppState>,
     Path((mailbox, reader)): Path<(String, String)>,
@@ -149,13 +323,12 @@ pub async fn delete_reader(
 ) -> Result<StatusCode, ApiError> {
     let mailbox = parse_mailbox(&mailbox)?;
     let reader = parse_reader(&reader)?;
-    authorize(&state, &headers, &mailbox, |a| a.read_token_hash).await?;
-    if !state
-        .db(move |s| s.delete_reader(&mailbox, &reader))
-        .await?
-    {
-        return Err(ApiError::UnknownReader);
-    }
+    let hash = ids::sha256(&bearer(&headers)?);
+    access(
+        state
+            .db(move |s| s.delete_reader(&mailbox, &reader, &hash))
+            .await?,
+    )?;
     state.0.hub.notify(&mailbox, Event::ReaderRemoved(reader));
     Ok(StatusCode::NO_CONTENT)
 }
@@ -169,7 +342,15 @@ pub async fn post_message(
     body: Body,
 ) -> Result<StatusCode, ApiError> {
     let mailbox = parse_mailbox(&mailbox)?;
-    authorize(&state, &headers, &mailbox, |a| a.send_token_hash).await?;
+    let token = bearer(&headers)?;
+    let id = mailbox;
+    let send_hash = state
+        .db(move |s| s.send_token_hash(&id))
+        .await?
+        .ok_or(ApiError::UnknownMailbox)?;
+    if !ids::token_matches(&token, &send_hash) {
+        return Err(ApiError::Unauthorized);
+    }
     // Anything but an envelope is refused, so that the relay cannot carry
     // other data; a longer body is not read beyond one byte too many.
     let data = axum::body::to_bytes(body, lz_wire::ENVELOPE_LEN)
@@ -203,10 +384,11 @@ pub async fn post_message(
     Ok(StatusCode::ACCEPTED)
 }
 
-/// `PUT /v1/handovers/{handover}`: a handover slot with the access token or
-/// any read token of this relay, or, without `Lz-Fetch-Hash`, a reserved
-/// reveal slot with the reply token. Read tokens of a voucher family share
-/// one small quota, so that guests cannot keep the owner from adding devices.
+/// `PUT /v1/handovers/{handover}`: a handover slot with the access token, the
+/// shared token or a full reader's token of any mailbox of this relay, or,
+/// without `Lz-Fetch-Hash`, a reserved reveal slot with the reply token.
+/// Tokens of a voucher family share one small quota, so that guests cannot
+/// keep the owner from adding devices. A satellite's token is refused.
 pub async fn put_handover(
     State(state): State<AppState>,
     Path(handover): Path<String>,
@@ -242,7 +424,7 @@ pub async fn put_handover(
         Family::Owner
     } else {
         state
-            .db(move |s| s.read_token_family(&auth_hash))
+            .db(move |s| s.token_family(&auth_hash))
             .await?
             .ok_or(ApiError::Unauthorized)?
     };
@@ -324,24 +506,14 @@ fn is_access_token(state: &AppState, token: &Token) -> bool {
     ids::sha256(token).ct_eq(&state.0.access_token_hash).into()
 }
 
-/// Checks the bearer token against the mailbox. An unknown mailbox wins over
-/// a wrong token, so a removed client learns that its mailbox is gone.
-async fn authorize(
-    state: &AppState,
-    headers: &HeaderMap,
-    mailbox: &MailboxId,
-    which: fn(&MailboxAuth) -> Hash,
-) -> Result<(), ApiError> {
-    let token = bearer(headers)?;
-    let id = *mailbox;
-    let auth = state
-        .db(move |s| s.mailbox_auth(&id))
-        .await?
-        .ok_or(ApiError::UnknownMailbox)?;
-    if ids::token_matches(&token, &which(&auth)) {
-        Ok(())
-    } else {
-        Err(ApiError::Unauthorized)
+/// Maps a refusal of the store to its error. An unknown mailbox wins over a
+/// wrong token, so a removed client learns that its mailbox is gone.
+pub(crate) fn access<T>(outcome: Access<T>) -> Result<T, ApiError> {
+    match outcome {
+        Access::Ok(value) => Ok(value),
+        Access::UnknownMailbox => Err(ApiError::UnknownMailbox),
+        Access::UnknownReader => Err(ApiError::UnknownReader),
+        Access::Unauthorized => Err(ApiError::Unauthorized),
     }
 }
 

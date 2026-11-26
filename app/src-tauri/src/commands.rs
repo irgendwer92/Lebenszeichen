@@ -12,10 +12,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use lz_client::ctx::{self, Clock, ContactView, Ctx, LastResponse, Overview, Status};
-use lz_client::devices::{Check, DeviceView, Dialog};
+use lz_client::devices::{Check, DeviceView, Dialog, Removal};
 use lz_client::i18n::{Arg, Language, Texts};
 use lz_client::qr::{self, Qr};
 use lz_client::relay::{Http, b64};
+use lz_client::satellite::{PresetChange, SatelliteView};
 use lz_client::show::{self, no_hints, reported, when};
 
 use crate::lang::{self, Choice};
@@ -1068,15 +1069,74 @@ pub async fn device_rename(
     .await
 }
 
-/// Removes another device of this person.
+/// Removes another device of this person, or a satellite. The reply says
+/// what removing found; the notices of the same content are in the lines.
 #[tauri::command]
 pub async fn device_remove(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     reader: String,
-) -> Result<Reply<()>, String> {
+) -> Result<Reply<Removal>, String> {
     let reply = run(path(&state), async move |ctx| {
         ctx.remove_device_by_reader(&reader).await
+    })
+    .await;
+    poke(&app);
+    reply
+}
+
+/// The satellites of this person with their settings.
+#[tauri::command]
+pub async fn satellites(
+    state: tauri::State<'_, AppState>,
+) -> Result<Reply<Vec<SatelliteView>>, String> {
+    run(path(&state), async |ctx| ctx.satellites()).await
+}
+
+/// Sets the waiting time and the long-press preset of a satellite. Without
+/// `preset_reason` (or with an empty one) there is no preset.
+#[tauri::command]
+pub async fn satellite_settings(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    name: String,
+    waiting_minutes: u16,
+    preset_minutes: u32,
+    preset_share: bool,
+    preset_reason: String,
+) -> Result<Reply<()>, String> {
+    let preset = if preset_reason.trim().is_empty() {
+        PresetChange::None
+    } else {
+        PresetChange::Set {
+            minutes: preset_minutes,
+            share: preset_share,
+            reason: preset_reason,
+        }
+    };
+    let reply = run(path(&state), async move |ctx| {
+        ctx.set_satellite_settings(&name, Some(waiting_minutes), Some(preset))
+            .await
+    })
+    .await;
+    poke(&app);
+    reply
+}
+
+/// Sets what a satellite does for a contact: reported answers and the ask
+/// button bound to it (0: none).
+#[tauri::command]
+pub async fn satellite_contact(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    name: String,
+    contact: String,
+    reported: bool,
+    ask_button: u8,
+) -> Result<Reply<()>, String> {
+    let reply = run(path(&state), async move |ctx| {
+        ctx.set_satellite_contact(&name, &contact, Some(reported), Some(ask_button))
+            .await
     })
     .await;
     poke(&app);

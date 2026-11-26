@@ -14,10 +14,11 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc;
 
+use crate::api::access;
 use crate::hub::{ConnId, Event, Hub};
-use crate::ids::{self, MailboxId, ReaderId, Token};
+use crate::ids::{self, Hash, MailboxId, ReaderId};
 use crate::limits::{MAX_FRAME_LEN, MAX_SUBSCRIPTIONS_PER_CONNECTION};
-use crate::store::Ack;
+use crate::store::Access;
 use crate::{ApiError, AppState};
 
 /// Upgrades the request to a WebSocket.
@@ -45,6 +46,10 @@ enum ClientFrame {
 
 struct Subscription {
     reader: ReaderId,
+    /// `SHA-256` of the token it was opened with; checked again on every
+    /// delivery and acknowledgement, so that a revoked token reads nothing
+    /// new.
+    token_hash: Hash,
     /// Highest sequence number sent on this connection.
     sent: i64,
 }
@@ -142,7 +147,14 @@ impl Connection {
                 .send_error(Some(mailbox_text), ApiError::BadRequest)
                 .await;
         }
-        match check_subscription(&self.state, mailbox, token, reader).await {
+        let token_hash = ids::sha256(&token);
+        let now = self.state.now();
+        let opened = self
+            .state
+            .db(move |s| s.open_subscription(&mailbox, &reader, &token_hash, now))
+            .await
+            .and_then(access);
+        match opened {
             Ok(last_ack) => {
                 // Register before reading the backlog, so nothing that
                 // arrives in between is missed.
@@ -154,6 +166,7 @@ impl Connection {
                     mailbox,
                     Subscription {
                         reader,
+                        token_hash,
                         sent: last_ack,
                     },
                 );
@@ -181,20 +194,16 @@ impl Connection {
                 .send_error(Some(mailbox_text), ApiError::BadRequest)
                 .await;
         };
-        let reader = sub.reader;
+        let (reader, token_hash) = (sub.reader, sub.token_hash);
         let seq = i64::try_from(seq).unwrap_or(i64::MAX);
         let now = self.state.now();
         match self
             .state
-            .db(move |s| s.ack(&mailbox, &reader, seq, now))
+            .db(move |s| s.ack(&mailbox, &reader, &token_hash, seq, now))
             .await
         {
-            Ok(Ack::Ok) => Ok(()),
-            Ok(Ack::UnknownReader) => {
-                self.drop_subscription(&mailbox);
-                self.send_error(Some(mailbox_text), ApiError::UnknownReader)
-                    .await
-            }
+            Ok(Access::Ok(())) => Ok(()),
+            Ok(denied) => self.refused(&mailbox, denied).await,
             Err(error) => self.send_error(Some(mailbox_text), error).await,
         }
     }
@@ -215,20 +224,50 @@ impl Connection {
                 self.send_error(Some(&text), ApiError::UnknownReader).await
             }
             Event::ReaderRemoved(_) => Ok(()),
+            Event::AccessChanged => {
+                let Some(sub) = self.subscriptions.get(&mailbox) else {
+                    return Ok(());
+                };
+                let (reader, token_hash) = (sub.reader, sub.token_hash);
+                match self
+                    .state
+                    .db(move |s| s.check_subscription(&mailbox, &reader, &token_hash))
+                    .await
+                {
+                    Ok(Access::Ok(())) => Ok(()),
+                    Ok(denied) => self.refused(&mailbox, denied).await,
+                    Err(error) => self.send_error(Some(&text), error).await,
+                }
+            }
         }
+    }
+
+    /// Ends a subscription that is no longer valid and tells the client why.
+    async fn refused<T>(&mut self, mailbox: &MailboxId, denied: Access<T>) -> Result<(), Closed> {
+        let error = match access(denied) {
+            Ok(_) => return Ok(()),
+            Err(error) => error,
+        };
+        self.drop_subscription(mailbox);
+        self.send_error(Some(&ids::encode(mailbox)), error).await
     }
 
     /// Sends every stored message above what this connection already sent.
     async fn deliver(&mut self, mailbox: MailboxId) -> Result<(), Closed> {
-        let Some(sent) = self.subscriptions.get(&mailbox).map(|s| s.sent) else {
+        let Some((reader, token_hash, sent)) = self
+            .subscriptions
+            .get(&mailbox)
+            .map(|s| (s.reader, s.token_hash, s.sent))
+        else {
             return Ok(());
         };
         let messages = match self
             .state
-            .db(move |s| s.messages_after(&mailbox, sent))
+            .db(move |s| s.messages_for(&mailbox, &reader, &token_hash, sent))
             .await
         {
-            Ok(messages) => messages,
+            Ok(Access::Ok(messages)) => messages,
+            Ok(denied) => return self.refused(&mailbox, denied).await,
             Err(error) => return self.send_error(Some(&ids::encode(&mailbox)), error).await,
         };
         let text = ids::encode(&mailbox);
@@ -266,25 +305,4 @@ impl Connection {
             .await
             .map_err(|_| Closed)
     }
-}
-
-/// Checks token and reader; returns the reader's last acknowledgement.
-async fn check_subscription(
-    state: &AppState,
-    mailbox: MailboxId,
-    token: Token,
-    reader: ReaderId,
-) -> Result<i64, ApiError> {
-    let auth = state
-        .db(move |s| s.mailbox_auth(&mailbox))
-        .await?
-        .ok_or(ApiError::UnknownMailbox)?;
-    if !ids::token_matches(&token, &auth.read_token_hash) {
-        return Err(ApiError::Unauthorized);
-    }
-    let now = state.now();
-    state
-        .db(move |s| s.open_reader(&mailbox, &reader, now))
-        .await?
-        .ok_or(ApiError::UnknownReader)
 }

@@ -14,6 +14,7 @@ pub mod device_code;
 pub mod invitation;
 pub mod message;
 pub mod record;
+pub mod satellite;
 pub mod setup_code;
 mod text;
 
@@ -24,6 +25,10 @@ pub use message::{
     ResponseKind, Rules, RulesSet, StateShared,
 };
 pub use record::{ContactRecord, Stamp};
+pub use satellite::{
+    ContactFlags, ContactSettings, ContactSettingsFor, Part as SatellitePart, Preset,
+    Settings as SatelliteSettings, SettingsFor,
+};
 pub use setup_code::{CodeKind, SetupCode};
 pub use text::{BoundedStr, ContactName, DeviceName, Reason, RelayUrl};
 

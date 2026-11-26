@@ -27,7 +27,7 @@ Meant for days when someone cannot manage to reply to messages, for focused work
 | Client storage | One JSON file per device behind an interface in the core, replaced as a whole on every change. Exactly one process owns a device's state. Keys unencrypted for now, readable only by the owner; protection via the system keystore follows with the apps. Decided on 2026-11-14. |
 | UI technology | Plain HTML, CSS and JavaScript in `app/ui`, with no build step and no framework. Sufficient for the contact list, the request button and settings, and brings no npm dependencies. Decided on 2026-11-14. |
 | Framework | Tauri, with a standalone Rust core and a thin Kotlin layer on Android. |
-| License | Clients and core: GPL-3.0-or-later with app store exception. Relay: AGPL-3.0-or-later. |
+| License | Clients and core: GPL-3.0-or-later with app store exception. Relay: AGPL-3.0-or-later. Microcontroller library (`firmware/`, M10): LGPL-3.0-or-later with a static linking exception. |
 | Source code hosting | GitHub, with GitHub Actions and Renovate. |
 | Order of milestones | As in `roadmap.md`, confirmed. |
 | Operation | Self-hosted at first, apps via sideloading. |

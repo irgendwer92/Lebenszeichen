@@ -330,10 +330,13 @@ fn envelope(n: u8) -> Vec<u8> {
 #[tokio::test]
 async fn health() {
     let relay = Relay::start().await;
-    let (status, _) = relay
+    let (status, json) = relay
         .request(reqwest::Method::GET, "/health", None, None)
         .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        (status, json),
+        (StatusCode::OK, json!({ "features": ["reader_tokens"] }))
+    );
 }
 
 #[tokio::test]
@@ -2180,4 +2183,1248 @@ async fn messages_expire_by_their_arrival_time_across_a_restart() {
         subscribed(&mailbox)
     );
     client.expect_message(&mailbox, 1, &envelope(1)).await;
+}
+
+// --- Read token per reader (M10) ---
+
+/// A token with its `b64url` form and the hex of its hash.
+struct Tok {
+    text: String,
+    hash: String,
+}
+
+fn tok() -> Tok {
+    let (raw, text) = token();
+    Tok {
+        text,
+        hash: hex(&ids::sha256(&raw)),
+    }
+}
+
+impl Relay {
+    /// Creates a mailbox in the new form, with `reader` as its first full
+    /// reader. The returned [`Mailbox`] carries the reader's token as `read`.
+    async fn create_reader_mailbox(
+        &self,
+        bearer: &str,
+        reader: &str,
+    ) -> (StatusCode, Value, Mailbox) {
+        let own = tok();
+        let send = tok();
+        let body = json!({
+            "reader": reader,
+            "reader_token_hash": own.hash,
+            "send_token_hash": send.hash,
+        });
+        let (status, json) = self
+            .request(
+                reqwest::Method::POST,
+                "/mailboxes",
+                Some(bearer),
+                Some(body.to_string().into()),
+            )
+            .await;
+        let id = json["mailbox"].as_str().unwrap_or_default().to_owned();
+        (
+            status,
+            json,
+            Mailbox {
+                id,
+                read: own.text,
+                send: send.text,
+            },
+        )
+    }
+
+    async fn reader_mailbox(&self, reader: &str) -> Mailbox {
+        let (status, json, mailbox) = self
+            .create_reader_mailbox(&ids::encode(&ACCESS_TOKEN), reader)
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{json}");
+        mailbox
+    }
+
+    async fn put_reader_with(
+        &self,
+        mailbox: &Mailbox,
+        reader: &str,
+        bearer: &str,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        self.request(
+            reqwest::Method::PUT,
+            &format!("/mailboxes/{}/readers/{reader}", mailbox.id),
+            Some(bearer),
+            Some(body.to_string().into()),
+        )
+        .await
+    }
+
+    async fn delete_reader_with(
+        &self,
+        mailbox: &Mailbox,
+        reader: &str,
+        bearer: &str,
+    ) -> (StatusCode, Value) {
+        self.request(
+            reqwest::Method::DELETE,
+            &format!("/mailboxes/{}/readers/{reader}", mailbox.id),
+            Some(bearer),
+            None,
+        )
+        .await
+    }
+
+    async fn delete_with(&self, mailbox: &Mailbox, bearer: &str) -> (StatusCode, Value) {
+        self.request(
+            reqwest::Method::DELETE,
+            &format!("/mailboxes/{}", mailbox.id),
+            Some(bearer),
+            None,
+        )
+        .await
+    }
+
+    async fn drop_shared(&self, mailbox: &Mailbox, bearer: &str) -> (StatusCode, Value) {
+        self.request(
+            reqwest::Method::DELETE,
+            &format!("/mailboxes/{}/read-token", mailbox.id),
+            Some(bearer),
+            None,
+        )
+        .await
+    }
+
+    async fn set_send_token(
+        &self,
+        mailbox: &Mailbox,
+        bearer: &str,
+        hash: &str,
+    ) -> (StatusCode, Value) {
+        self.request(
+            reqwest::Method::PUT,
+            &format!("/mailboxes/{}/send-token", mailbox.id),
+            Some(bearer),
+            Some(json!({ "send_token_hash": hash }).to_string().into()),
+        )
+        .await
+    }
+
+    /// Creates a mailbox in the old form with `bearer`.
+    async fn derive_with(&self, bearer: &str) -> StatusCode {
+        self.create_mailbox_with(Some(bearer)).await.0
+    }
+
+    async fn voucher(&self) -> String {
+        let (status, json) = self
+            .request(
+                reqwest::Method::POST,
+                "/vouchers",
+                Some(&ids::encode(&ACCESS_TOKEN)),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED);
+        json["voucher"].as_str().unwrap().to_owned()
+    }
+}
+
+impl Client {
+    async fn subscribe_with(&mut self, mailbox: &Mailbox, token: &str, reader: &str) -> Value {
+        self.send(
+            json!({ "op": "subscribe", "mailbox": mailbox.id, "token": token, "reader": reader }),
+        )
+        .await;
+        self.recv().await
+    }
+}
+
+#[tokio::test]
+async fn mailbox_in_the_new_form() {
+    let relay = Relay::start().await;
+    let access = ids::encode(&ACCESS_TOKEN);
+    let (full, other) = (reader_id(1), reader_id(2));
+    let mailbox = relay.reader_mailbox(&full).await;
+
+    // The first reader subscribes with its own token.
+    let mut client = relay.connect().await;
+    assert_eq!(
+        client.subscribe(&mailbox, &full).await,
+        subscribed(&mailbox)
+    );
+    relay.post(&mailbox, envelope(1)).await;
+    client.expect_message(&mailbox, 1, &envelope(1)).await;
+
+    // Without a shared token, a new reader needs a token of its own.
+    assert_eq!(
+        relay
+            .put_reader_with(&mailbox, &other, &mailbox.read, json!({ "push_url": null }))
+            .await,
+        (StatusCode::BAD_REQUEST, error("bad_request"))
+    );
+    let own = tok();
+    assert_eq!(
+        relay
+            .put_reader_with(
+                &mailbox,
+                &other,
+                &mailbox.read,
+                json!({ "token_hash": own.hash })
+            )
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    let mut second = relay.connect().await;
+    assert_eq!(
+        second.subscribe_with(&mailbox, &own.text, &other).await,
+        subscribed(&mailbox)
+    );
+    second.expect_message(&mailbox, 1, &envelope(1)).await;
+    // A token is only good for its own reader.
+    assert_eq!(
+        second.subscribe_with(&mailbox, &own.text, &full).await,
+        ws_error(&mailbox, "unauthorized")
+    );
+
+    // Unreadable bodies: both forms, neither, a bad reader or hash.
+    let hash = tok().hash;
+    for body in [
+        json!({ "read_token_hash": hash, "reader": full, "reader_token_hash": hash, "send_token_hash": hash }),
+        json!({ "send_token_hash": hash }),
+        json!({ "reader": full, "send_token_hash": hash }),
+        json!({ "reader": "short", "reader_token_hash": hash, "send_token_hash": hash }),
+        json!({ "reader": full, "reader_token_hash": "00", "send_token_hash": hash }),
+    ] {
+        assert_eq!(
+            relay
+                .request(
+                    reqwest::Method::POST,
+                    "/mailboxes",
+                    Some(&access),
+                    Some(body.to_string().into()),
+                )
+                .await,
+            (StatusCode::BAD_REQUEST, error("bad_request")),
+            "{body}"
+        );
+    }
+    // The new form needs the same authorization as the old.
+    let (status, _, _) = relay.create_reader_mailbox(&tok().text, &full).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let voucher = relay.voucher().await;
+    let (status, _, _) = relay.create_reader_mailbox(&voucher, &full).await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn own_token_replaces_the_shared_token_for_its_reader() {
+    let relay = Relay::start().await;
+    let mailbox = relay.mailbox().await;
+    let (a, b) = (reader_id(1), reader_id(2));
+    relay
+        .put_reader(&mailbox, &a, Some("https://push.example.org/a"))
+        .await;
+    relay.put_reader(&mailbox, &b, None).await;
+    let mut client = relay.connect().await;
+    assert_eq!(client.subscribe(&mailbox, &a).await, subscribed(&mailbox));
+
+    // A gives itself a token with the shared token; the push URL stays,
+    // and the live subscription with the shared token ends.
+    let own = tok();
+    assert_eq!(
+        relay
+            .put_reader_with(
+                &mailbox,
+                &a,
+                &mailbox.read,
+                json!({ "token_hash": own.hash })
+            )
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(client.recv().await, ws_error(&mailbox, "unauthorized"));
+    relay.post(&mailbox, envelope(1)).await;
+    client.expect_silence().await;
+    assert_eq!(
+        relay.waker.take(),
+        vec!["https://push.example.org/a".to_owned()]
+    );
+
+    // The shared token no longer subscribes as A; A's own token does.
+    assert_eq!(
+        client.subscribe(&mailbox, &a).await,
+        ws_error(&mailbox, "unauthorized")
+    );
+    assert_eq!(
+        client.subscribe_with(&mailbox, &own.text, &a).await,
+        subscribed(&mailbox)
+    );
+    client.expect_message(&mailbox, 1, &envelope(1)).await;
+    client.ack(&mailbox, 1).await;
+    client.expect_silence().await;
+    // Setting the same token again changes nothing.
+    assert_eq!(
+        relay
+            .put_reader_with(&mailbox, &a, &own.text, json!({ "token_hash": own.hash }))
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    client.expect_silence().await;
+
+    // B is still a legacy reader.
+    let mut legacy = relay.connect().await;
+    assert_eq!(legacy.subscribe(&mailbox, &b).await, subscribed(&mailbox));
+    legacy.expect_message(&mailbox, 1, &envelope(1)).await;
+    // A token hash that the shared token or another reader has is refused.
+    let shared_hash = hex(&ids::sha256(&ids::decode::<32>(&mailbox.read).unwrap()));
+    for hash in [&own.hash, &shared_hash] {
+        assert_eq!(
+            relay
+                .put_reader_with(&mailbox, &b, &mailbox.read, json!({ "token_hash": hash }))
+                .await,
+            (StatusCode::BAD_REQUEST, error("bad_request"))
+        );
+    }
+    // Unknown roles and bad hashes too.
+    for body in [json!({ "role": "admin" }), json!({ "token_hash": "zz" })] {
+        assert_eq!(
+            relay
+                .put_reader_with(&mailbox, &b, &mailbox.read, body)
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    legacy.expect_silence().await;
+
+    // With its own token, A may change its push URL and token.
+    let newer = tok();
+    assert_eq!(
+        relay
+            .put_reader_with(
+                &mailbox,
+                &a,
+                &own.text,
+                json!({ "push_url": null, "token_hash": newer.hash })
+            )
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(client.recv().await, ws_error(&mailbox, "unauthorized"));
+    assert_eq!(
+        client.subscribe_with(&mailbox, &own.text, &a).await,
+        ws_error(&mailbox, "unauthorized")
+    );
+    assert_eq!(
+        client.subscribe_with(&mailbox, &newer.text, &a).await,
+        subscribed(&mailbox)
+    );
+    relay.post(&mailbox, envelope(2)).await;
+    client.expect_message(&mailbox, 2, &envelope(2)).await;
+    assert!(relay.waker.take().is_empty());
+}
+
+#[tokio::test]
+async fn satellite_reads_but_manages_nothing() {
+    let relay = Relay::start().await;
+    let (full, sat, other) = (reader_id(1), reader_id(2), reader_id(3));
+    let voucher = relay.voucher().await;
+    let (status, _, mailbox) = relay.create_reader_mailbox(&voucher, &full).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let enrolment = tok();
+    assert_eq!(
+        relay
+            .put_reader_with(
+                &mailbox,
+                &sat,
+                &mailbox.read,
+                json!({ "token_hash": enrolment.hash, "role": "satellite" })
+            )
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+
+    // It replaces the enrolment token with its own, and may set its push URL.
+    let own = tok();
+    assert_eq!(
+        relay
+            .put_reader_with(
+                &mailbox,
+                &sat,
+                &enrolment.text,
+                json!({ "token_hash": own.hash, "push_url": "https://push.example.org/s" })
+            )
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    let sat_token = own.text;
+
+    // It subscribes and acknowledges.
+    relay.post(&mailbox, envelope(1)).await;
+    let mut client = relay.connect().await;
+    assert_eq!(
+        client.subscribe_with(&mailbox, &sat_token, &sat).await,
+        subscribed(&mailbox)
+    );
+    client.expect_message(&mailbox, 1, &envelope(1)).await;
+    client.ack(&mailbox, 1).await;
+    client.expect_silence().await;
+
+    // Everything else is refused.
+    let unauthorized = (StatusCode::UNAUTHORIZED, error("unauthorized"));
+    let hash = tok().hash;
+    for (reader, body) in [
+        (&other, json!({ "token_hash": hash })),
+        (&full, json!({ "push_url": null })),
+        (&full, json!({ "token_hash": hash })),
+        (&sat, json!({ "role": "full" })),
+        (&sat, json!({ "role": "satellite" })),
+    ] {
+        assert_eq!(
+            relay
+                .put_reader_with(&mailbox, reader, &sat_token, body.clone())
+                .await,
+            unauthorized,
+            "{body}"
+        );
+    }
+    assert_eq!(
+        relay.delete_reader_with(&mailbox, &full, &sat_token).await,
+        unauthorized
+    );
+    assert_eq!(relay.delete_with(&mailbox, &sat_token).await, unauthorized);
+    assert_eq!(relay.drop_shared(&mailbox, &sat_token).await, unauthorized);
+    assert_eq!(
+        relay.set_send_token(&mailbox, &sat_token, &hash).await,
+        unauthorized
+    );
+    let mut probe = relay.connect().await;
+    assert_eq!(
+        probe.subscribe_with(&mailbox, &sat_token, &full).await,
+        ws_error(&mailbox, "unauthorized")
+    );
+    assert_eq!(
+        relay.derive_with(&sat_token).await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        relay.put_slot(&sat_token, false).await,
+        unauthorized.clone()
+    );
+    // The full reader of the same voucher mailbox may do both.
+    assert_eq!(relay.derive_with(&mailbox.read).await, StatusCode::CREATED);
+    assert_eq!(
+        relay.put_slot(&mailbox.read, false).await.0,
+        StatusCode::CREATED
+    );
+
+    // It may leave, with its own token.
+    assert_eq!(
+        relay.delete_reader_with(&mailbox, &sat, &sat_token).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(client.recv().await, ws_error(&mailbox, "unknown_reader"));
+    assert_eq!(relay.sql_count("SELECT COUNT(*) FROM readers"), 1);
+}
+
+#[tokio::test]
+async fn shared_token_and_full_reader_rights() {
+    let relay = Relay::start().await;
+    let mailbox = relay.mailbox().await;
+    let shared = mailbox.read.clone();
+    let (full, legacy, sat) = (reader_id(1), reader_id(2), reader_id(3));
+    let unauthorized = (StatusCode::UNAUTHORIZED, error("unauthorized"));
+
+    // The shared token registers readers with a token and a role.
+    let own = tok();
+    assert_eq!(
+        relay
+            .put_reader_with(
+                &mailbox,
+                &full,
+                &shared,
+                json!({ "token_hash": own.hash, "role": "full" })
+            )
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    relay.put_reader(&mailbox, &legacy, None).await;
+    let sat_token = tok();
+    assert_eq!(
+        relay
+            .put_reader_with(
+                &mailbox,
+                &sat,
+                &own.text,
+                json!({ "token_hash": sat_token.hash, "role": "satellite" })
+            )
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    // It cannot drop itself or set the send token.
+    assert_eq!(relay.drop_shared(&mailbox, &shared).await, unauthorized);
+    let new_send = tok();
+    assert_eq!(
+        relay
+            .set_send_token(&mailbox, &shared, &new_send.hash)
+            .await,
+        unauthorized
+    );
+
+    // A full reader sets the send token.
+    assert_eq!(
+        relay.set_send_token(&mailbox, &own.text, "zz").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        relay
+            .set_send_token(&mailbox, &own.text, &new_send.hash)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(relay.post(&mailbox, envelope(1)).await, unauthorized);
+    let renewed = Mailbox {
+        id: mailbox.id.clone(),
+        read: own.text.clone(),
+        send: new_send.text.clone(),
+    };
+    assert_eq!(
+        relay.post(&renewed, envelope(1)).await.0,
+        StatusCode::ACCEPTED
+    );
+
+    // A full reader drops the shared token: the legacy reader is locked out,
+    // live and later, and the shared token authorizes nothing any more.
+    let mut client = relay.connect().await;
+    assert_eq!(
+        client.subscribe(&mailbox, &legacy).await,
+        subscribed(&mailbox)
+    );
+    client.expect_message(&mailbox, 1, &envelope(1)).await;
+    assert_eq!(
+        relay.drop_shared(&mailbox, &own.text).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(client.recv().await, ws_error(&mailbox, "unauthorized"));
+    relay.post(&renewed, envelope(2)).await;
+    client.expect_silence().await;
+    assert_eq!(
+        client.subscribe(&mailbox, &legacy).await,
+        ws_error(&mailbox, "unauthorized")
+    );
+    assert_eq!(
+        relay.put_reader(&mailbox, &legacy, None).await,
+        unauthorized.clone()
+    );
+    assert_eq!(
+        relay.put_reader(&mailbox, &reader_id(9), None).await,
+        unauthorized.clone()
+    );
+    assert_eq!(
+        relay.delete_reader_with(&mailbox, &full, &shared).await,
+        unauthorized
+    );
+    assert_eq!(relay.delete_with(&mailbox, &shared).await, unauthorized);
+    assert_eq!(relay.put_slot(&shared, false).await, unauthorized.clone());
+    // Dropping again is fine.
+    assert_eq!(
+        relay.drop_shared(&mailbox, &own.text).await.0,
+        StatusCode::NO_CONTENT
+    );
+    // The full reader and the satellite read on.
+    let mut sat_client = relay.connect().await;
+    assert_eq!(
+        sat_client
+            .subscribe_with(&mailbox, &sat_token.text, &sat)
+            .await,
+        subscribed(&mailbox)
+    );
+    sat_client.expect_message(&mailbox, 1, &envelope(1)).await;
+    sat_client.expect_message(&mailbox, 2, &envelope(2)).await;
+
+    // A full reader revokes the legacy reader and finally deletes the
+    // mailbox.
+    assert_eq!(
+        relay
+            .delete_reader_with(&mailbox, &legacy, &own.text)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        relay.delete_with(&mailbox, &own.text).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        sat_client.recv().await,
+        ws_error(&mailbox, "unknown_mailbox")
+    );
+
+    // The shared token deletes a mailbox, as before.
+    let other = relay.mailbox().await;
+    assert_eq!(relay.delete(&other).await, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn revoked_reader_is_locked_out_and_learns_it() {
+    let relay = Relay::start().await;
+    let (full, removed) = (reader_id(1), reader_id(2));
+    let mailbox = relay.reader_mailbox(&full).await;
+    let own = tok();
+    relay
+        .put_reader_with(
+            &mailbox,
+            &removed,
+            &mailbox.read,
+            json!({ "token_hash": own.hash }),
+        )
+        .await;
+    let mut client = relay.connect().await;
+    assert_eq!(
+        client.subscribe_with(&mailbox, &own.text, &removed).await,
+        subscribed(&mailbox)
+    );
+
+    // Revoking ends the live subscription.
+    assert_eq!(
+        relay
+            .delete_reader_with(&mailbox, &removed, &mailbox.read)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(client.recv().await, ws_error(&mailbox, "unknown_reader"));
+    relay.post(&mailbox, envelope(1)).await;
+    client.expect_silence().await;
+
+    // Mailbox first, then reader, then token: the revoked device learns it
+    // was removed, whatever token it shows.
+    let unknown = Mailbox {
+        id: ids::encode(&[7u8; 32]),
+        read: own.text.clone(),
+        send: String::new(),
+    };
+    assert_eq!(
+        client.subscribe_with(&unknown, &own.text, &removed).await,
+        ws_error(&unknown, "unknown_mailbox")
+    );
+    for token in [&own.text, &tok().text] {
+        assert_eq!(
+            client.subscribe_with(&mailbox, token, &removed).await,
+            ws_error(&mailbox, "unknown_reader")
+        );
+    }
+    assert_eq!(
+        client.subscribe_with(&mailbox, &tok().text, &full).await,
+        ws_error(&mailbox, "unauthorized")
+    );
+    client.ack(&mailbox, 1).await;
+    assert_eq!(client.recv().await, ws_error(&mailbox, "bad_request"));
+
+    // It cannot register itself again, nor leave.
+    let unauthorized = (StatusCode::UNAUTHORIZED, error("unauthorized"));
+    assert_eq!(
+        relay
+            .put_reader_with(
+                &mailbox,
+                &removed,
+                &own.text,
+                json!({ "token_hash": own.hash })
+            )
+            .await,
+        unauthorized
+    );
+    assert_eq!(
+        relay
+            .delete_reader_with(&mailbox, &removed, &own.text)
+            .await,
+        unauthorized
+    );
+    assert_eq!(relay.put_slot(&own.text, false).await, unauthorized.clone());
+    assert_eq!(relay.derive_with(&own.text).await, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn replaced_token_ends_reading_with_the_old_one() {
+    let relay = Relay::start().await;
+    let (full, other) = (reader_id(1), reader_id(2));
+    let mailbox = relay.reader_mailbox(&full).await;
+    let old = tok();
+    relay
+        .put_reader_with(
+            &mailbox,
+            &other,
+            &mailbox.read,
+            json!({ "token_hash": old.hash }),
+        )
+        .await;
+    let mut client = relay.connect().await;
+    assert_eq!(
+        client.subscribe_with(&mailbox, &old.text, &other).await,
+        subscribed(&mailbox)
+    );
+    relay.post(&mailbox, envelope(1)).await;
+    client.expect_message(&mailbox, 1, &envelope(1)).await;
+
+    // A full reader replaces the other reader's token.
+    let new = tok();
+    relay
+        .put_reader_with(
+            &mailbox,
+            &other,
+            &mailbox.read,
+            json!({ "token_hash": new.hash }),
+        )
+        .await;
+    assert_eq!(client.recv().await, ws_error(&mailbox, "unauthorized"));
+    relay.post(&mailbox, envelope(2)).await;
+    client.expect_silence().await;
+    assert_eq!(
+        client.subscribe_with(&mailbox, &new.text, &other).await,
+        subscribed(&mailbox)
+    );
+    client.expect_message(&mailbox, 1, &envelope(1)).await;
+    client.expect_message(&mailbox, 2, &envelope(2)).await;
+}
+
+#[tokio::test]
+async fn quotas_hold_with_reader_tokens() {
+    let relay = Relay::start().await;
+    let full = reader_id(1);
+    let unauthorized = (StatusCode::UNAUTHORIZED, error("unauthorized"));
+
+    // A voucher mailbox with a shared token and two full readers: all three
+    // tokens derive from the same ten.
+    let parent = relay.voucher_mailbox().await;
+    let (first, second) = (tok(), tok());
+    for (reader, own) in [(&full, &first), (&reader_id(2), &second)] {
+        relay
+            .put_reader_with(
+                &parent,
+                reader,
+                &parent.read,
+                json!({ "token_hash": own.hash }),
+            )
+            .await;
+    }
+    for bearer in [&parent.read, &first.text, &second.text]
+        .iter()
+        .cycle()
+        .take(10)
+    {
+        assert_eq!(relay.derive_with(bearer).await, StatusCode::CREATED);
+    }
+    for bearer in [&parent.read, &first.text, &second.text] {
+        assert_eq!(
+            relay.create_mailbox_with(Some(bearer)).await.1,
+            error("mailbox_quota")
+        );
+    }
+
+    // They share the family's two handover slots, and the per-token limit
+    // still holds per token.
+    assert_eq!(
+        relay.put_slot(&first.text, true).await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        relay.put_slot(&second.text, false).await.0,
+        StatusCode::CREATED
+    );
+    for bearer in [&parent.read, &first.text, &second.text] {
+        assert_eq!(
+            relay.put_slot(bearer, false).await,
+            (StatusCode::TOO_MANY_REQUESTS, error("handovers_quota"))
+        );
+    }
+
+    // A satellite's token counts nowhere, it is refused.
+    let sat = tok();
+    relay
+        .put_reader_with(
+            &parent,
+            &reader_id(3),
+            &first.text,
+            json!({ "token_hash": sat.hash, "role": "satellite" }),
+        )
+        .await;
+    assert_eq!(relay.put_slot(&sat.text, false).await, unauthorized.clone());
+    assert_eq!(relay.derive_with(&sat.text).await, StatusCode::UNAUTHORIZED);
+
+    // A full reader of a mailbox in the new form, created with the access
+    // token, belongs to the owner and has the per-token limit only.
+    let own = relay.reader_mailbox(&full).await;
+    for _ in 0..2 {
+        assert_eq!(
+            relay.put_slot(&own.read, false).await.0,
+            StatusCode::CREATED
+        );
+    }
+    assert_eq!(
+        relay.put_slot(&own.read, false).await,
+        (StatusCode::TOO_MANY_REQUESTS, error("handovers_quota"))
+    );
+    // It cannot derive: only voucher mailboxes do.
+    assert_eq!(relay.derive_with(&own.read).await, StatusCode::UNAUTHORIZED);
+    // A full reader of a voucher mailbox in the new form derives.
+    let voucher = relay.voucher().await;
+    let (status, _, guest) = relay.create_reader_mailbox(&voucher, &full).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(relay.derive_with(&guest.read).await, StatusCode::CREATED);
+
+    // At most 16 readers, with tokens or without.
+    let mailbox = relay.reader_mailbox(&full).await;
+    for n in 2..=16 {
+        assert_eq!(
+            relay
+                .put_reader_with(
+                    &mailbox,
+                    &reader_id(n),
+                    &mailbox.read,
+                    json!({ "token_hash": tok().hash })
+                )
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
+    }
+    assert_eq!(
+        relay
+            .put_reader_with(
+                &mailbox,
+                &reader_id(17),
+                &mailbox.read,
+                json!({ "token_hash": tok().hash })
+            )
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+impl Relay {
+    async fn revoke_readers(
+        &self,
+        mailbox: &Mailbox,
+        bearer: &str,
+        keep: &[&String],
+        drop_shared: bool,
+    ) -> (StatusCode, Value) {
+        let body = json!({ "keep": keep, "drop_shared_token": drop_shared });
+        self.request(
+            reqwest::Method::POST,
+            &format!("/mailboxes/{}/revoke-readers", mailbox.id),
+            Some(bearer),
+            Some(body.to_string().into()),
+        )
+        .await
+    }
+}
+
+#[tokio::test]
+async fn revoking_all_unknown_readers_removes_hidden_ones() {
+    let relay = Relay::start().await;
+    let mailbox = relay.mailbox().await;
+    let shared = mailbox.read.clone();
+    let (caller, kept, removed, by_shared, by_full, sat) = (
+        reader_id(1),
+        reader_id(2),
+        reader_id(3),
+        reader_id(4),
+        reader_id(5),
+        reader_id(6),
+    );
+    let tokens: Vec<Tok> = (0..6).map(|_| tok()).collect();
+    // The caller and a kept device with their own tokens, the removed
+    // device R with its own token.
+    for (reader, own) in [
+        (&caller, &tokens[0]),
+        (&kept, &tokens[1]),
+        (&removed, &tokens[2]),
+    ] {
+        relay
+            .put_reader_with(&mailbox, reader, &shared, json!({ "token_hash": own.hash }))
+            .await;
+    }
+    // R plants hidden readers: one with the shared token, one with its own
+    // full token, and a satellite.
+    relay
+        .put_reader_with(
+            &mailbox,
+            &by_shared,
+            &shared,
+            json!({ "token_hash": tokens[3].hash }),
+        )
+        .await;
+    relay
+        .put_reader_with(
+            &mailbox,
+            &by_full,
+            &tokens[2].text,
+            json!({ "token_hash": tokens[4].hash }),
+        )
+        .await;
+    relay
+        .put_reader_with(
+            &mailbox,
+            &sat,
+            &tokens[2].text,
+            json!({ "token_hash": tokens[5].hash, "role": "satellite" }),
+        )
+        .await;
+    assert_eq!(relay.sql_count("SELECT COUNT(*) FROM readers"), 6);
+
+    // Live subscriptions of all of them, and a message only the caller acks.
+    let mut clients = Vec::new();
+    for (reader, own) in [
+        (&kept, &tokens[1]),
+        (&removed, &tokens[2]),
+        (&by_shared, &tokens[3]),
+        (&by_full, &tokens[4]),
+        (&sat, &tokens[5]),
+    ] {
+        let mut client = relay.connect().await;
+        assert_eq!(
+            client.subscribe_with(&mailbox, &own.text, reader).await,
+            subscribed(&mailbox)
+        );
+        clients.push(client);
+    }
+    relay.post(&mailbox, envelope(1)).await;
+    for client in &mut clients {
+        client.expect_message(&mailbox, 1, &envelope(1)).await;
+    }
+    clients[0].ack(&mailbox, 1).await;
+    clients[0].expect_silence().await;
+    let mut own_client = relay.connect().await;
+    assert_eq!(
+        own_client
+            .subscribe_with(&mailbox, &tokens[0].text, &caller)
+            .await,
+        subscribed(&mailbox)
+    );
+    own_client.expect_message(&mailbox, 1, &envelope(1)).await;
+    own_client.ack(&mailbox, 1).await;
+    own_client.expect_silence().await;
+    assert_eq!(relay.waiting(&mailbox), 1);
+
+    // Refused: the shared token, a satellite, a bad body.
+    let unauthorized = (StatusCode::UNAUTHORIZED, error("unauthorized"));
+    assert_eq!(
+        relay.revoke_readers(&mailbox, &shared, &[], true).await,
+        unauthorized
+    );
+    assert_eq!(
+        relay
+            .revoke_readers(&mailbox, &tokens[5].text, &[], true)
+            .await,
+        unauthorized
+    );
+    for body in [
+        json!({ "keep": [] }),
+        json!({ "keep": ["short"], "drop_shared_token": true }),
+        json!({ "keep": (0..17).map(reader_id).collect::<Vec<_>>(), "drop_shared_token": true }),
+    ] {
+        assert_eq!(
+            relay
+                .request(
+                    reqwest::Method::POST,
+                    &format!("/mailboxes/{}/revoke-readers", mailbox.id),
+                    Some(&tokens[0].text),
+                    Some(body.to_string().into()),
+                )
+                .await,
+            (StatusCode::BAD_REQUEST, error("bad_request")),
+            "{body}"
+        );
+    }
+    assert_eq!(relay.sql_count("SELECT COUNT(*) FROM readers"), 6);
+
+    // The caller keeps only `kept`, without naming itself, and drops the
+    // shared token in the same step.
+    let (status, json) = relay
+        .revoke_readers(&mailbox, &tokens[0].text, &[&kept], true)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let mut revoked: Vec<String> = json["revoked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect();
+    revoked.sort();
+    let mut expected = vec![
+        removed.clone(),
+        by_shared.clone(),
+        by_full.clone(),
+        sat.clone(),
+    ];
+    expected.sort();
+    assert_eq!(revoked, expected);
+    assert_eq!(relay.sql_count("SELECT COUNT(*) FROM readers"), 2);
+    // Their subscriptions end, and the message no longer waits for them.
+    for client in &mut clients[1..] {
+        assert_eq!(client.recv().await, ws_error(&mailbox, "unknown_reader"));
+    }
+    clients[0].expect_silence().await;
+    own_client.expect_silence().await;
+    assert_eq!(relay.waiting(&mailbox), 0);
+
+    // None of them gets back in.
+    for (reader, own) in [
+        (&removed, &tokens[2]),
+        (&by_shared, &tokens[3]),
+        (&by_full, &tokens[4]),
+        (&sat, &tokens[5]),
+    ] {
+        assert_eq!(
+            clients[1].subscribe_with(&mailbox, &own.text, reader).await,
+            ws_error(&mailbox, "unknown_reader")
+        );
+        assert_eq!(
+            relay
+                .put_reader_with(
+                    &mailbox,
+                    reader,
+                    &own.text,
+                    json!({ "token_hash": own.hash })
+                )
+                .await,
+            unauthorized
+        );
+    }
+    assert_eq!(
+        relay
+            .put_reader_with(
+                &mailbox,
+                &reader_id(9),
+                &shared,
+                json!({ "token_hash": tok().hash })
+            )
+            .await,
+        unauthorized
+    );
+
+    // Kept readers read on; a repeat revokes nothing, and the caller is
+    // kept even when it names nobody.
+    relay.post(&mailbox, envelope(2)).await;
+    clients[0].expect_message(&mailbox, 2, &envelope(2)).await;
+    own_client.expect_message(&mailbox, 2, &envelope(2)).await;
+    let (status, json) = relay
+        .revoke_readers(&mailbox, &tokens[0].text, &[&kept], false)
+        .await;
+    assert_eq!((status, json), (StatusCode::OK, json!({ "revoked": [] })));
+    let (status, json) = relay
+        .revoke_readers(&mailbox, &tokens[0].text, &[], false)
+        .await;
+    assert_eq!(
+        (status, json),
+        (StatusCode::OK, json!({ "revoked": [kept] }))
+    );
+    assert_eq!(
+        clients[0].recv().await,
+        ws_error(&mailbox, "unknown_reader")
+    );
+    own_client.expect_silence().await;
+    assert_eq!(relay.sql_count("SELECT COUNT(*) FROM readers"), 1);
+}
+
+#[tokio::test]
+async fn revoking_readers_can_keep_the_shared_token() {
+    let relay = Relay::start().await;
+    let mailbox = relay.mailbox().await;
+    let (caller, legacy, other) = (reader_id(1), reader_id(2), reader_id(3));
+    let own = tok();
+    relay
+        .put_reader_with(
+            &mailbox,
+            &caller,
+            &mailbox.read,
+            json!({ "token_hash": own.hash }),
+        )
+        .await;
+    relay.put_reader(&mailbox, &legacy, None).await;
+    relay.put_reader(&mailbox, &other, None).await;
+    let mut client = relay.connect().await;
+    assert_eq!(
+        client.subscribe(&mailbox, &legacy).await,
+        subscribed(&mailbox)
+    );
+
+    let (status, json) = relay
+        .revoke_readers(&mailbox, &own.text, &[&legacy, &reader_id(9)], false)
+        .await;
+    assert_eq!(
+        (status, json),
+        (StatusCode::OK, json!({ "revoked": [other] }))
+    );
+    // The legacy reader stays subscribed with the shared token.
+    client.expect_silence().await;
+    relay.post(&mailbox, envelope(1)).await;
+    client.expect_message(&mailbox, 1, &envelope(1)).await;
+    assert_eq!(relay.sql_count("SELECT COUNT(*) FROM readers"), 2);
+
+    // Unknown mailbox.
+    let unknown = Mailbox {
+        id: ids::encode(&[7u8; 32]),
+        read: String::new(),
+        send: String::new(),
+    };
+    assert_eq!(
+        relay.revoke_readers(&unknown, &own.text, &[], true).await,
+        (StatusCode::NOT_FOUND, error("unknown_mailbox"))
+    );
+}
+
+/// Version 1 to 2 on top of [`MIGRATION_V1`], as in the relay of M9.
+const MIGRATION_V2: &str = "
+ALTER TABLE mailboxes ADD COLUMN derived_total INTEGER NOT NULL DEFAULT 0;
+UPDATE mailboxes SET derived_total =
+    (SELECT COUNT(*) FROM mailboxes AS child WHERE child.parent = mailboxes.id)
+    WHERE origin = 1;
+ALTER TABLE handovers ADD COLUMN family BLOB;
+CREATE INDEX handovers_family ON handovers(family);
+";
+
+#[tokio::test]
+async fn migration_from_version_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("relay.sqlite");
+    let (read_raw, read) = token();
+    let (send_raw, send) = token();
+    let (fetch_raw, fetch) = token();
+    let parent_id: [u8; 32] = ids::random();
+    let child_id: [u8; 32] = ids::random();
+    let slot: [u8; 32] = ids::random();
+    let day = START.div_euclid(86_400);
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        conn.execute_batch(SCHEMA_V0).unwrap();
+        conn.execute_batch(MIGRATION_V1).unwrap();
+        conn.execute_batch(MIGRATION_V2).unwrap();
+        conn.pragma_update(None, "user_version", 2).unwrap();
+        conn.execute(
+            "INSERT INTO mailboxes VALUES (?1, ?2, ?3, 3, ?4, 1, NULL, 1)",
+            rusqlite::params![
+                &parent_id[..],
+                &ids::sha256(&read_raw)[..],
+                &ids::sha256(&send_raw)[..],
+                day
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO mailboxes VALUES (?1, ?2, ?2, 1, ?3, 2, ?4, 0)",
+            rusqlite::params![
+                &child_id[..],
+                &ids::sha256(&child_id)[..],
+                day,
+                &parent_id[..]
+            ],
+        )
+        .unwrap();
+        for (reader, url) in [(1u8, Some("https://push.example.org/a")), (2, None)] {
+            conn.execute(
+                "INSERT INTO readers VALUES (?1, ?2, ?3, 1)",
+                rusqlite::params![&parent_id[..], &[reader; 16][..], url],
+            )
+            .unwrap();
+        }
+        for seq in [1, 2] {
+            conn.execute(
+                "INSERT INTO messages VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![&parent_id[..], seq, START, &envelope(seq as u8)],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO handovers VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
+            rusqlite::params![
+                &slot[..],
+                &[7u8; 10][..],
+                &ids::sha256(&fetch_raw)[..],
+                &ids::sha256(&read_raw)[..],
+                START + 600,
+                &parent_id[..]
+            ],
+        )
+        .unwrap();
+    }
+
+    let relay = Relay::start_in(dir).await;
+    let (version, migrated) = schema_of(&path);
+    assert_eq!(version, SCHEMA_VERSION);
+    assert_eq!(SCHEMA_VERSION, 3);
+    // Everything is kept; the readers are legacy full readers.
+    assert_eq!(relay.sql_count("SELECT COUNT(*) FROM mailboxes"), 2);
+    assert_eq!(
+        relay.sql_count(
+            "SELECT COUNT(*) FROM readers WHERE token_hash IS NULL AND role = 1 AND last_ack = 1"
+        ),
+        2
+    );
+    assert_eq!(relay.sql_count("SELECT COUNT(*) FROM messages"), 2);
+    assert_eq!(
+        relay.sql_count("SELECT derived_total FROM mailboxes WHERE origin = 1"),
+        1
+    );
+    assert_eq!(
+        relay.sql_count("SELECT COUNT(*) FROM pragma_foreign_key_check"),
+        0
+    );
+    assert_eq!(relay.get_handover(&slot, &fetch).await, Ok(vec![7; 10]));
+
+    // The old read token is the shared token: legacy readers subscribe,
+    // receive what they have not acknowledged and are woken.
+    let parent = Mailbox {
+        id: ids::encode(&parent_id),
+        read,
+        send,
+    };
+    let mut client = relay.connect().await;
+    assert_eq!(
+        client.subscribe(&parent, &reader_id(2)).await,
+        subscribed(&parent)
+    );
+    client.expect_message(&parent, 2, &envelope(2)).await;
+    assert_eq!(
+        relay.post(&parent, envelope(3)).await.0,
+        StatusCode::ACCEPTED
+    );
+    client.expect_message(&parent, 3, &envelope(3)).await;
+    assert_eq!(
+        relay.waker.take(),
+        vec!["https://push.example.org/a".to_owned()]
+    );
+    // The voucher mailbox derives on, and the derived one counts.
+    assert_eq!(relay.derive_with(&parent.read).await, StatusCode::CREATED);
+    assert_eq!(
+        relay.sql_count("SELECT derived_total FROM mailboxes WHERE origin = 1"),
+        2
+    );
+
+    // Foreign keys are on again: deleting the mailbox takes its readers
+    // and messages with it.
+    assert_eq!(relay.delete(&parent).await, StatusCode::NO_CONTENT);
+    assert_eq!(relay.sql_count("SELECT COUNT(*) FROM readers"), 0);
+    assert_eq!(relay.sql_count("SELECT COUNT(*) FROM messages"), 0);
+    assert_eq!(client.recv().await, ws_error(&parent, "unknown_mailbox"));
+
+    // Opening again changes nothing, and a fresh database ends up identical.
+    drop(Store::open(&path).unwrap());
+    assert_eq!(schema_of(&path), (SCHEMA_VERSION, migrated.clone()));
+    let fresh = tempfile::tempdir().unwrap();
+    let fresh_path = fresh.path().join("relay.sqlite");
+    drop(Store::open(&fresh_path).unwrap());
+    assert_eq!(schema_of(&fresh_path), (SCHEMA_VERSION, migrated));
 }

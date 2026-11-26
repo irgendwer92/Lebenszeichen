@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use subtle::ConstantTimeEq;
 
 use crate::ids::{self, HandoverId, Hash, MailboxId, ReaderId, Token};
 use crate::limits::{
@@ -96,21 +97,139 @@ ALTER TABLE handovers ADD COLUMN family BLOB;
 CREATE INDEX handovers_family ON handovers(family);
 ";
 
+/// Version 2 to 3 (M10): a read token per reader.
+///
+/// `mailboxes.read_token_hash` becomes the shared token of all legacy
+/// readers and may be NULL: dropped, or never set for a mailbox created in
+/// the new form. SQLite cannot drop `NOT NULL` from a column, so the table is
+/// rebuilt; [`migrate`] runs with foreign keys off, so that dropping the old
+/// table does not cascade to readers and messages. Existing mailboxes keep
+/// their read token as the shared token.
+///
+/// `readers.token_hash` is the hash of the reader's own token, NULL for a
+/// legacy reader that subscribes with the shared token; `role` is 1 for a
+/// full reader and 2 for a satellite. Existing readers become legacy full
+/// readers.
+const MIGRATION_V3: &str = "
+CREATE TABLE mailboxes_v3 (
+    id              BLOB PRIMARY KEY,
+    read_token_hash BLOB,
+    send_token_hash BLOB NOT NULL,
+    next_seq        INTEGER NOT NULL,
+    last_used_day   INTEGER NOT NULL,
+    origin          INTEGER NOT NULL DEFAULT 1,
+    parent          BLOB,
+    derived_total   INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
+INSERT INTO mailboxes_v3
+    (id, read_token_hash, send_token_hash, next_seq, last_used_day, origin, parent, derived_total)
+    SELECT id, read_token_hash, send_token_hash, next_seq, last_used_day, origin, parent,
+           derived_total
+    FROM mailboxes;
+DROP TABLE mailboxes;
+ALTER TABLE mailboxes_v3 RENAME TO mailboxes;
+CREATE INDEX mailboxes_read_token_hash ON mailboxes(read_token_hash);
+CREATE INDEX mailboxes_parent ON mailboxes(parent);
+ALTER TABLE readers ADD COLUMN token_hash BLOB;
+ALTER TABLE readers ADD COLUMN role INTEGER NOT NULL DEFAULT 1;
+CREATE INDEX readers_token_hash ON readers(token_hash);
+";
+
 /// The schema version this code works with.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Day number used for "day of last use": whole days since the Unix epoch.
 pub fn day_of(now: i64) -> i64 {
     now.div_euclid(86_400)
 }
 
-/// Token hashes of a mailbox.
+/// Role of a reader with a token of its own, as stored in `readers.role`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// A full device: may manage the mailbox and its readers.
+    Full = 1,
+    /// A satellite: may only read, and change its own push URL and token.
+    Satellite = 2,
+}
+
+impl Role {
+    /// Any value but that of a full reader counts as a satellite, so that an
+    /// unexpected value never grants more.
+    fn from_db(value: i64) -> Self {
+        if value == Self::Full as i64 {
+            Self::Full
+        } else {
+            Self::Satellite
+        }
+    }
+}
+
+/// Who a bearer token for a mailbox belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Principal {
+    /// The shared token of the mailbox, held by legacy readers.
+    Shared,
+    /// The own token of this reader.
+    Reader(ReaderId, Role),
+}
+
+impl Principal {
+    /// May register, change and revoke other readers and delete the
+    /// mailbox.
+    fn manages(self) -> bool {
+        !matches!(self, Self::Reader(_, Role::Satellite))
+    }
+
+    /// May drop the shared token and set the send token.
+    fn is_full_reader(self) -> bool {
+        matches!(self, Self::Reader(_, Role::Full))
+    }
+}
+
+/// How a mailbox is read, for [`Store::create_mailbox`].
 #[derive(Debug, Clone, Copy)]
-pub struct MailboxAuth {
-    /// `SHA-256` of the read token.
-    pub read_token_hash: Hash,
+pub enum ReadAccess {
+    /// A shared read token with this hash (the old form).
+    Shared(Hash),
+    /// No shared token; this reader is the first full reader, with a token
+    /// of its own with this hash.
+    Reader(ReaderId, Hash),
+}
+
+/// A mailbox to create.
+#[derive(Debug, Clone, Copy)]
+pub struct NewMailbox {
+    /// How it is read.
+    pub read: ReadAccess,
     /// `SHA-256` of the send token.
     pub send_token_hash: Hash,
+}
+
+/// A waiting message: its sequence number and content.
+pub type Stored = (i64, Vec<u8>);
+
+/// Outcome of a call that needs a token of the mailbox.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Access<T> {
+    /// Done.
+    Ok(T),
+    /// The mailbox does not exist.
+    UnknownMailbox,
+    /// The reader is not registered.
+    UnknownReader,
+    /// The token does not match, or does not have the right.
+    Unauthorized,
+}
+
+/// A change to a reader with `PUT`. `None` leaves a field as it is.
+#[derive(Debug, Clone, Default)]
+pub struct ReaderChange {
+    /// The push URL, or `Some(None)` to remove it.
+    pub push_url: Option<Option<String>>,
+    /// `SHA-256` of the reader's own token.
+    pub token_hash: Option<Hash>,
+    /// The role.
+    pub role: Option<Role>,
 }
 
 /// How a mailbox was created, as stored in `mailboxes.origin`.
@@ -215,12 +334,21 @@ pub enum TakeHandover {
 /// Result of registering or updating a reader.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PutReader {
-    /// The reader is registered.
-    Ok,
+    /// The reader is registered. `token_changed` if an existing reader got
+    /// a new token, so that live subscriptions must be checked again.
+    Ok {
+        /// The reader had another token before.
+        token_changed: bool,
+    },
     /// The mailbox does not exist.
     UnknownMailbox,
+    /// The token does not match, or does not have the right.
+    Unauthorized,
     /// The mailbox already has the maximum number of readers.
     TooManyReaders,
+    /// A new reader without a token on a mailbox without shared token, or a
+    /// token hash that the shared token or another reader already has.
+    BadRequest,
 }
 
 /// Result of storing a message.
@@ -232,15 +360,6 @@ pub enum PostMessage {
     UnknownMailbox,
     /// The mailbox already holds the maximum number of waiting messages.
     Full,
-}
-
-/// Result of an acknowledgement.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Ack {
-    /// Recorded.
-    Ok,
-    /// The reader (or its mailbox) is gone.
-    UnknownReader,
 }
 
 /// What [`Store::cleanup`] removed.
@@ -276,11 +395,15 @@ impl Store {
     fn init(mut conn: Connection) -> rusqlite::Result<Self> {
         // `secure_delete` overwrites deleted content, so delivered messages
         // do not linger in free pages of the file.
-        conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "secure_delete", "ON")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Foreign keys are off while migrating: version 3 rebuilds the
+        // mailboxes table, and dropping it must not cascade. The pragma has
+        // no effect inside a transaction, so it is set around it.
+        conn.pragma_update(None, "foreign_keys", "OFF")?;
         migrate(&mut conn)?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -308,12 +431,15 @@ impl Store {
     }
 
     /// Creates a mailbox under `id`. A [`Grant::Token`] is tried as a voucher
-    /// first, which is then redeemed, and else as the read token of a voucher
-    /// mailbox, whose derived mailboxes are counted; all in one transaction.
+    /// first, which is then redeemed, and else as the shared token or a full
+    /// reader's token of a voucher mailbox, whose derived mailboxes are
+    /// counted; all in one transaction. With [`ReadAccess::Reader`] the
+    /// mailbox has no shared token and the reader is registered as its first
+    /// full reader.
     pub fn create_mailbox(
         &self,
         id: &MailboxId,
-        auth: &MailboxAuth,
+        mailbox: &NewMailbox,
         grant: Grant,
         now: i64,
     ) -> rusqlite::Result<CreateMailbox> {
@@ -331,9 +457,12 @@ impl Store {
                     } else {
                         let Some(parent) = tx
                             .query_row(
-                                "SELECT id FROM mailboxes WHERE read_token_hash = ?1 AND origin = ?2
+                                "SELECT id FROM mailboxes WHERE origin = ?2 AND (
+                                     read_token_hash = ?1
+                                     OR id IN (SELECT mailbox FROM readers
+                                               WHERE token_hash = ?1 AND role = ?3))
                                  ORDER BY id LIMIT 1",
-                                params![&hash[..], Origin::Voucher as i64],
+                                params![&hash[..], Origin::Voucher as i64, Role::Full as i64],
                                 |row| row.get::<_, Vec<u8>>(0),
                             )
                             .optional()?
@@ -360,40 +489,55 @@ impl Store {
                     }
                 }
             };
+            let shared = match &mailbox.read {
+                ReadAccess::Shared(hash) => Some(&hash[..]),
+                ReadAccess::Reader(..) => None,
+            };
             tx.execute(
                 "INSERT INTO mailboxes
                    (id, read_token_hash, send_token_hash, next_seq, last_used_day, origin, parent)
                  VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)",
                 params![
                     &id[..],
-                    &auth.read_token_hash[..],
-                    &auth.send_token_hash[..],
+                    shared,
+                    &mailbox.send_token_hash[..],
                     day_of(now),
                     origin as i64,
                     parent
                 ],
             )?;
+            if let ReadAccess::Reader(reader, token_hash) = &mailbox.read {
+                tx.execute(
+                    "INSERT INTO readers (mailbox, id, push_url, last_ack, token_hash, role)
+                     VALUES (?1, ?2, NULL, 0, ?3, ?4)",
+                    params![&id[..], &reader[..], &token_hash[..], Role::Full as i64],
+                )?;
+            }
             tx.commit()?;
             Ok(CreateMailbox::Created(origin))
         })
     }
 
-    /// The family of the read token with this hash, or `None` if it is the
-    /// read token of no mailbox. If several mailboxes share the read token, a
-    /// voucher family wins over the access token's, so that the stricter
-    /// limits apply.
-    pub fn read_token_family(&self, hash: &Hash) -> rusqlite::Result<Option<Family>> {
+    /// The family of the token with this hash, if it is the shared token or
+    /// a full reader's token of some mailbox; `None` otherwise, also for a
+    /// satellite's token. If several mailboxes match, a voucher family wins
+    /// over the access token's, so that the stricter limits apply.
+    pub fn token_family(&self, hash: &Hash) -> rusqlite::Result<Option<Family>> {
         self.with(|c| {
             let row = c
                 .query_row(
                     "SELECT CASE origin WHEN ?2 THEN NULL WHEN ?3 THEN id
                             ELSE COALESCE(parent, id) END
-                     FROM mailboxes WHERE read_token_hash = ?1
+                     FROM mailboxes
+                     WHERE read_token_hash = ?1
+                        OR id IN (SELECT mailbox FROM readers
+                                  WHERE token_hash = ?1 AND role = ?4)
                      ORDER BY origin = ?2, id LIMIT 1",
                     params![
                         &hash[..],
                         Origin::AccessToken as i64,
-                        Origin::Voucher as i64
+                        Origin::Voucher as i64,
+                        Role::Full as i64
                     ],
                     |row| row.get::<_, Option<Vec<u8>>>(0),
                 )
@@ -570,85 +714,262 @@ impl Store {
         })
     }
 
-    /// Returns the token hashes of a mailbox, or `None` if it does not exist.
-    pub fn mailbox_auth(&self, id: &MailboxId) -> rusqlite::Result<Option<MailboxAuth>> {
+    /// The hash of the send token of a mailbox, or `None` if it does not
+    /// exist.
+    pub fn send_token_hash(&self, id: &MailboxId) -> rusqlite::Result<Option<Hash>> {
         self.with(|c| {
-            c.query_row(
-                "SELECT read_token_hash, send_token_hash FROM mailboxes WHERE id = ?1",
-                params![&id[..]],
-                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
-            )
-            .optional()
-            .map(|row| {
-                row.and_then(|(read, send)| {
-                    Some(MailboxAuth {
-                        read_token_hash: read.try_into().ok()?,
-                        send_token_hash: send.try_into().ok()?,
-                    })
-                })
+            let row = c
+                .query_row(
+                    "SELECT send_token_hash FROM mailboxes WHERE id = ?1",
+                    params![&id[..]],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .optional()?;
+            // A stored hash of another length matches no token.
+            Ok(row.map(|hash| hash.try_into().unwrap_or([0; 32])))
+        })
+    }
+
+    /// Who the token with this hash belongs to on `mailbox`.
+    pub fn principal(
+        &self,
+        mailbox: &MailboxId,
+        hash: &Hash,
+    ) -> rusqlite::Result<Access<Principal>> {
+        self.with(|c| {
+            Ok(match Credentials::load(c, mailbox)? {
+                None => Access::UnknownMailbox,
+                Some(creds) => match creds.principal(hash) {
+                    Some(principal) => Access::Ok(principal),
+                    None => Access::Unauthorized,
+                },
             })
         })
     }
 
-    /// Deletes a mailbox with its readers and messages.
-    pub fn delete_mailbox(&self, id: &MailboxId) -> rusqlite::Result<bool> {
-        self.with(|c| Ok(c.execute("DELETE FROM mailboxes WHERE id = ?1", params![&id[..]])? > 0))
+    /// Deletes a mailbox with its readers and messages, with the shared
+    /// token or a full reader's token.
+    pub fn delete_mailbox(&self, id: &MailboxId, hash: &Hash) -> rusqlite::Result<Access<()>> {
+        self.managed(id, hash, Principal::manages, |tx| {
+            tx.execute("DELETE FROM mailboxes WHERE id = ?1", params![&id[..]])?;
+            Ok(())
+        })
     }
 
-    /// Registers a reader or updates its push URL. An existing reader keeps
-    /// its last acknowledgement; a new one starts at 0 and so receives all
-    /// waiting messages.
+    /// Drops the shared token of a mailbox, with a full reader's token.
+    /// Legacy readers can no longer subscribe. Done also if there was none.
+    pub fn drop_shared_token(&self, id: &MailboxId, hash: &Hash) -> rusqlite::Result<Access<()>> {
+        self.managed(id, hash, Principal::is_full_reader, |tx| {
+            tx.execute(
+                "UPDATE mailboxes SET read_token_hash = NULL WHERE id = ?1",
+                params![&id[..]],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Replaces the send token of a mailbox, with a full reader's token.
+    pub fn set_send_token(
+        &self,
+        id: &MailboxId,
+        hash: &Hash,
+        send_token_hash: &Hash,
+    ) -> rusqlite::Result<Access<()>> {
+        self.managed(id, hash, Principal::is_full_reader, |tx| {
+            tx.execute(
+                "UPDATE mailboxes SET send_token_hash = ?2 WHERE id = ?1",
+                params![&id[..], &send_token_hash[..]],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Runs `action` in one transaction if the token with this hash belongs
+    /// to a principal for which `allowed` holds.
+    fn managed(
+        &self,
+        id: &MailboxId,
+        hash: &Hash,
+        allowed: fn(Principal) -> bool,
+        action: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<()>,
+    ) -> rusqlite::Result<Access<()>> {
+        self.with(|c| {
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let Some(creds) = Credentials::load(&tx, id)? else {
+                return Ok(Access::UnknownMailbox);
+            };
+            if !creds.principal(hash).is_some_and(allowed) {
+                return Ok(Access::Unauthorized);
+            }
+            action(&tx)?;
+            tx.commit()?;
+            Ok(Access::Ok(()))
+        })
+    }
+
+    /// Registers a reader or changes it, authorized by the token with hash
+    /// `hash`; all in one transaction. The shared token and full readers may
+    /// register and change any reader; a satellite may change only its own
+    /// push URL and token. A new reader starts with acknowledgement 0, as a
+    /// full reader unless the role is given, and needs a token of its own
+    /// if the mailbox has no shared token.
     pub fn put_reader(
         &self,
         mailbox: &MailboxId,
         reader: &ReaderId,
-        push_url: Option<&str>,
+        hash: &Hash,
+        change: &ReaderChange,
         now: i64,
     ) -> rusqlite::Result<PutReader> {
         self.with(|c| {
-            let tx = c.transaction()?;
-            let touched = tx.execute(
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let Some(creds) = Credentials::load(&tx, mailbox)? else {
+                return Ok(PutReader::UnknownMailbox);
+            };
+            let Some(principal) = creds.principal(hash) else {
+                return Ok(PutReader::Unauthorized);
+            };
+            if let Principal::Reader(own, Role::Satellite) = principal
+                && (own != *reader || change.role.is_some())
+            {
+                return Ok(PutReader::Unauthorized);
+            }
+            if let Some(new) = &change.token_hash
+                && creds.hash_taken(new, reader)
+            {
+                return Ok(PutReader::BadRequest);
+            }
+            tx.execute(
                 "UPDATE mailboxes SET last_used_day = ?2 WHERE id = ?1",
                 params![&mailbox[..], day_of(now)],
             )?;
-            if touched == 0 {
-                return Ok(PutReader::UnknownMailbox);
-            }
-            let updated = tx.execute(
-                "UPDATE readers SET push_url = ?3 WHERE mailbox = ?1 AND id = ?2",
-                params![&mailbox[..], &reader[..], push_url],
-            )?;
-            if updated == 0 {
-                let count: i64 = tx.query_row(
-                    "SELECT COUNT(*) FROM readers WHERE mailbox = ?1",
-                    params![&mailbox[..]],
-                    |row| row.get(0),
-                )?;
-                if count >= MAX_READERS_PER_MAILBOX as i64 {
-                    return Ok(PutReader::TooManyReaders);
+            let token_changed = match creds.reader(reader) {
+                Some(existing) => {
+                    if let Some(push_url) = &change.push_url {
+                        tx.execute(
+                            "UPDATE readers SET push_url = ?3 WHERE mailbox = ?1 AND id = ?2",
+                            params![&mailbox[..], &reader[..], push_url],
+                        )?;
+                    }
+                    if let Some(role) = change.role {
+                        tx.execute(
+                            "UPDATE readers SET role = ?3 WHERE mailbox = ?1 AND id = ?2",
+                            params![&mailbox[..], &reader[..], role as i64],
+                        )?;
+                    }
+                    match &change.token_hash {
+                        Some(new) if existing.key != Key::Own(*new) => {
+                            tx.execute(
+                                "UPDATE readers SET token_hash = ?3 WHERE mailbox = ?1 AND id = ?2",
+                                params![&mailbox[..], &reader[..], &new[..]],
+                            )?;
+                            true
+                        }
+                        _ => false,
+                    }
                 }
-                tx.execute(
-                    "INSERT INTO readers (mailbox, id, push_url, last_ack) VALUES (?1, ?2, ?3, 0)",
-                    params![&mailbox[..], &reader[..], push_url],
-                )?;
-            }
+                None => {
+                    if creds.shared.is_none() && change.token_hash.is_none() {
+                        return Ok(PutReader::BadRequest);
+                    }
+                    if creds.readers.len() >= MAX_READERS_PER_MAILBOX {
+                        return Ok(PutReader::TooManyReaders);
+                    }
+                    tx.execute(
+                        "INSERT INTO readers (mailbox, id, push_url, last_ack, token_hash, role)
+                         VALUES (?1, ?2, ?3, 0, ?4, ?5)",
+                        params![
+                            &mailbox[..],
+                            &reader[..],
+                            change.push_url.clone().flatten(),
+                            change.token_hash.as_ref().map(|h| &h[..]),
+                            change.role.unwrap_or(Role::Full) as i64
+                        ],
+                    )?;
+                    false
+                }
+            };
             tx.commit()?;
-            Ok(PutReader::Ok)
+            Ok(PutReader::Ok { token_changed })
         })
     }
 
-    /// Removes a reader. Returns `false` if it was not registered. Messages
-    /// that all remaining readers have acknowledged are deleted.
-    pub fn delete_reader(&self, mailbox: &MailboxId, reader: &ReaderId) -> rusqlite::Result<bool> {
+    /// Revokes every reader of the mailbox except those in `keep` and the
+    /// caller, which is always kept; with `drop_shared` also drops the shared
+    /// token; all in one transaction. Only a full reader's own token may do
+    /// this. Returns the revoked readers. Messages that all remaining readers
+    /// have acknowledged are deleted.
+    pub fn revoke_readers(
+        &self,
+        mailbox: &MailboxId,
+        hash: &Hash,
+        keep: &[ReaderId],
+        drop_shared: bool,
+    ) -> rusqlite::Result<Access<Vec<ReaderId>>> {
         self.with(|c| {
-            let tx = c.transaction()?;
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let Some(creds) = Credentials::load(&tx, mailbox)? else {
+                return Ok(Access::UnknownMailbox);
+            };
+            let Some(Principal::Reader(caller, Role::Full)) = creds.principal(hash) else {
+                return Ok(Access::Unauthorized);
+            };
+            let revoked: Vec<ReaderId> = creds
+                .readers
+                .iter()
+                .map(|r| r.id)
+                .filter(|id| *id != caller && !keep.contains(id))
+                .collect();
+            for id in &revoked {
+                tx.execute(
+                    "DELETE FROM readers WHERE mailbox = ?1 AND id = ?2",
+                    params![&mailbox[..], &id[..]],
+                )?;
+            }
+            if drop_shared {
+                tx.execute(
+                    "UPDATE mailboxes SET read_token_hash = NULL WHERE id = ?1",
+                    params![&mailbox[..]],
+                )?;
+            }
+            purge_acknowledged(&tx, mailbox)?;
+            tx.commit()?;
+            Ok(Access::Ok(revoked))
+        })
+    }
+
+    /// Removes a reader, authorized by the token with hash `hash`: the
+    /// shared token and full readers may remove any reader, a satellite
+    /// only itself. Messages that all remaining readers have acknowledged
+    /// are deleted.
+    pub fn delete_reader(
+        &self,
+        mailbox: &MailboxId,
+        reader: &ReaderId,
+        hash: &Hash,
+    ) -> rusqlite::Result<Access<()>> {
+        self.with(|c| {
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let Some(creds) = Credentials::load(&tx, mailbox)? else {
+                return Ok(Access::UnknownMailbox);
+            };
+            match creds.principal(hash) {
+                None => return Ok(Access::Unauthorized),
+                Some(Principal::Reader(own, Role::Satellite)) if own != *reader => {
+                    return Ok(Access::Unauthorized);
+                }
+                Some(_) => {}
+            }
             let removed = tx.execute(
                 "DELETE FROM readers WHERE mailbox = ?1 AND id = ?2",
                 params![&mailbox[..], &reader[..]],
             )?;
+            if removed == 0 {
+                return Ok(Access::UnknownReader);
+            }
             purge_acknowledged(&tx, mailbox)?;
             tx.commit()?;
-            Ok(removed > 0)
+            Ok(Access::Ok(()))
         })
     }
 
@@ -712,78 +1033,94 @@ impl Store {
         })
     }
 
-    /// Returns the last acknowledgement of a reader, or `None` if the reader is
-    /// not registered. Marks the mailbox as used today.
-    pub fn open_reader(
+    /// Opens a subscription of `reader` with the token with hash `hash`:
+    /// returns the reader's last acknowledgement and marks the mailbox as
+    /// used today. Checked in this order: the mailbox, the reader, the token,
+    /// so that a revoked reader learns that it is gone.
+    pub fn open_subscription(
         &self,
         mailbox: &MailboxId,
         reader: &ReaderId,
+        hash: &Hash,
         now: i64,
-    ) -> rusqlite::Result<Option<i64>> {
+    ) -> rusqlite::Result<Access<i64>> {
         self.with(|c| {
-            let last_ack = c
-                .query_row(
-                    "SELECT last_ack FROM readers WHERE mailbox = ?1 AND id = ?2",
-                    params![&mailbox[..], &reader[..]],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()?;
-            if last_ack.is_some() {
+            let access = reader_access(c, mailbox, reader, hash)?;
+            if let Access::Ok(_) = access {
                 c.execute(
                     "UPDATE mailboxes SET last_used_day = ?2 WHERE id = ?1",
                     params![&mailbox[..], day_of(now)],
                 )?;
             }
-            Ok(last_ack)
+            Ok(access)
         })
     }
 
-    /// Returns the waiting messages with a sequence number above `after`, in
-    /// order.
-    pub fn messages_after(
+    /// Whether a subscription of `reader` with the token with hash `hash`
+    /// is still valid.
+    pub fn check_subscription(
         &self,
         mailbox: &MailboxId,
+        reader: &ReaderId,
+        hash: &Hash,
+    ) -> rusqlite::Result<Access<()>> {
+        self.with(|c| Ok(map_access(reader_access(c, mailbox, reader, hash)?, |_| ())))
+    }
+
+    /// The waiting messages with a sequence number above `after`, in order,
+    /// if the subscription of `reader` with the token with hash `hash` is
+    /// still valid.
+    pub fn messages_for(
+        &self,
+        mailbox: &MailboxId,
+        reader: &ReaderId,
+        hash: &Hash,
         after: i64,
-    ) -> rusqlite::Result<Vec<(i64, Vec<u8>)>> {
+    ) -> rusqlite::Result<Access<Vec<Stored>>> {
         self.with(|c| {
+            if let Some(denied) = denied(reader_access(c, mailbox, reader, hash)?) {
+                return Ok(denied);
+            }
             let mut stmt = c.prepare(
                 "SELECT seq, data FROM messages WHERE mailbox = ?1 AND seq > ?2 ORDER BY seq",
             )?;
             let rows = stmt.query_map(params![&mailbox[..], after], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })?;
-            rows.collect()
+            Ok(Access::Ok(rows.collect::<rusqlite::Result<_>>()?))
         })
     }
 
-    /// Records a cumulative acknowledgement up to `seq` and deletes messages
+    /// Records a cumulative acknowledgement up to `seq` of `reader`, whose
+    /// subscription used the token with hash `hash`, and deletes messages
     /// that every reader of the mailbox has acknowledged. An acknowledgement
     /// beyond the last assigned sequence number is capped at that number.
     pub fn ack(
         &self,
         mailbox: &MailboxId,
         reader: &ReaderId,
+        hash: &Hash,
         seq: i64,
         now: i64,
-    ) -> rusqlite::Result<Ack> {
+    ) -> rusqlite::Result<Access<()>> {
         self.with(|c| {
-            let tx = c.transaction()?;
-            let updated = tx.execute(
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            if let Some(denied) = denied(reader_access(&tx, mailbox, reader, hash)?) {
+                return Ok(denied);
+            }
+            tx.execute(
                 "UPDATE readers SET last_ack = MAX(last_ack, MIN(?3,
                     (SELECT next_seq - 1 FROM mailboxes WHERE id = ?1)))
                  WHERE mailbox = ?1 AND id = ?2",
                 params![&mailbox[..], &reader[..], seq],
             )?;
-            if updated == 0 {
-                return Ok(Ack::UnknownReader);
-            }
             tx.execute(
                 "UPDATE mailboxes SET last_used_day = ?2 WHERE id = ?1",
                 params![&mailbox[..], day_of(now)],
             )?;
             purge_acknowledged(&tx, mailbox)?;
             tx.commit()?;
-            Ok(Ack::Ok)
+            Ok(Access::Ok(()))
         })
     }
 
@@ -871,6 +1208,9 @@ fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
     if version < 2 {
         tx.execute_batch(MIGRATION_V2)?;
     }
+    if version < 3 {
+        tx.execute_batch(MIGRATION_V3)?;
+    }
     if version < SCHEMA_VERSION {
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
@@ -889,6 +1229,163 @@ fn handover_exists(tx: &Transaction<'_>, id: &HandoverId) -> rusqlite::Result<bo
         params![&id[..]],
         |row| row.get(0),
     )
+}
+
+/// How a reader authenticates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Key {
+    /// A legacy reader: with the shared token.
+    Legacy,
+    /// With its own token, of this hash.
+    Own(Hash),
+    /// A stored hash of another length; matches nothing.
+    Broken,
+}
+
+impl Key {
+    fn from_db(value: Option<Vec<u8>>) -> Self {
+        match value {
+            None => Self::Legacy,
+            Some(bytes) => Hash::try_from(bytes).map_or(Self::Broken, Self::Own),
+        }
+    }
+}
+
+/// A registered reader, as far as authorization needs it.
+#[derive(Debug, Clone, Copy)]
+struct ReaderRow {
+    id: ReaderId,
+    key: Key,
+    role: Role,
+    last_ack: i64,
+}
+
+/// The shared token and the readers of a mailbox.
+struct Credentials {
+    shared: Option<Hash>,
+    readers: Vec<ReaderRow>,
+}
+
+impl Credentials {
+    /// `None` if the mailbox does not exist.
+    fn load(conn: &Connection, mailbox: &MailboxId) -> rusqlite::Result<Option<Self>> {
+        let Some(shared) = conn
+            .query_row(
+                "SELECT read_token_hash FROM mailboxes WHERE id = ?1",
+                params![&mailbox[..]],
+                |row| row.get::<_, Option<Vec<u8>>>(0),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let mut stmt =
+            conn.prepare("SELECT id, token_hash, role, last_ack FROM readers WHERE mailbox = ?1")?;
+        let rows = stmt.query_map(params![&mailbox[..]], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Option<Vec<u8>>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+        let mut readers = Vec::new();
+        for row in rows {
+            let (id, key, role, last_ack) = row?;
+            if let Ok(id) = ReaderId::try_from(id) {
+                readers.push(ReaderRow {
+                    id,
+                    key: Key::from_db(key),
+                    role: Role::from_db(role),
+                    last_ack,
+                });
+            }
+        }
+        Ok(Some(Self {
+            // A stored hash of another length is no shared token.
+            shared: shared.and_then(|hash| Hash::try_from(hash).ok()),
+            readers,
+        }))
+    }
+
+    /// Who the token with this hash belongs to. Every hash is compared, in
+    /// constant time each; a reader's own token wins, though
+    /// [`Credentials::hash_taken`] keeps hashes apart.
+    fn principal(&self, hash: &Hash) -> Option<Principal> {
+        let mut found = None;
+        for reader in &self.readers {
+            if let Key::Own(own) = &reader.key
+                && bool::from(own.ct_eq(hash))
+            {
+                found = Some(Principal::Reader(reader.id, reader.role));
+            }
+        }
+        let shared = self
+            .shared
+            .is_some_and(|shared| bool::from(shared.ct_eq(hash)));
+        found.or(shared.then_some(Principal::Shared))
+    }
+
+    fn reader(&self, id: &ReaderId) -> Option<&ReaderRow> {
+        self.readers.iter().find(|r| r.id == *id)
+    }
+
+    /// Whether the shared token or a reader other than `reader` has this
+    /// hash already.
+    fn hash_taken(&self, hash: &Hash, reader: &ReaderId) -> bool {
+        self.shared == Some(*hash)
+            || self
+                .readers
+                .iter()
+                .any(|r| r.id != *reader && r.key == Key::Own(*hash))
+    }
+}
+
+/// Checks a subscription of `reader` with the token with hash `hash`, in the
+/// order mailbox, reader, token; returns the last acknowledgement. A reader
+/// with a token of its own subscribes only with it, a legacy reader only with
+/// the shared token.
+fn reader_access(
+    conn: &Connection,
+    mailbox: &MailboxId,
+    reader: &ReaderId,
+    hash: &Hash,
+) -> rusqlite::Result<Access<i64>> {
+    let Some(creds) = Credentials::load(conn, mailbox)? else {
+        return Ok(Access::UnknownMailbox);
+    };
+    let Some(row) = creds.reader(reader) else {
+        return Ok(Access::UnknownReader);
+    };
+    let matches = match &row.key {
+        Key::Legacy => creds
+            .shared
+            .is_some_and(|shared| bool::from(shared.ct_eq(hash))),
+        Key::Own(own) => own.ct_eq(hash).into(),
+        Key::Broken => false,
+    };
+    Ok(if matches {
+        Access::Ok(row.last_ack)
+    } else {
+        Access::Unauthorized
+    })
+}
+
+fn map_access<T, U>(access: Access<T>, f: impl FnOnce(T) -> U) -> Access<U> {
+    match access {
+        Access::Ok(value) => Access::Ok(f(value)),
+        Access::UnknownMailbox => Access::UnknownMailbox,
+        Access::UnknownReader => Access::UnknownReader,
+        Access::Unauthorized => Access::Unauthorized,
+    }
+}
+
+/// The refusal in `access`, if it is one.
+fn denied<T, U>(access: Access<T>) -> Option<Access<U>> {
+    match access {
+        Access::Ok(_) => None,
+        other => Some(map_access(other, |_| unreachable!())),
+    }
 }
 
 /// Checks a presented token against a stored hash of unchecked length.

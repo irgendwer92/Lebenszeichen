@@ -92,8 +92,26 @@ Own devices share a sync mailbox and a symmetric group key. Decided on 2026-11-1
 | `contact_removed` | contact | A contact ended on one device |
 | `state_shared` | reason, end of the state | A reported state handed to the other devices (M8c) |
 | `state_cleared` | – | The shared state ended (M8c) |
+| `satellite_part` | satellite, part of its data | A satellite set up on one device (M10) |
+| `satellite_settings` | satellite, its settings | Waiting time and long-press preset of a satellite changed (M10) |
+| `satellite_contact_settings` | satellite, contact, its settings | Reported answers and ask button of a satellite for a contact changed (M10) |
 
 The earlier plan had `counted` to keep counters equal. It is not needed: every device reads all mailboxes and counts the same requests.
+
+### Satellite (M10)
+
+A satellite (a small device in the hallway with a button and a display) reads the own contact mailboxes like a device, with a reader token of its own and the role `satellite`, but holds no group key, no sync mailbox and no relay access token. It talks to the full devices only through its **channel**: one mailbox and one symmetric key, form C. Types are one-way: the satellite sends only up types, the full devices only down types, and each side drops everything else. Details in `m10-satellite.md` and `wire-format.md`.
+
+| Type | Direction | Purpose |
+|---|---|---|
+| `sat_answered` | up | The satellite answered a request (manual or reported), as `responded` |
+| `sat_asked` | up | The satellite asked a contact, as `requested` |
+| `sat_state_shared`, `sat_state_cleared` | up | Its shared state, as `state_shared` and `state_cleared` |
+| `home_contact_part` | down | A contact for the satellite (one paired later) |
+| `home_responded`, `home_requested`, `home_rules` | down | What a full device did, next to `responded`, `requested`, `rules_set` |
+| `home_contact_settings`, `home_settings` | down | Its settings, set on a full device |
+| `home_state_shared`, `home_state_cleared` | down | The person's shared state |
+| `home_send_token` | down | The new send token of the channel, after a full device was removed |
 
 ## Rules for requests (decided)
 
@@ -127,6 +145,7 @@ Evaluation of responses on the requester's side:
 - If the person reacts on one device, it sends `responded` to the others.
 - A status report applies only to the device that received it. That device sends the `reported` response after the waiting time. Since M8c a report can be shared: the other devices then answer with it too, each where reported answers are allowed on it (`m8c-share-state.md`).
 - A device is removed by another device unregistering it as a reader and ending the group of own devices; the remaining devices are added again to be linked. If a device is lost, the contacts must be paired again, because it knows all contact keys.
+- A satellite (M10) is removed by any full device: its reader is revoked everywhere and its channel deleted, which it takes as the sign to delete its state; the group stays. Removing a full device keeps the satellite linked: the removed device is revoked on the channel too, and the send token of the channel is replaced.
 
 Disadvantage: if one device is compromised, all contact keys are affected.
 
@@ -136,13 +155,15 @@ Disadvantage: if one device is compromised, all contact keys are affected.
 
 | Call | Authorization | Effect |
 |---|---|---|
-| Create mailbox | Access token of the relay, voucher, or read token of a voucher mailbox (M5) | Returns mailbox identifier; the client passes the hashes of read token and send token. A voucher mailbox may derive up to 10 further mailboxes. |
+| Create mailbox | Access token of the relay, voucher, or the shared token or a full reader's token of a voucher mailbox (M5, M10) | Returns mailbox identifier; the client passes the hashes of the shared read token, or since M10 of its own reader token instead, and of the send token. A voucher mailbox may derive up to 10 further mailboxes. |
 | Create voucher | Access token | Valid once, for exactly one mailbox |
 | Deliver message | Send token | Exactly one envelope (297 bytes); clearly reports if the mailbox no longer exists |
-| Register, change or unregister reader | Read token | Reader identifier and push address |
-| Retrieve messages (WebSocket) | Read token, multiple mailboxes per connection | Delivery; the reader acknowledges each message |
-| Delete mailbox | Read token | Immediately, including contents |
-| Store and fetch a handover slot (M5) | Storing: access token or any read token of the relay, for a reveal slot the reply token; fetching: fetch token | One-time block for adding a device, at most 64 KiB, at most 10 minutes |
+| Register, change or unregister reader | Shared token or a full reader's token; a reader's own token for itself (M10) | Reader identifier, push address, since M10 the hash of the reader's own token and its role (full or satellite) |
+| Retrieve messages (WebSocket) | The reader's own token, or the shared token for a reader without one; multiple mailboxes per connection | Delivery; the reader acknowledges each message |
+| Delete mailbox | Shared token or a full reader's token | Immediately, including contents |
+| Drop the shared token, replace the send token (M10) | A full reader's token | Readers without a token of their own lose access |
+| Revoke all readers but a given set (M10) | A full reader's token | Every reader except the caller and the named ones is deleted, optionally with the shared token, in one step; used when removing a device, so readers it planted go too |
+| Store and fetch a handover slot (M5) | Storing: access token, or the shared token or a full reader's token of any mailbox of the relay, for a reveal slot the reply token; fetching: fetch token | One-time block for adding a device, at most 64 KiB, at most 10 minutes |
 
 When a new message arrives, the relay sends a contentless wake signal (UnifiedPush) to the push address of each reader. The device then connects itself and fetches the message.
 
@@ -150,8 +171,8 @@ When a new message arrives, the relay sends a contentless wake signal (UnifiedPu
 
 | Data | Duration |
 |---|---|
-| Mailbox identifier, hash of read token and send token | until the mailbox is deleted |
-| Readers per mailbox: identifier, push address, last acknowledgment | until the mailbox or reader is deleted |
+| Mailbox identifier, hash of the shared read token (until dropped, M10) and send token | until the mailbox is deleted |
+| Readers per mailbox: identifier, push address, last acknowledgment, since M10 the hash of the reader's own token and its role | until the mailbox or reader is deleted |
 | Messages: ciphertext and arrival time | until all readers have acknowledged, at most 24 hours |
 | Open vouchers (hash) | until redeemed, at most 10 minutes |
 | Day of last use per mailbox | for the cleanup rule |

@@ -31,6 +31,61 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
         run: cargo test --workspace --locked
+      - name: Test vectors of the C library are current
+        run: firmware/tests/gen-vectors.sh --check
+
+  firmware:
+    name: C library (${{ matrix.cc }}${{ matrix.sanitize == 'ON' && ', ASan+UBSan' || '' }}${{ matrix.crypto == 'libsodium' && ', libsodium' || '' }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+          - cc: clang
+          - cc: gcc
+            sanitize: 'ON'
+          - cc: clang
+            sanitize: 'ON'
+          - cc: gcc
+            crypto: libsodium
+    steps:
+      - uses: actions/checkout@v7
+      # libsodium: the TweetNaCl build compares its results with it, and
+      # one build uses it as the backend.
+      - name: Install libsodium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev
+      - name: Configure
+        run: >-
+          cmake -S firmware -B build
+          -DCMAKE_C_COMPILER=${{ matrix.cc }}
+          "-DCMAKE_C_FLAGS=-Wall -Wextra -Werror -std=c99 -pedantic"
+          -DLZ_SANITIZE=${{ matrix.sanitize || 'OFF' }}
+          -DLZ_CRYPTO=${{ matrix.crypto || 'tweetnacl' }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Tests
+        run: ctest --test-dir build --output-on-failure
+
+  satellite-c6:
+    name: Satellite firmware (ESP32-C6)
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.1.1
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        working-directory: firmware/esp-idf/satellite-c6
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py build
+          idf.py merge-bin -o lz-satellite-c6-full.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lz-satellite-c6
+          path: firmware/esp-idf/satellite-c6/build/lz-satellite-c6-full.bin
+          if-no-files-found: error
 
   android-strings:
     name: Android strings

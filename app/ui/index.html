@@ -296,7 +296,16 @@
               ×
             </button>
           </div>
+          <div id="removal-result" class="banner success" hidden></div>
           <ul id="devices" class="cards"></ul>
+          <p id="remove-hint" class="note" hidden data-i18n="ui-remove-hint">
+            Before you remove a device, update your other devices: one that is still on an older
+            version loses its access.
+          </p>
+          <p class="note" data-i18n="ui-satellite-add-note">
+            Satellites are added with “lz satellite add” for now (development). Adding from the
+            app comes with Bluetooth setup.
+          </p>
           <p class="note" data-i18n="ui-devices-note">
             Removing a device does not protect you if a device is lost; in that case pair all
             contacts again.

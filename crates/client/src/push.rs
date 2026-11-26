@@ -7,7 +7,7 @@
 
 use crate::ctx::{Ctx, Fail, Result};
 use crate::i18n::Texts;
-use crate::relay::{Relay, RelayError};
+use crate::relay::{ReaderChange, Relay, RelayError};
 use crate::sync::own_mailboxes;
 
 /// Most bytes of a push address that the relay accepts.
@@ -84,7 +84,7 @@ impl<R: Relay> Ctx<R> {
                         mailbox,
                         token,
                         &device.reader_id,
-                        device.push_url.as_deref(),
+                        ReaderChange::push(device.push_url.as_deref()),
                     )
                     .await;
                 match result {

@@ -17,6 +17,7 @@ mod hex;
 pub mod pairing;
 pub mod report;
 pub mod rules;
+pub mod satellite;
 pub mod store;
 
 /// Everything that can go wrong in the protocol part of the core.

@@ -24,7 +24,54 @@ use crate::wire::{
 };
 
 /// Version of the stored format. Raised on incompatible changes.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// 2 (M10): own reader tokens (`own_token`, `new_token`). A device that
+/// has taken its own token on a mailbox can no longer read it with the
+/// `read_token` alone, so an older version must not open the file. Files of
+/// version 1 are read as they are and written as version 2; their devices
+/// take their own tokens on the next fetch.
+pub const FORMAT_VERSION: u32 = 2;
+
+/// Versions of the stored format this version reads.
+const READABLE_FORMATS: [u32; 2] = [1, FORMAT_VERSION];
+
+/// The token of an own mailbox this device uses (M10): its own token once
+/// it has one, else the `read_token` it received or created.
+///
+/// The `read_token` is the shared token of the mailbox, an enrolment token
+/// another own device registered for this one, or, for a mailbox created in
+/// the new form, the own token. `new_token` is an own token sent to the
+/// relay whose answer is not known yet; it is tried again.
+pub trait ReadAccess {
+    fn read_token(&self) -> &Token;
+    fn own_token(&self) -> Option<&Token>;
+
+    /// The token to read and manage the mailbox with.
+    fn token(&self) -> Token {
+        *self.own_token().unwrap_or(self.read_token())
+    }
+}
+
+macro_rules! read_access {
+    ($($type:ty),*) => {$(
+        impl ReadAccess for $type {
+            fn read_token(&self) -> &Token {
+                &self.read_token
+            }
+
+            fn own_token(&self) -> Option<&Token> {
+                self.own_token.as_ref()
+            }
+        }
+    )*};
+}
+
+read_access!(
+    Group,
+    StoredContact,
+    StoredInvitation,
+    crate::satellite::Satellite
+);
 
 /// Everything one device stores.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -71,6 +118,14 @@ pub struct Device {
     /// handover or the group sync.
     #[serde(default, skip_serializing_if = "Reports::is_empty")]
     pub reports: Reports,
+    /// Satellites of the person (M10).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub satellites: Vec<crate::satellite::Satellite>,
+    /// Satellites arriving from another own device, not complete yet; the
+    /// `contact` of each is the reader identifier of the satellite padded
+    /// with 16 zero bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub satellite_transfers: Vec<Transfer>,
 }
 
 /// The sync mailbox of the own devices and the group key.
@@ -83,6 +138,20 @@ pub struct Group {
     pub mailbox: MailboxId,
     #[serde(with = "crate::hex")]
     pub read_token: Token,
+    /// This device's own token for the mailbox (M10), see [`ReadAccess`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
+    pub own_token: Option<Token>,
+    /// An own token sent to the relay without a known answer (M10).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
+    pub new_token: Option<Token>,
     #[serde(with = "crate::hex")]
     pub send_token: Token,
     pub key: GroupKey,
@@ -101,6 +170,8 @@ impl Group {
             relay: address.relay,
             mailbox: address.mailbox,
             read_token,
+            own_token: None,
+            new_token: None,
             send_token: address.send_token,
             key: GroupKey::generate(rng),
             seen: Vec::new(),
@@ -200,9 +271,24 @@ pub struct StoredContact {
     /// but the relay of the contact if the mailbox was created with a
     /// voucher from its invitation.
     pub own_relay: RelayUrl,
-    /// Read token of the own mailbox for this contact.
+    /// Read token of the own mailbox for this contact: the shared token
+    /// or an enrolment token, see [`ReadAccess`].
     #[serde(with = "crate::hex")]
     pub read_token: Token,
+    /// This device's own token for the mailbox (M10), see [`ReadAccess`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
+    pub own_token: Option<Token>,
+    /// An own token sent to the relay without a known answer (M10).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
+    pub new_token: Option<Token>,
     pub state: ContactState,
 }
 
@@ -300,8 +386,23 @@ pub struct Arrival {
 pub struct StoredInvitation {
     /// Local name the contact will get.
     pub name: String,
+    /// The shared token of the mailbox.
     #[serde(with = "crate::hex")]
     pub read_token: Token,
+    /// This device's own token for the mailbox (M10), see [`ReadAccess`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
+    pub own_token: Option<Token>,
+    /// An own token sent to the relay without a known answer (M10).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
+    pub new_token: Option<Token>,
     pub pending: PendingInvitation,
 }
 
@@ -326,6 +427,8 @@ impl Device {
             transfers: Vec::new(),
             parked: Vec::new(),
             reports: Reports::default(),
+            satellites: Vec::new(),
+            satellite_transfers: Vec::new(),
         }
     }
 
@@ -349,6 +452,7 @@ impl Device {
         self.relay.as_ref().is_some_and(|r| &r.url == relay)
             || self.group.as_ref().is_some_and(|g| &g.relay == relay)
             || self.contacts.iter().any(|c| &c.own_relay == relay)
+            || self.satellites.iter().any(|s| &s.relay == relay)
             || self
                 .invitations
                 .iter()
@@ -410,13 +514,14 @@ impl JsonFile {
     }
 
     fn read(&self) -> io::Result<Device> {
-        let device: Device = serde_json::from_slice(&fs::read(&self.path)?)?;
-        if device.format != FORMAT_VERSION {
+        let mut device: Device = serde_json::from_slice(&fs::read(&self.path)?)?;
+        if !READABLE_FORMATS.contains(&device.format) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unknown storage format {}", device.format),
             ));
         }
+        device.format = FORMAT_VERSION;
         Ok(device)
     }
 
@@ -531,6 +636,8 @@ mod tests {
                 name: "Anna".into(),
                 own_relay: RelayUrl::new("https://relay.example").unwrap(),
                 read_token: [9; 32],
+                own_token: None,
+                new_token: None,
                 state: b.clone(),
             });
             Ok::<_, io::Error>(())
@@ -579,7 +686,7 @@ mod tests {
     fn unknown_format_is_refused() {
         let (_dir, file) = store();
         let text = std::fs::read_to_string(file.path()).unwrap();
-        std::fs::write(file.path(), text.replace("\"format\": 1", "\"format\": 2")).unwrap();
+        std::fs::write(file.path(), text.replace("\"format\": 2", "\"format\": 3")).unwrap();
         assert_eq!(file.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 
@@ -691,8 +798,43 @@ mod tests {
         assert!(state.is_paired() && state.contact.secret.is_none());
         // The open invitation has no secret value: version 1, to be deleted.
         assert!(device.invitations[0].pending.is_outdated());
+        // Written again unchanged but for the version (M10).
         file.update(|_| Ok::<_, io::Error>(())).unwrap();
-        assert_eq!(std::fs::read_to_string(file.path()).unwrap(), OLD_FILE);
+        assert_eq!(
+            std::fs::read_to_string(file.path()).unwrap(),
+            OLD_FILE.replace("\"format\": 1", "\"format\": 2")
+        );
+    }
+
+    #[test]
+    fn own_tokens_round_trip_and_are_optional() {
+        use super::ReadAccess;
+        let (_dir, file) = store();
+        file.update(|device| {
+            device.contacts.push(StoredContact {
+                name: "Anna".into(),
+                own_relay: RelayUrl::new("https://relay.example").unwrap(),
+                read_token: [1; 32],
+                own_token: None,
+                new_token: None,
+                state: dummy_state(),
+            });
+            Ok::<_, io::Error>(())
+        })
+        .unwrap();
+        let text = std::fs::read_to_string(file.path()).unwrap();
+        assert!(!text.contains("own_token") && !text.contains("new_token"));
+        assert_eq!(file.load().unwrap().contacts[0].token(), [1; 32]);
+        file.update(|device| {
+            device.contacts[0].own_token = Some([2; 32]);
+            device.contacts[0].new_token = Some([3; 32]);
+            Ok::<_, io::Error>(())
+        })
+        .unwrap();
+        let contact = file.load().unwrap().contacts.remove(0);
+        assert_eq!(contact.token(), [2; 32]);
+        assert_eq!(contact.read_token, [1; 32]);
+        assert_eq!(contact.new_token, Some([3; 32]));
     }
 
     #[test]
@@ -736,6 +878,8 @@ mod tests {
                 name: "Anna".into(),
                 own_relay: RelayUrl::new("https://relay.example").unwrap(),
                 read_token: [0; 32],
+                own_token: None,
+                new_token: None,
                 state: dummy_state(),
             });
             device.contacts[0].state.own_rules_stamp = crate::wire::Stamp {
@@ -783,6 +927,8 @@ mod tests {
                             name: format!("c{i}"),
                             own_relay: RelayUrl::new("https://relay.example").unwrap(),
                             read_token: [0; 32],
+                            own_token: None,
+                            new_token: None,
                             state: dummy_state(),
                         });
                         Ok::<_, io::Error>(())

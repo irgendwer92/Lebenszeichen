@@ -341,6 +341,12 @@ pub struct Handover {
     /// In the form of the state file; open invitations and pairings that
     /// are not complete stay on E.
     pub contacts: Vec<StoredContact>,
+    /// The satellites (M10), with their settings and the replay protection
+    /// of their channels; the `read_token` of each is an enrolment token E
+    /// registered for N on the channel mailbox. Left out when empty, and
+    /// ignored by older devices.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub satellites: Vec<crate::satellite::Satellite>,
 }
 
 impl Handover {
@@ -365,8 +371,15 @@ impl Handover {
 impl Device {
     /// The handover for a new device. Needs the group, which the caller
     /// creates before if there is none yet.
+    ///
+    /// Own tokens of this device are never handed over (M10): each
+    /// `read_token` goes as it is, and the caller has set it to the
+    /// enrolment token it registered for the new device where the relay
+    /// has `reader_tokens`.
     pub fn handover(&self, challenge: [u8; 32]) -> Result<Handover, Error> {
-        let group = self.group.clone().ok_or(Error::Unexpected)?;
+        let mut group = self.group.clone().ok_or(Error::Unexpected)?;
+        group.own_token = None;
+        group.new_token = None;
         let mut devices = self.devices.clone();
         devices.push(KnownDevice {
             reader: self.reader_id,
@@ -384,7 +397,16 @@ impl Device {
                 .contacts
                 .iter()
                 .filter(|c| c.state.is_paired())
-                .cloned()
+                .map(|c| StoredContact {
+                    own_token: None,
+                    new_token: None,
+                    ..c.clone()
+                })
+                .collect(),
+            satellites: self
+                .satellites
+                .iter()
+                .map(crate::satellite::Satellite::for_handover)
                 .collect(),
         })
     }
@@ -412,6 +434,8 @@ impl Device {
             transfers: Vec::new(),
             parked: Vec::new(),
             reports: Default::default(),
+            satellites: handover.satellites,
+            satellite_transfers: Vec::new(),
         }
     }
 }
@@ -509,6 +533,22 @@ mod tests {
         let (id, request) = peer.request(T + 60, &mut OsRng).unwrap();
         let mut state = new.contacts[0].state.clone();
         assert_eq!(state.receive(&request, T + 60).unwrap(), Event::Request(id));
+    }
+
+    #[test]
+    fn own_tokens_are_not_handed_over() {
+        let (mut e, _) = existing();
+        let group = e.group.as_mut().unwrap();
+        group.own_token = Some([7; 32]);
+        group.new_token = Some([8; 32]);
+        e.contacts[0].own_token = Some([9; 32]);
+        e.contacts[0].new_token = Some([10; 32]);
+        let json = e.handover([3; 32]).unwrap().to_json();
+        let text = String::from_utf8(json).unwrap();
+        for secret in [7u8, 8, 9, 10] {
+            assert!(!text.contains(&hex::encode(&[secret; 32])), "{text}");
+        }
+        assert!(!text.contains("own_token") && !text.contains("new_token"));
     }
 
     #[test]

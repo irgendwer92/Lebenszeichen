@@ -274,6 +274,71 @@ pub enum Notice {
     },
     /// This device was removed by another one; its state is deleted.
     Removed,
+    /// Removing a device could only unregister it on the mailboxes of
+    /// these contacts, as their relays lack `reader_tokens` (M10): it
+    /// could register itself again there.
+    RemovalWeak {
+        names: Vec<String>,
+    },
+    /// Removing a device also revoked this many readers that no own device
+    /// knew of (M10).
+    HiddenReaders {
+        count: usize,
+    },
+    /// Requests of these contacts were open when a device was removed; it
+    /// knows them and could answer them, so the person should (M10).
+    AnswerOpenRequests {
+        names: Vec<String>,
+    },
+    /// The relay no longer accepts this device's token for the own mailbox
+    /// of this contact (`None`: the sync mailbox), and it could not take a
+    /// token of its own: its access was withdrawn, as the shared token is
+    /// dropped when another device is removed. It has to be added again
+    /// (M10).
+    LostAccess {
+        name: Option<String>,
+    },
+    /// A satellite set up on another own device is linked here now (M10).
+    SatelliteAdded {
+        name: String,
+    },
+    /// The channel of this satellite is gone: it was removed, here or on
+    /// another own device. This device forgot it.
+    SatelliteGone {
+        name: String,
+    },
+    /// The satellite answered a request of this contact.
+    SatelliteAnswered {
+        name: String,
+        satellite: String,
+        kind: ResponseKind,
+    },
+    /// The satellite asked this contact for a sign of life.
+    SatelliteAsked {
+        name: String,
+        satellite: String,
+    },
+    /// The satellite shared its state (`Some` reason) or ended it (`None`).
+    SatelliteState {
+        reason: Option<String>,
+        satellite: String,
+    },
+    /// Another own device changed the settings of this satellite.
+    SatelliteSettings {
+        satellite: String,
+    },
+    /// These contacts were not given to the satellite: their relay lacks
+    /// `reader_tokens`.
+    SatelliteOldRelay {
+        satellite: String,
+        names: Vec<String>,
+    },
+    /// These contacts were not given to the satellite: it would need more
+    /// than its 3 relays.
+    SatelliteTooManyRelays {
+        satellite: String,
+        names: Vec<String>,
+    },
 }
 
 /// "auf „Handy“", or "auf einem anderen Gerät" if it is not known which.
@@ -444,6 +509,72 @@ impl Notice {
                 None => tr!(t, "notice-device-removed-unnamed"),
             },
             Self::Removed => tr!(t, "notice-removed"),
+            Self::RemovalWeak { names } => {
+                tr!(t, "notice-removal-weak", names = &names.join(", "))
+            }
+            Self::HiddenReaders { count } => tr!(t, "notice-hidden-readers", count = *count),
+            Self::AnswerOpenRequests { names } => {
+                tr!(t, "notice-answer-open-requests", names = &names.join(", "))
+            }
+            Self::LostAccess { name } => match name {
+                Some(name) => tr!(t, "notice-lost-access", name = name),
+                None => tr!(t, "notice-lost-access-unnamed"),
+            },
+            Self::SatelliteAdded { name } => tr!(t, "notice-satellite-added", name = name),
+            Self::SatelliteGone { name } => tr!(t, "notice-satellite-gone", name = name),
+            Self::SatelliteAnswered {
+                name,
+                satellite,
+                kind,
+            } => match kind {
+                ResponseKind::Manual => tr!(
+                    t,
+                    "notice-satellite-answered",
+                    name = name,
+                    satellite = satellite
+                ),
+                ResponseKind::Reported(reason) => tr!(
+                    t,
+                    "notice-satellite-reported",
+                    name = name,
+                    satellite = satellite,
+                    reason = &reported(t, reason)
+                ),
+            },
+            Self::SatelliteAsked { name, satellite } => tr!(
+                t,
+                "notice-satellite-asked",
+                name = name,
+                satellite = satellite
+            ),
+            Self::SatelliteState {
+                reason: Some(reason),
+                satellite,
+            } => tr!(
+                t,
+                "notice-satellite-state",
+                reason = reason,
+                satellite = satellite
+            ),
+            Self::SatelliteState {
+                reason: None,
+                satellite,
+            } => tr!(t, "notice-satellite-state-cleared", satellite = satellite),
+            Self::SatelliteSettings { satellite } => {
+                tr!(t, "notice-satellite-settings", satellite = satellite)
+            }
+            Self::SatelliteOldRelay { satellite, names } => tr!(
+                t,
+                "notice-satellite-old-relay",
+                satellite = satellite,
+                names = &names.join(", ")
+            ),
+            Self::SatelliteTooManyRelays { satellite, names } => tr!(
+                t,
+                "notice-satellite-too-many-relays",
+                satellite = satellite,
+                names = &names.join(", ")
+            ),
         }
     }
 }
