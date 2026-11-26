@@ -1256,7 +1256,80 @@ pub fn vectors(seed: &[u8]) -> serde_json::Value {
         .map(|now| json!({"now": now, "next_request_at": mum.next_request_at(now)}))
         .collect();
 
+    // Form A between the satellite and the contact of the record, both
+    // ways, with the direction marker. Drawn after everything above, so the
+    // other vectors do not change.
+    let own = ContactKey::from_bytes(record.secret_key);
+    let peer = ContactKey::from_bytes([0x32; 32]);
+    let rules = lz_core::wire::Rules {
+        min_interval_minutes: 60,
+        expiry_minutes: 120,
+        weekly_limit: 3,
+    };
+    let response = |request, kind| Body::Response(lz_core::wire::Response { request, kind });
+    let contact_bodies = vec![
+        ("request", true, Body::Request),
+        ("rules", true, Body::Rules(rules)),
+        (
+            "response manual",
+            true,
+            response([0x37; 16], ResponseKind::Manual),
+        ),
+        (
+            "response reported",
+            true,
+            response([0x37; 16], ResponseKind::Reported(reason)),
+        ),
+        ("end", true, Body::End),
+        ("request", false, Body::Request),
+        (
+            "response manual",
+            false,
+            response(request, ResponseKind::Manual),
+        ),
+        (
+            "response reported",
+            false,
+            response(request, ResponseKind::Reported(reason)),
+        ),
+    ];
+    let contact_vectors: Vec<_> = contact_bodies
+        .into_iter()
+        .map(|(name, from_contact, body)| {
+            let (sender, recipient) = if from_contact {
+                (&peer, &own)
+            } else {
+                (&own, &peer)
+            };
+            let mut id = [0; 16];
+            rng.fill_bytes(&mut id);
+            let message = Message {
+                id,
+                sent_at: t,
+                body,
+            };
+            let mut plaintext = [0; PADDED_PLAINTEXT_LEN];
+            message.encode(&mut plaintext).unwrap();
+            plaintext[PADDED_PLAINTEXT_LEN - 1] = if sender.public_key() < recipient.public_key() {
+                1
+            } else {
+                2
+            };
+            let envelope =
+                crypto::seal(&message, sender, &recipient.public_key(), &mut rng).unwrap();
+            json!({
+                "name": name,
+                "type": message.body.kind().unwrap(),
+                "from": if from_contact { "contact" } else { "satellite" },
+                "plaintext": hex(&plaintext),
+                "envelope": hex(&envelope),
+            })
+        })
+        .collect();
+
     json!({
+        "contact": contact_vectors,
+        "contact_secret_key": hex(&peer.to_bytes()),
         "seed": hex(seed),
         "channel_key": hex(&key),
         "channel": channel,

@@ -1,0 +1,31 @@
+Lebenszeichen C library (firmware/) - static linking exception
+
+STATUS: DRAFT. Not yet in force and not yet legally reviewed
+(docs/license-exception.md). Until the review is done, the code under
+firmware/ is offered under LGPL-3.0-or-later; this exception is the
+intended additional permission and may still change.
+
+SPDX identifier used in the sources:
+LGPL-3.0-or-later WITH LicenseRef-Lebenszeichen-static-linking-exception
+
+It does not apply to third_party/tweetnacl/, which is in the public domain.
+
+-----------------------------------------------------------------------
+
+Additional permission under GNU LGPL version 3 section 7
+
+As a special exception, the copyright holders of this Library give you
+permission to combine this Library, in unmodified or modified form, with
+independent modules into a single executable, including by static
+linking, and to convey the resulting executable under terms of your
+choice, without the obligations of section 4 d) and e) of the GNU Lesser
+General Public License to provide the means to recombine or relink the
+executable with a modified version of the Library.
+
+This permission does not apply to the Library itself: if you convey the
+executable, you must also convey, or offer as section 6 of the GNU General
+Public License requires, the Corresponding Source of the version of the
+Library it contains, including your modifications, under this License.
+An independent module is a module that is not derived from or based on
+this Library. If you modify this Library, you may extend this exception
+to your version of the Library, but you are not obliged to do so.

@@ -691,6 +691,40 @@ vectors_are_reproducible` writes them: every up and down type as plaintext
 and envelope under a channel key, a satellite contact record, a setup, and
 cases of the asking rule and of the waiting time.
 
+### Settled in the implementation (C library, 2026-11-26)
+
+Step 4a: `firmware/`, the portable C99 core `lz_core` without SDK adapters
+(`firmware/README.md`). The Rust vectors gained form A both ways between
+the satellite and a contact (`contact`, drawn after the others, which stay
+as they were); the C tests reproduce all of them byte for byte.
+
+- **Bounded tables** where the Rust model has vectors: 16 requests per
+  contact and direction (the oldest answered one gives way; with a weekly
+  limit above 16 the satellite may show a request the full devices discard,
+  as the record already allows), 24 remembered identifiers per contact and
+  64 for the channel, 16 outbox entries, 8 parked messages, 2 transfers. A
+  full replay table forgets its oldest identifier and from then on refuses
+  everything sent at or before it, so no replay gets through; a full outbox
+  refuses the press or ask (event) instead of dropping something queued.
+- **`home_contact_part` with more than 4 parts** is discarded: the
+  satellite contact record never needs more, and the reassembly buffer is
+  fixed.
+- **Contact records** whose relay addresses are not `https://`, whose key
+  is a low-order point (libsodium's check, also on TweetNaCl), or whose own
+  mailbox is the channel's are refused, at setup as a whole.
+- **Deliveries wait for the clock check**: nothing goes out before one
+  relay `Date` header agreed with the own clock within 5 minutes; while it
+  disagrees, messages are left on the relay unacknowledged and fetched
+  again once it agrees. A `400` from the relay drops the envelope, other
+  failures retry with backoff for 24 hours.
+- **The own token is taken before subscribing**: a mailbox is subscribed
+  once its enrolment token is replaced; if the replacement fails for good
+  (`401` with both tokens, `404`), it is subscribed with the enrolment
+  token so that the relay's answer (`unknown_reader`, `unknown_mailbox`)
+  decides.
+- **Removal** counts only for errors to a subscription the satellite made
+  on the channel's connection.
+
 ## Open points
 
 None. Decided on 2026-11-25: the shared token on contact mailboxes is
